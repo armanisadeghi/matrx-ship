@@ -1,0 +1,8 @@
+import { NextRequest, NextResponse } from "next/server";
+import { verifyToken, cleanupBuilds } from "@/lib/docker";
+
+export async function POST(req: NextRequest) {
+  const token = req.headers.get("authorization")?.replace("Bearer ", "");
+  if (!token || !verifyToken(token)) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  return NextResponse.json(cleanupBuilds());
+}

@@ -1,0 +1,494 @@
+"use client";
+
+import { useState, useEffect, useCallback } from "react";
+import { toast } from "sonner";
+import { Button } from "@/components/ui/button";
+import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import {
+  Rocket, RotateCcw, Server, GitBranch, Clock, Container,
+  RefreshCw, ShieldCheck, Loader2, AlertTriangle, CheckCircle2,
+  History, Trash2, Wrench, ArrowDownToLine, LogIn,
+} from "lucide-react";
+
+type BuildInfo = {
+  current_image: { id: string | null; created: string | null; age: string | null };
+  source: { path: string; branch: string; head_commit: string; last_build_commit: string | null };
+  has_changes: boolean;
+  pending_commits: string[];
+  diff_stats: string | null;
+  instances: Array<{ name: string; display_name: string; status: string }>;
+  available_tags: Array<{ tag: string; id: string; age: string }>;
+  last_build: { tag: string; timestamp: string; git_commit: string; duration_ms: number } | null;
+};
+
+type BuildRecord = {
+  id: string; tag: string; timestamp: string; git_commit: string; git_message: string;
+  image_id: string | null; success: boolean; error: string | null; duration_ms: number;
+  triggered_by: string; instances_restarted: string[];
+};
+
+type SystemInfo = {
+  hostname: string; cpus: number;
+  memory: { total: string; used: string; percent: string };
+  disk: { total: string; used: string; percent: string };
+  uptime_hours: string; docker: string;
+  containers: string[];
+};
+
+function api(path: string, opts: RequestInit = {}) {
+  const token = typeof window !== "undefined" ? localStorage.getItem("deploy_token") || "" : "";
+  return fetch(path, {
+    ...opts,
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json", ...opts.headers },
+    body: opts.body ? (typeof opts.body === "string" ? opts.body : JSON.stringify(opts.body)) : undefined,
+  }).then(async (r) => {
+    const data = await r.json();
+    if (r.status === 401) throw new Error("Unauthorized");
+    return data;
+  });
+}
+
+function LoginScreen({ onLogin }: { onLogin: () => void }) {
+  const [token, setToken] = useState("");
+  const [error, setError] = useState(false);
+
+  async function handleLogin() {
+    try {
+      localStorage.setItem("deploy_token", token);
+      await api("/api/health");
+      // Test auth on a protected endpoint
+      await api("/api/system");
+      onLogin();
+    } catch {
+      setError(true);
+      localStorage.removeItem("deploy_token");
+    }
+  }
+
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-background">
+      <Card className="w-[420px]">
+        <CardHeader className="text-center">
+          <CardTitle className="text-xl flex items-center justify-center gap-2">
+            <Rocket className="size-5" /> Matrx Deploy
+          </CardTitle>
+          <CardDescription>Enter your admin token to access deploy management.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {error && <p className="text-destructive text-sm text-center">Invalid token</p>}
+          <input
+            type="password"
+            value={token}
+            onChange={(e) => { setToken(e.target.value); setError(false); }}
+            onKeyDown={(e) => e.key === "Enter" && handleLogin()}
+            placeholder="Bearer token..."
+            className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-ring"
+            autoFocus
+          />
+          <Button onClick={handleLogin} className="w-full">
+            <LogIn className="size-4" /> Sign In
+          </Button>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+export default function DeployPage() {
+  const [authed, setAuthed] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [buildInfo, setBuildInfo] = useState<BuildInfo | null>(null);
+  const [buildHistory, setBuildHistory] = useState<BuildRecord[]>([]);
+  const [system, setSystem] = useState<SystemInfo | null>(null);
+  const [deploying, setDeploying] = useState(false);
+  const [deployingMgr, setDeployingMgr] = useState(false);
+  const [rollingBack, setRollingBack] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<"deploy" | "history" | "system">("deploy");
+
+  const loadData = useCallback(async () => {
+    try {
+      const [info, hist, sys] = await Promise.all([
+        api("/api/build-info"),
+        api("/api/build-history?include_failed=true&limit=20"),
+        api("/api/system"),
+      ]);
+      setBuildInfo(info);
+      setBuildHistory(hist.builds || []);
+      setSystem(sys);
+    } catch (e) {
+      if ((e as Error).message === "Unauthorized") { setAuthed(false); localStorage.removeItem("deploy_token"); }
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!authed) {
+      const token = localStorage.getItem("deploy_token");
+      if (token) {
+        api("/api/system").then(() => { setAuthed(true); }).catch(() => { setLoading(false); });
+      } else {
+        setLoading(false);
+      }
+    } else {
+      loadData();
+    }
+  }, [authed, loadData]);
+
+  if (!authed && !loading) return <LoginScreen onLogin={() => setAuthed(true)} />;
+  if (loading) return <div className="min-h-screen flex items-center justify-center"><Loader2 className="size-8 animate-spin text-muted-foreground" /></div>;
+
+  async function handleDeploy(name?: string) {
+    setDeploying(true);
+    const toastId = toast.loading(name ? `Building & deploying ${name}...` : "Building & deploying all instances...", { duration: 300000 });
+    try {
+      const result = await api("/api/rebuild", { method: "POST", body: JSON.stringify(name ? { name } : {}) });
+      if (result.success) {
+        toast.success(`Deploy complete — ${result.instances_restarted?.length || 0} instance(s) restarted`, { id: toastId, duration: 5000 });
+      } else {
+        toast.error(`Deploy failed: ${result.error || "Unknown error"}`, { id: toastId, duration: 10000 });
+      }
+      loadData();
+    } catch (e) {
+      toast.error(`Deploy failed: ${(e as Error).message}`, { id: toastId });
+    } finally {
+      setDeploying(false);
+    }
+  }
+
+  async function handleRollback(tag: string) {
+    setRollingBack(tag);
+    const toastId = toast.loading(`Rolling back to ${tag}...`);
+    try {
+      const result = await api("/api/rollback", { method: "POST", body: JSON.stringify({ tag }) });
+      if (result.success) {
+        toast.success(`Rolled back to ${tag} — ${result.instances_restarted?.length || 0} instance(s) restarted`, { id: toastId });
+      } else {
+        toast.error(`Rollback failed: ${result.error}`, { id: toastId });
+      }
+      loadData();
+    } catch (e) {
+      toast.error(`Rollback failed: ${(e as Error).message}`, { id: toastId });
+    } finally {
+      setRollingBack(null);
+    }
+  }
+
+  async function handleRebuildManager() {
+    setDeployingMgr(true);
+    const toastId = toast.loading("Rebuilding Server Manager... this may take a minute");
+    try {
+      await api("/api/self-rebuild", { method: "POST" });
+      toast.success("Server Manager rebuild triggered. It will restart shortly.", { id: toastId });
+    } catch {
+      toast.info("Server Manager is rebuilding. Connection will restore shortly.", { id: toastId });
+    } finally {
+      setDeployingMgr(false);
+    }
+  }
+
+  async function handleCleanup() {
+    const toastId = toast.loading("Running image cleanup...");
+    try {
+      const result = await api("/api/build-cleanup", { method: "POST" });
+      toast.success(`Cleanup done: removed ${result.removed?.length || 0} tag(s), kept ${result.kept?.length || 0}`, { id: toastId });
+      loadData();
+    } catch (e) {
+      toast.error(`Cleanup failed: ${(e as Error).message}`, { id: toastId });
+    }
+  }
+
+  const tabs = [
+    { id: "deploy" as const, label: "Deploy", icon: Rocket },
+    { id: "history" as const, label: "History", icon: History },
+    { id: "system" as const, label: "System", icon: Server },
+  ];
+
+  return (
+    <div className="min-h-screen bg-background">
+      {/* Header */}
+      <header className="border-b bg-card px-6 py-3 flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <Rocket className="size-5 text-primary" />
+          <h1 className="font-semibold text-lg">Matrx Deploy</h1>
+        </div>
+        <div className="flex items-center gap-3">
+          <Button variant="ghost" size="sm" onClick={loadData}><RefreshCw className="size-4" /></Button>
+          <Button variant="ghost" size="sm" onClick={() => { localStorage.removeItem("deploy_token"); setAuthed(false); }}>Logout</Button>
+        </div>
+      </header>
+
+      {/* Tabs */}
+      <div className="border-b bg-card px-6">
+        <nav className="flex gap-1">
+          {tabs.map((t) => (
+            <button
+              key={t.id}
+              onClick={() => setActiveTab(t.id)}
+              className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${activeTab === t.id ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+            >
+              <t.icon className="size-4" /> {t.label}
+            </button>
+          ))}
+        </nav>
+      </div>
+
+      {/* Content */}
+      <main className="max-w-6xl mx-auto px-6 py-6 space-y-6">
+        {activeTab === "deploy" && buildInfo && (
+          <>
+            {/* Current Image Status */}
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+              <Card>
+                <CardContent className="pt-6">
+                  <div className="text-sm text-muted-foreground">Current Image</div>
+                  <div className="text-lg font-mono font-semibold mt-1">{buildInfo.current_image.id || "none"}</div>
+                  <div className="text-xs text-muted-foreground mt-1">{buildInfo.current_image.age ? `Built ${buildInfo.current_image.age} ago` : "No image"}</div>
+                </CardContent>
+              </Card>
+              <Card>
+                <CardContent className="pt-6">
+                  <div className="text-sm text-muted-foreground">Source Branch</div>
+                  <div className="flex items-center gap-2 mt-1">
+                    <GitBranch className="size-4 text-primary" />
+                    <span className="font-mono font-semibold">{buildInfo.source.branch}</span>
+                  </div>
+                  <div className="text-xs text-muted-foreground mt-1 font-mono">{buildInfo.source.head_commit}</div>
+                </CardContent>
+              </Card>
+              <Card>
+                <CardContent className="pt-6">
+                  <div className="text-sm text-muted-foreground">Pending Changes</div>
+                  <div className="text-lg font-semibold mt-1">
+                    {buildInfo.has_changes ? (
+                      <span className="text-warning">{buildInfo.pending_commits.length} commit(s)</span>
+                    ) : (
+                      <span className="text-success">Up to date</span>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+              <Card>
+                <CardContent className="pt-6">
+                  <div className="text-sm text-muted-foreground">Instances</div>
+                  <div className="text-lg font-semibold mt-1">{buildInfo.instances.length}</div>
+                  <div className="text-xs text-muted-foreground mt-1">
+                    {buildInfo.instances.filter((i) => i.status === "running").length} running
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+
+            {/* Pending Commits */}
+            {buildInfo.pending_commits.length > 0 && (
+              <Card>
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-base flex items-center gap-2">
+                    <GitBranch className="size-4" /> Pending Changes
+                  </CardTitle>
+                  <CardDescription>
+                    {buildInfo.pending_commits.length} commit(s) since last build ({buildInfo.source.last_build_commit || "never"})
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-1 font-mono text-sm max-h-48 overflow-y-auto">
+                    {buildInfo.pending_commits.map((c, i) => (
+                      <div key={i} className="text-muted-foreground py-0.5">{c}</div>
+                    ))}
+                  </div>
+                  {buildInfo.diff_stats && (
+                    <pre className="mt-3 p-3 bg-muted rounded-md text-xs overflow-x-auto whitespace-pre-wrap">{buildInfo.diff_stats}</pre>
+                  )}
+                </CardContent>
+              </Card>
+            )}
+
+            {/* Deploy Actions */}
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-base flex items-center gap-2">
+                  <Rocket className="size-4" /> Deploy Actions
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="flex flex-wrap gap-3">
+                  <Button onClick={() => handleDeploy()} disabled={deploying} size="lg">
+                    {deploying ? <Loader2 className="size-4 animate-spin" /> : <Rocket className="size-4" />}
+                    {deploying ? "Building..." : "Deploy All Instances"}
+                  </Button>
+                  <Button variant="outline" onClick={handleRebuildManager} disabled={deployingMgr}>
+                    {deployingMgr ? <Loader2 className="size-4 animate-spin" /> : <Wrench className="size-4" />}
+                    Rebuild Server Manager
+                  </Button>
+                  <Button variant="outline" onClick={handleCleanup}>
+                    <Trash2 className="size-4" /> Cleanup Old Images
+                  </Button>
+                </div>
+
+                {/* Per-instance deploy */}
+                <div>
+                  <h4 className="text-sm font-medium text-muted-foreground mb-2">Deploy Single Instance</h4>
+                  <div className="flex flex-wrap gap-2">
+                    {buildInfo.instances.map((inst) => (
+                      <Button key={inst.name} variant="secondary" size="sm" onClick={() => handleDeploy(inst.name)} disabled={deploying}>
+                        <Container className="size-3" /> {inst.display_name}
+                        <Badge variant={inst.status === "running" ? "success" : "destructive"} className="ml-1 text-[10px]">
+                          {inst.status}
+                        </Badge>
+                      </Button>
+                    ))}
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Available Image Tags / Rollback */}
+            {buildInfo.available_tags.length > 1 && (
+              <Card>
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-base flex items-center gap-2">
+                    <RotateCcw className="size-4" /> Available Images & Rollback
+                  </CardTitle>
+                  <CardDescription>Click rollback to switch to a previous image version</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-2">
+                    {buildInfo.available_tags.map((t) => (
+                      <div key={t.tag} className="flex items-center justify-between py-2 px-3 rounded-md bg-muted/50">
+                        <div className="flex items-center gap-3">
+                          <span className="font-mono text-sm font-medium">{t.tag}</span>
+                          <span className="text-xs text-muted-foreground font-mono">{t.id}</span>
+                          <span className="text-xs text-muted-foreground">{t.age}</span>
+                          {t.tag === "latest" && <Badge variant="default" className="text-[10px]">current</Badge>}
+                        </div>
+                        {t.tag !== "latest" && t.tag !== "<none>" && (
+                          <Button
+                            variant="outline" size="sm"
+                            onClick={() => handleRollback(t.tag)}
+                            disabled={rollingBack === t.tag}
+                          >
+                            {rollingBack === t.tag ? <Loader2 className="size-3 animate-spin" /> : <ArrowDownToLine className="size-3" />}
+                            Rollback
+                          </Button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+          </>
+        )}
+
+        {activeTab === "history" && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base flex items-center gap-2">
+                <History className="size-4" /> Build History
+              </CardTitle>
+              <CardDescription>{buildHistory.length} build(s) recorded</CardDescription>
+            </CardHeader>
+            <CardContent>
+              {buildHistory.length === 0 ? (
+                <p className="text-muted-foreground text-sm">No builds recorded yet.</p>
+              ) : (
+                <div className="space-y-3">
+                  {buildHistory.map((b) => (
+                    <div key={b.id} className="flex items-start justify-between p-3 rounded-lg border bg-card">
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-2">
+                          {b.success ? <CheckCircle2 className="size-4 text-success" /> : <AlertTriangle className="size-4 text-destructive" />}
+                          <span className="font-mono text-sm font-medium">{b.tag}</span>
+                          <Badge variant={b.success ? "success" : "destructive"} className="text-[10px]">
+                            {b.success ? "success" : "failed"}
+                          </Badge>
+                        </div>
+                        <div className="text-xs text-muted-foreground space-x-3">
+                          <span><Clock className="inline size-3 mr-1" />{new Date(b.timestamp).toLocaleString()}</span>
+                          <span>{Math.round(b.duration_ms / 1000)}s</span>
+                          <span className="font-mono">{b.git_commit}</span>
+                          <span>by {b.triggered_by}</span>
+                        </div>
+                        {b.git_message && <div className="text-xs text-muted-foreground">{b.git_message}</div>}
+                        {b.error && <div className="text-xs text-destructive mt-1">{b.error}</div>}
+                      </div>
+                      {b.success && b.tag && !b.tag.startsWith("rollback") && (
+                        <Button variant="outline" size="sm" onClick={() => handleRollback(b.tag)} disabled={rollingBack === b.tag}>
+                          <ArrowDownToLine className="size-3" /> Rollback
+                        </Button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )}
+
+        {activeTab === "system" && system && (
+          <div className="space-y-6">
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+              <Card>
+                <CardContent className="pt-6">
+                  <div className="text-sm text-muted-foreground">Hostname</div>
+                  <div className="font-mono font-semibold mt-1 text-sm">{system.hostname}</div>
+                </CardContent>
+              </Card>
+              <Card>
+                <CardContent className="pt-6">
+                  <div className="text-sm text-muted-foreground">Memory</div>
+                  <div className="font-semibold mt-1">{system.memory.percent}</div>
+                  <div className="text-xs text-muted-foreground">{system.memory.used} / {system.memory.total}</div>
+                </CardContent>
+              </Card>
+              <Card>
+                <CardContent className="pt-6">
+                  <div className="text-sm text-muted-foreground">Disk</div>
+                  <div className="font-semibold mt-1">{system.disk.percent}</div>
+                  <div className="text-xs text-muted-foreground">{system.disk.used} / {system.disk.total}</div>
+                </CardContent>
+              </Card>
+              <Card>
+                <CardContent className="pt-6">
+                  <div className="text-sm text-muted-foreground">Uptime</div>
+                  <div className="font-semibold mt-1">{system.uptime_hours}h</div>
+                  <div className="text-xs text-muted-foreground">{system.cpus} CPUs</div>
+                </CardContent>
+              </Card>
+            </div>
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-base flex items-center gap-2">
+                  <Container className="size-4" /> Docker
+                </CardTitle>
+                <CardDescription>{system.docker}</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-1 font-mono text-sm">
+                  {system.containers.map((c, i) => (
+                    <div key={i} className="py-0.5 text-muted-foreground">{c}</div>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-base flex items-center gap-2">
+                  <ShieldCheck className="size-4" /> Server Manager
+                </CardTitle>
+                <CardDescription>Rebuild the MCP Server Manager from source</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <Button variant="outline" onClick={handleRebuildManager} disabled={deployingMgr}>
+                  {deployingMgr ? <Loader2 className="size-4 animate-spin" /> : <Wrench className="size-4" />}
+                  Rebuild Server Manager
+                </Button>
+              </CardContent>
+            </Card>
+          </div>
+        )}
+      </main>
+    </div>
+  );
+}
