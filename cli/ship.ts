@@ -15,6 +15,8 @@
  *   pnpm ship:init my-project "My Project"                  # Auto-provision instance
  *   pnpm ship:init --url URL --key KEY                      # Manual config (legacy)
  *   pnpm ship:setup --token TOKEN [--server URL]            # Save server credentials
+ *   pnpm ship:history                                       # Import full git history
+ *   pnpm ship:update                                        # Update CLI to latest version
  *   pnpm ship status                                        # Show current version
  */
 
@@ -26,6 +28,7 @@ import { homedir } from "os";
 // ── Constants ─────────────────────────────────────────────────────────
 
 const DEFAULT_MCP_SERVER = "https://mcp.dev.codematrx.com";
+const REPO_RAW = "https://raw.githubusercontent.com/armanisadeghi/matrx-ship/main";
 const GLOBAL_CONFIG_DIR = path.join(homedir(), ".config", "matrx-ship");
 const GLOBAL_CONFIG_FILE = path.join(GLOBAL_CONFIG_DIR, "server.json");
 
@@ -1046,6 +1049,157 @@ async function handleHistory(args: string[]): Promise<void> {
   console.log("");
 }
 
+// ── Self-Update ──────────────────────────────────────────────────────
+
+const ALL_SHIP_SCRIPTS: Record<string, string> = {
+  ship: "__CLI_PATH__",
+  "ship:minor": "__CLI_PATH__ --minor",
+  "ship:major": "__CLI_PATH__ --major",
+  "ship:init": "__CLI_PATH__ init",
+  "ship:setup": "__CLI_PATH__ setup",
+  "ship:history": "__CLI_PATH__ history",
+  "ship:update": "__CLI_PATH__ update",
+};
+
+function ensurePackageJsonScripts(cliRelPath: string): boolean {
+  const pkgPath = path.join(process.cwd(), "package.json");
+  if (!existsSync(pkgPath)) return false;
+
+  try {
+    const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
+    if (!pkg.scripts) pkg.scripts = {};
+
+    const prefix = `tsx ${cliRelPath}`;
+    let changed = false;
+
+    for (const [name, template] of Object.entries(ALL_SHIP_SCRIPTS)) {
+      const cmd = template.replace("__CLI_PATH__", prefix);
+      if (pkg.scripts[name] !== cmd) {
+        pkg.scripts[name] = cmd;
+        changed = true;
+      }
+    }
+
+    if (changed) {
+      writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + "\n", "utf-8");
+    }
+    return changed;
+  } catch {
+    return false;
+  }
+}
+
+function ensureGitignore(): boolean {
+  const gitignorePath = path.join(process.cwd(), ".gitignore");
+  if (!existsSync(gitignorePath)) return false;
+
+  try {
+    const content = readFileSync(gitignorePath, "utf-8");
+    if (content.includes(".matrx-ship.json")) return false;
+
+    writeFileSync(
+      gitignorePath,
+      content.trimEnd() + "\n\n# Matrx Ship config (contains API key)\n.matrx-ship.json\n",
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function ensureTsxDependency(): void {
+  const pkgPath = path.join(process.cwd(), "package.json");
+  if (!existsSync(pkgPath)) return;
+
+  try {
+    const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
+    const hasTsx =
+      pkg.dependencies?.tsx || pkg.devDependencies?.tsx || pkg.optionalDependencies?.tsx;
+
+    if (!hasTsx) {
+      console.log("📦 Installing tsx (required for ship CLI)...");
+      try {
+        execSync("pnpm add -D tsx", { stdio: "inherit" });
+        console.log("✅ tsx installed");
+      } catch {
+        console.log("⚠️  Could not auto-install tsx. Run: pnpm add -D tsx");
+      }
+    }
+  } catch {
+    // Ignore
+  }
+}
+
+async function handleUpdate(): Promise<void> {
+  console.log("");
+  console.log("🔄 Updating Matrx Ship CLI...");
+  console.log("");
+
+  // Determine where the current script lives
+  const currentScript = path.resolve(process.argv[1]);
+  const cwd = process.cwd();
+  const relPath = path.relative(cwd, currentScript);
+
+  console.log(`   Script:  ${relPath}`);
+
+  // Download the latest ship.ts
+  console.log("   Downloading latest CLI from GitHub...");
+  let content: string;
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15000);
+    const response = await fetch(`${REPO_RAW}/cli/ship.ts`, {
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+
+    if (!response.ok) {
+      throw new Error(`GitHub returned ${response.status}: ${response.statusText}`);
+    }
+    content = await response.text();
+
+    if (!content.includes("Matrx Ship CLI")) {
+      throw new Error("Downloaded file doesn't look like the ship CLI");
+    }
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    console.error(`❌ Failed to download update`);
+    if (msg.includes("abort")) {
+      console.error("   Connection timed out. Check your internet connection.");
+    } else {
+      console.error(`   ${msg}`);
+    }
+    process.exit(1);
+  }
+
+  // Ensure directory exists and write the file
+  mkdirSync(path.dirname(currentScript), { recursive: true });
+  writeFileSync(currentScript, content, "utf-8");
+  console.log("   ✅ CLI script updated");
+
+  // Ensure package.json has all ship:* scripts
+  const scriptsUpdated = ensurePackageJsonScripts(relPath);
+  if (scriptsUpdated) {
+    console.log("   ✅ package.json scripts updated");
+  } else {
+    console.log("   ✓  package.json scripts already up to date");
+  }
+
+  // Ensure .gitignore has .matrx-ship.json
+  const gitignoreUpdated = ensureGitignore();
+  if (gitignoreUpdated) {
+    console.log("   ✅ Added .matrx-ship.json to .gitignore");
+  }
+
+  // Ensure tsx is installed
+  ensureTsxDependency();
+
+  console.log("");
+  console.log("   ✅ Matrx Ship CLI is up to date!");
+  console.log("   Run 'pnpm ship help' to see all commands.");
+  console.log("");
+}
+
 // ── Main ─────────────────────────────────────────────────────────────
 
 async function main() {
@@ -1058,6 +1212,8 @@ async function main() {
     await handleInit(args.slice(1));
   } else if (command === "history") {
     await handleHistory(args.slice(1));
+  } else if (command === "update") {
+    await handleUpdate();
   } else if (command === "status") {
     const config = loadConfig();
     await getStatus(config);
@@ -1083,7 +1239,8 @@ History:
   pnpm ship:history --branch main        Import from a specific branch
   pnpm ship:history --start-version 1.0.0  Start versioning at a custom version
 
-Info Commands:
+Maintenance:
+  pnpm ship:update                       Update CLI to the latest version
   pnpm ship status                       Show current version from server
   pnpm ship help                         Show this help
 

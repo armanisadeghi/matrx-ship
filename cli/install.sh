@@ -58,7 +58,8 @@ if [ -f "package.json" ]; then
       .scripts["ship:major"] = "tsx scripts/matrx/ship.ts --major" |
       .scripts["ship:init"] = "tsx scripts/matrx/ship.ts init" |
       .scripts["ship:setup"] = "tsx scripts/matrx/ship.ts setup" |
-      .scripts["ship:history"] = "tsx scripts/matrx/ship.ts history"
+      .scripts["ship:history"] = "tsx scripts/matrx/ship.ts history" |
+      .scripts["ship:update"] = "tsx scripts/matrx/ship.ts update"
     ' package.json)
     echo "$UPDATED" > package.json
     echo -e "${GREEN}✓${NC} Added ship scripts to package.json"
@@ -70,7 +71,8 @@ if [ -f "package.json" ]; then
     echo '    "ship:major": "tsx scripts/matrx/ship.ts --major",'
     echo '    "ship:init": "tsx scripts/matrx/ship.ts init",'
     echo '    "ship:setup": "tsx scripts/matrx/ship.ts setup",'
-    echo '    "ship:history": "tsx scripts/matrx/ship.ts history"'
+    echo '    "ship:history": "tsx scripts/matrx/ship.ts history",'
+    echo '    "ship:update": "tsx scripts/matrx/ship.ts update"'
     echo ""
   fi
 fi
