@@ -33,3 +33,6 @@ next-env.d.ts
 
 # drizzle
 drizzle/meta/
+
+# Matrx Ship config (contains API key)
+.matrx-ship.json

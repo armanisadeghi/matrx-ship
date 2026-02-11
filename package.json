@@ -12,7 +12,12 @@
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio",
     "type-check": "tsc --noEmit",
-    "lint": "next lint"
+    "lint": "next lint",
+    "ship": "tsx cli/ship.ts",
+    "ship:minor": "tsx cli/ship.ts --minor",
+    "ship:major": "tsx cli/ship.ts --major",
+    "ship:init": "tsx cli/ship.ts init",
+    "ship:setup": "tsx cli/ship.ts setup"
   },
   "dependencies": {
     "clsx": "^2.1.1",
@@ -36,6 +41,7 @@
     "eslint-config-next": "^16.1.0",
     "postcss": "^8.5.0",
     "tailwindcss": "^4.1.0",
+    "tsx": "^4.21.0",
     "typescript": "^5.9.0"
   },
   "packageManager": "pnpm@10.28.2"
