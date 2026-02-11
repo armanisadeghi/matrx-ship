@@ -31,18 +31,17 @@ RUN addgroup --system --gid 1001 nodejs
 RUN adduser --system --uid 1001 nextjs
 
 COPY --from=builder /app/public ./public
-COPY --from=builder /app/server.js ./server.js
 
-# Copy standalone output
+# Standalone output includes its own server.js at root
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 
-# Copy drizzle migrations for auto-migration on startup
+# Drizzle migrations for auto-migration via instrumentation hook
 COPY --from=builder /app/drizzle ./drizzle
-COPY --from=builder /app/src/lib/db ./src/lib/db
 
 USER nextjs
 
 EXPOSE 3000
 
+# Next.js standalone server — instrumentation.ts runs migrations on boot
 CMD ["node", "server.js"]

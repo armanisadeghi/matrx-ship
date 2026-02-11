@@ -2,9 +2,9 @@ services:
   app:
     build: .
     ports:
-      - "3000:3000"
+      - "${PORT:-3000}:3000"
     environment:
-      DATABASE_URL: postgresql://ship:ship@db:5432/ship
+      DATABASE_URL: postgresql://ship:${POSTGRES_PASSWORD:-ship}@db:5432/ship
       MATRX_SHIP_API_KEY: ${MATRX_SHIP_API_KEY:-}
       MATRX_SHIP_ADMIN_SECRET: ${MATRX_SHIP_ADMIN_SECRET:-}
       PROJECT_NAME: ${PROJECT_NAME:-my-project}
@@ -25,7 +25,7 @@ services:
     environment:
       POSTGRES_DB: ship
       POSTGRES_USER: ship
-      POSTGRES_PASSWORD: ship
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ship}
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ship"]
       interval: 5s
