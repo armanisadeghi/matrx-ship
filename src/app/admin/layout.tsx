@@ -17,11 +17,13 @@ import {
   Bell,
   ClipboardList,
   Package,
+  Columns3,
+  History,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Badge } from "@/components/ui/badge";
-import { Separator } from "@/components/ui/separator";
+
 import { ScrollArea } from "@/components/ui/scroll-area";
 
 interface NavItem {
@@ -50,7 +52,9 @@ const navGroups: NavGroup[] = [
   {
     label: "Data",
     items: [
-      { href: "/admin/database", label: "Database", icon: Database },
+      { href: "/admin/database", label: "Tables", icon: Database },
+      { href: "/admin/database/schema", label: "Schema", icon: Columns3 },
+      { href: "/admin/database/migrations", label: "Migrations", icon: History },
       { href: "/admin/database/query", label: "SQL Console", icon: TerminalSquare },
     ],
   },
@@ -77,6 +81,20 @@ const navGroups: NavGroup[] = [
     ],
   },
 ];
+
+// Collect all nav hrefs to determine the best active match
+const allNavHrefs = navGroups.flatMap((g) => g.items.map((i) => i.href));
+
+function getIsActive(pathname: string, item: NavItem): boolean {
+  if (item.exact) return pathname === item.href;
+  if (pathname === item.href) return true;
+  if (!pathname.startsWith(item.href)) return false;
+  // For prefix matches, only activate if no other nav item is a more specific match
+  const moreSpecific = allNavHrefs.some(
+    (href) => href !== item.href && href.startsWith(item.href) && pathname.startsWith(href),
+  );
+  return !moreSpecific;
+}
 
 export default function AdminLayout({
   children,
@@ -116,9 +134,7 @@ export default function AdminLayout({
                 </p>
                 <div className="space-y-0.5">
                   {group.items.map((item) => {
-                    const isActive = item.exact
-                      ? pathname === item.href
-                      : pathname.startsWith(item.href);
+                    const isActive = getIsActive(pathname, item);
 
                     return (
                       <Link
