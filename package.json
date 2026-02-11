@@ -17,7 +17,8 @@
     "ship:minor": "tsx cli/ship.ts --minor",
     "ship:major": "tsx cli/ship.ts --major",
     "ship:init": "tsx cli/ship.ts init",
-    "ship:setup": "tsx cli/ship.ts setup"
+    "ship:setup": "tsx cli/ship.ts setup",
+    "ship:history": "tsx cli/ship.ts history"
   },
   "dependencies": {
     "clsx": "^2.1.1",

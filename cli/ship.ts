@@ -786,6 +786,266 @@ async function handleShip(args: string[]): Promise<void> {
   console.log("   Changes have been pushed to remote\n");
 }
 
+// ── History Import ────────────────────────────────────────────────────
+
+interface GitCommitEntry {
+  hash: string;
+  date: string;
+  message: string;
+  linesAdded: number;
+  linesDeleted: number;
+  filesChanged: number;
+}
+
+function parseGitLog(raw: string): GitCommitEntry[] {
+  const entries: GitCommitEntry[] = [];
+  // Split by our delimiter. Each block starts with "hash\x1edate\x1emessage"
+  // followed optionally by a shortstat line.
+  const blocks = raw.split("\n");
+  let current: Partial<GitCommitEntry> | null = null;
+
+  for (const line of blocks) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      // Blank line — finalize current entry if stat line not expected
+      continue;
+    }
+
+    // Check if this is a commit line (contains our \x1e separators)
+    if (trimmed.includes("\x1e")) {
+      // Save previous entry
+      if (current?.hash) {
+        entries.push({
+          hash: current.hash,
+          date: current.date || "",
+          message: current.message || "",
+          linesAdded: current.linesAdded || 0,
+          linesDeleted: current.linesDeleted || 0,
+          filesChanged: current.filesChanged || 0,
+        });
+      }
+      const parts = trimmed.split("\x1e");
+      current = {
+        hash: parts[0],
+        date: parts[1] || "",
+        message: parts[2] || "",
+        linesAdded: 0,
+        linesDeleted: 0,
+        filesChanged: 0,
+      };
+    } else if (current && /files? changed/.test(trimmed)) {
+      // This is a shortstat line for the current commit
+      const filesMatch = trimmed.match(/(\d+) files? changed/);
+      const addMatch = trimmed.match(/(\d+) insertions?\(\+\)/);
+      const delMatch = trimmed.match(/(\d+) deletions?\(-\)/);
+      current.filesChanged = filesMatch ? parseInt(filesMatch[1]) : 0;
+      current.linesAdded = addMatch ? parseInt(addMatch[1]) : 0;
+      current.linesDeleted = delMatch ? parseInt(delMatch[1]) : 0;
+    }
+  }
+
+  // Push the last entry
+  if (current?.hash) {
+    entries.push({
+      hash: current.hash,
+      date: current.date || "",
+      message: current.message || "",
+      linesAdded: current.linesAdded || 0,
+      linesDeleted: current.linesDeleted || 0,
+      filesChanged: current.filesChanged || 0,
+    });
+  }
+
+  return entries;
+}
+
+function assignVersions(
+  entries: GitCommitEntry[],
+  startVersion: string,
+): { version: string; buildNumber: number; entry: GitCommitEntry }[] {
+  let [major, minor, patch] = startVersion.split(".").map(Number);
+  return entries.map((entry, i) => {
+    if (i > 0) patch++;
+    return {
+      version: `${major}.${minor}.${patch}`,
+      buildNumber: i + 1,
+      entry,
+    };
+  });
+}
+
+async function handleHistory(args: string[]): Promise<void> {
+  const isDry = args.includes("--dry") || args.includes("--dry-run");
+  const isClear = args.includes("--clear");
+  let since = "";
+  let startVersion = "0.0.1";
+  let branch = "";
+  const batchSize = 200;
+
+  for (let i = 0; i < args.length; i++) {
+    if ((args[i] === "--since" || args[i] === "-s") && args[i + 1]) {
+      since = args[i + 1];
+      i++;
+    } else if ((args[i] === "--start-version" || args[i] === "-v") && args[i + 1]) {
+      startVersion = args[i + 1];
+      i++;
+    } else if ((args[i] === "--branch" || args[i] === "-b") && args[i + 1]) {
+      branch = args[i + 1];
+      i++;
+    }
+  }
+
+  if (!isGitRepo()) {
+    console.error("❌ Not in a git repository");
+    process.exit(1);
+  }
+
+  const config = loadConfig();
+
+  console.log("");
+  console.log("📚 Matrx Ship — History Import");
+  console.log("══════════════════════════════════════════");
+  console.log(`   Server:         ${config.url}`);
+  console.log(`   Start version:  ${startVersion}`);
+  if (since) console.log(`   Since:          ${since}`);
+  if (branch) console.log(`   Branch:         ${branch}`);
+  if (isClear) console.log(`   Clear existing: YES`);
+  if (isDry) console.log(`   Mode:           DRY RUN (no changes)`);
+  console.log("");
+
+  // Build the git log command
+  // %h = short hash, %aI = author date ISO, %s = subject
+  // --shortstat adds file change summary after each commit
+  let gitCmd = `git log --reverse --format="%h\x1e%aI\x1e%s" --shortstat`;
+  if (since) gitCmd += ` --since="${since}"`;
+  if (branch) gitCmd += ` ${branch}`;
+
+  console.log("🔍 Reading git history...");
+  let raw: string;
+  try {
+    raw = execSync(gitCmd, { encoding: "utf-8", maxBuffer: 50 * 1024 * 1024 });
+  } catch (error) {
+    console.error("❌ Failed to read git history");
+    console.error("   ", error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  }
+
+  const entries = parseGitLog(raw);
+
+  if (entries.length === 0) {
+    console.log("⚠️  No commits found in git history.");
+    process.exit(0);
+  }
+
+  const versioned = assignVersions(entries, startVersion);
+
+  console.log(`   Found ${versioned.length} commits`);
+  console.log(`   Oldest: ${entries[0].date.split("T")[0]}  ${entries[0].hash}  ${entries[0].message.substring(0, 60)}`);
+  console.log(`   Newest: ${entries[entries.length - 1].date.split("T")[0]}  ${entries[entries.length - 1].hash}  ${entries[entries.length - 1].message.substring(0, 60)}`);
+  console.log(`   Versions: ${versioned[0].version} → ${versioned[versioned.length - 1].version}`);
+
+  // Calculate total stats
+  const totalAdded = entries.reduce((sum, e) => sum + e.linesAdded, 0);
+  const totalDeleted = entries.reduce((sum, e) => sum + e.linesDeleted, 0);
+  const totalFiles = entries.reduce((sum, e) => sum + e.filesChanged, 0);
+  console.log(`   Total: +${totalAdded.toLocaleString()} / -${totalDeleted.toLocaleString()} across ${totalFiles.toLocaleString()} file changes`);
+  console.log("");
+
+  if (isDry) {
+    console.log("── Preview (first 20 commits) ──────────────────────");
+    for (const v of versioned.slice(0, 20)) {
+      const stats = v.entry.filesChanged > 0 ? ` (+${v.entry.linesAdded}/-${v.entry.linesDeleted}, ${v.entry.filesChanged}f)` : "";
+      console.log(`   ${v.version} #${v.buildNumber}  ${v.entry.hash}  ${v.entry.date.split("T")[0]}  ${v.entry.message.substring(0, 50)}${stats}`);
+    }
+    if (versioned.length > 20) {
+      console.log(`   ... and ${versioned.length - 20} more`);
+    }
+    console.log("");
+    console.log("   This is a dry run. To actually import, run without --dry:");
+    console.log("     pnpm ship:history" + (isClear ? " --clear" : "") + (since ? ` --since ${since}` : ""));
+    console.log("");
+    return;
+  }
+
+  // Send to API in batches
+  console.log("📤 Importing to server...");
+
+  let totalImported = 0;
+  let totalSkipped = 0;
+  let totalCleared = 0;
+
+  for (let i = 0; i < versioned.length; i += batchSize) {
+    const batch = versioned.slice(i, i + batchSize);
+    const isFirst = i === 0;
+
+    const payload = {
+      versions: batch.map((v) => ({
+        version: v.version,
+        buildNumber: v.buildNumber,
+        gitCommit: v.entry.hash,
+        commitMessage: v.entry.message,
+        linesAdded: v.entry.linesAdded,
+        linesDeleted: v.entry.linesDeleted,
+        filesChanged: v.entry.filesChanged,
+        deployedAt: v.entry.date,
+      })),
+      clearExisting: isFirst && isClear,
+    };
+
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 60000);
+      const response = await fetch(`${config.url}/api/ship/import`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${config.apiKey}`,
+        },
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      });
+      clearTimeout(timeout);
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || `Server returned ${response.status}`);
+      }
+
+      totalImported += data.imported || 0;
+      totalSkipped += data.skipped || 0;
+      if (data.cleared) totalCleared += data.cleared;
+
+      const progress = Math.min(i + batchSize, versioned.length);
+      process.stdout.write(`\r   Progress: ${progress}/${versioned.length} commits processed`);
+    } catch (error) {
+      console.error(`\n\n❌ Failed at batch starting index ${i}`);
+      console.error("   ", error instanceof Error ? error.message : String(error));
+      if (totalImported > 0) {
+        console.log(`\n   Partial import: ${totalImported} versions were imported before the error.`);
+        console.log("   You can re-run the command safely — duplicates will be skipped.");
+      }
+      process.exit(1);
+    }
+  }
+
+  console.log(""); // Clear progress line
+  console.log("");
+  console.log("╔══════════════════════════════════════════════════════════════╗");
+  console.log("║   ✅ History import complete!                                ║");
+  console.log("╚══════════════════════════════════════════════════════════════╝");
+  console.log("");
+  console.log(`   Imported:  ${totalImported} version(s)`);
+  if (totalSkipped > 0) console.log(`   Skipped:   ${totalSkipped} (already existed)`);
+  if (totalCleared > 0) console.log(`   Cleared:   ${totalCleared} (pre-existing versions removed)`);
+  console.log(`   Range:     ${versioned[0].version} → ${versioned[versioned.length - 1].version}`);
+  console.log(`   Builds:    #1 → #${versioned.length}`);
+  console.log("");
+  console.log("   The next 'pnpm ship' will continue from where this left off.");
+  console.log(`   View history at: ${config.url}/admin/versions`);
+  console.log("");
+}
+
 // ── Main ─────────────────────────────────────────────────────────────
 
 async function main() {
@@ -796,6 +1056,8 @@ async function main() {
     await handleSetup(args.slice(1));
   } else if (command === "init") {
     await handleInit(args.slice(1));
+  } else if (command === "history") {
+    await handleHistory(args.slice(1));
   } else if (command === "status") {
     const config = loadConfig();
     await getStatus(config);
@@ -813,6 +1075,14 @@ Setup Commands:
   pnpm ship:init PROJECT "Display Name"  Auto-provision an instance on the server
   pnpm ship:init --url URL --key KEY     Manual config (provide your own URL + key)
 
+History:
+  pnpm ship:history                      Import full git history into ship
+  pnpm ship:history --dry                Preview what would be imported
+  pnpm ship:history --clear              Clear existing versions and reimport
+  pnpm ship:history --since 2024-01-01   Only import commits after a date
+  pnpm ship:history --branch main        Import from a specific branch
+  pnpm ship:history --start-version 1.0.0  Start versioning at a custom version
+
 Info Commands:
   pnpm ship status                       Show current version from server
   pnpm ship help                         Show this help
@@ -826,7 +1096,8 @@ Environment Variables:
 Quick Start:
   1. One-time: pnpm ship:setup --token YOUR_SERVER_TOKEN
   2. Per project: pnpm ship:init my-project "My Project"
-  3. Ship: pnpm ship "your commit message"
+  3. Import history: pnpm ship:history
+  4. Ship: pnpm ship "your commit message"
 `);
   } else {
     await handleShip(args);
