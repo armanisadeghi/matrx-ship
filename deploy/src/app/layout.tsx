@@ -6,6 +6,12 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "Matrx Deploy",
   description: "Infrastructure deployment management",
+  icons: {
+    icon: [
+      { url: "/icon.svg", type: "image/svg+xml" },
+    ],
+    apple: "/icon.svg",
+  },
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
