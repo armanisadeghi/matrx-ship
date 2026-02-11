@@ -1,4 +1,5 @@
 import { db } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import { appVersion } from "@/lib/db/schema";
 import { inArray, eq, desc } from "drizzle-orm";
 
@@ -137,7 +138,7 @@ export async function syncPendingDeployments(): Promise<number> {
   try {
     deploymentMap = await fetchVercelDeploymentMap();
   } catch (err) {
-    console.error("[vercel-sync] Error fetching from Vercel:", err);
+    logger.error({ err }, "[vercel-sync] Error fetching from Vercel");
     return 0;
   }
 
@@ -165,15 +166,15 @@ export async function syncPendingDeployments(): Promise<number> {
 
       updated++;
     } catch (updateError) {
-      console.error(
-        `[vercel-sync] Failed to update ${version.id}:`,
-        updateError,
+      logger.error(
+        { err: updateError, versionId: version.id },
+        "[vercel-sync] Failed to update version"
       );
     }
   }
 
   if (updated > 0) {
-    console.log(`[vercel-sync] Updated ${updated} deployment statuses`);
+    logger.info({ updated }, "[vercel-sync] Updated deployment statuses");
   }
 
   return updated;

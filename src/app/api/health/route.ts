@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import { appVersion } from "@/lib/db/schema";
 import { desc } from "drizzle-orm";
 
@@ -30,7 +31,7 @@ export async function GET() {
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
-    console.error("[health] Database check failed:", error);
+    logger.error({ err: error }, "[health] Database check failed");
     return NextResponse.json(
       {
         status: "error",

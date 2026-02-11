@@ -1,4 +1,5 @@
 import { db } from "./index";
+import { logger } from "@/lib/logger";
 import { appVersion, apiKeys } from "./schema";
 import { eq, count } from "drizzle-orm";
 import { generateApiKey } from "../utils";
@@ -15,14 +16,14 @@ export async function seedDatabase(): Promise<void> {
     .from(appVersion);
 
   if (versionCount.count === 0) {
-    console.log("[matrx-ship] Seeding initial version...");
+    logger.info("[matrx-ship] Seeding initial version...");
     await db.insert(appVersion).values({
       version: "1.0.0",
       buildNumber: 1,
       commitMessage: "Initial version",
       deploymentStatus: "ready",
     });
-    console.log("[matrx-ship] Created initial version v1.0.0");
+    logger.info("[matrx-ship] Created initial version v1.0.0");
   }
 
   // Check if there are any API keys
@@ -38,10 +39,10 @@ export async function seedDatabase(): Promise<void> {
     });
 
     if (!envKey) {
-      console.log("[matrx-ship] Generated API key:", key);
-      console.log("[matrx-ship] Set MATRX_SHIP_API_KEY env var to persist this key.");
+      logger.info({ key }, "[matrx-ship] Generated API key");
+      logger.info("[matrx-ship] Set MATRX_SHIP_API_KEY env var to persist this key.");
     } else {
-      console.log("[matrx-ship] Registered API key from environment.");
+      logger.info("[matrx-ship] Registered API key from environment.");
     }
   }
 }

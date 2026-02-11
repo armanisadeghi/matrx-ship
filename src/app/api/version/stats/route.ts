@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import { appVersion } from "@/lib/db/schema";
 import { gte, count, sum } from "drizzle-orm";
 
@@ -91,7 +92,7 @@ export async function GET() {
       totalDeployments: totalResult.count,
     });
   } catch (error) {
-    console.error("[api/version/stats] Error:", error);
+    logger.error({ err: error }, "[api/version/stats] Error");
     return NextResponse.json(
       { error: "Internal server error" },
       { status: 500 },

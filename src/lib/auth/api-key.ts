@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import { apiKeys } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 
@@ -53,7 +54,7 @@ export async function validateApiKey(
 
     return null; // Valid
   } catch (error) {
-    console.error("[auth] Error validating API key:", error);
+    logger.error({ err: error }, "[auth] Error validating API key");
     return NextResponse.json(
       { error: "Authentication error" },
       { status: 500 },

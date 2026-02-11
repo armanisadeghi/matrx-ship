@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { logger } from "@/lib/logger";
 import { createVersion } from "@/lib/services/version";
 import crypto from "crypto";
 
@@ -32,7 +33,7 @@ export async function POST(request: Request) {
           .digest("hex");
 
       if (signature !== expectedSignature) {
-        console.error("[webhook/github] Invalid signature");
+        logger.error("[webhook/github] Invalid signature");
         return NextResponse.json(
           { error: "Invalid signature" },
           { status: 401 },
@@ -93,11 +94,14 @@ export async function POST(request: Request) {
       });
     }
 
-    console.log("[webhook/github] Created version:", {
-      version: result.version,
-      buildNumber: result.buildNumber,
-      commit: headCommit.id?.substring(0, 7),
-    });
+    logger.info(
+      {
+        version: result.version,
+        buildNumber: result.buildNumber,
+        commit: headCommit.id?.substring(0, 7),
+      },
+      "[webhook/github] Created version"
+    );
 
     return NextResponse.json({
       message: "Version created from push",
@@ -105,7 +109,7 @@ export async function POST(request: Request) {
       buildNumber: result.buildNumber,
     });
   } catch (error) {
-    console.error("[webhook/github] Error:", error);
+    logger.error({ err: error }, "[webhook/github] Error");
     return NextResponse.json(
       { error: "Internal server error" },
       { status: 500 },

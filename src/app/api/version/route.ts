@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { logger } from "@/lib/logger";
 import { getCurrentVersion } from "@/lib/services/version";
 import { syncPendingDeployments } from "@/lib/services/vercel-sync";
 
@@ -39,7 +40,7 @@ export async function GET() {
       deploymentError: data.deploymentError,
     });
   } catch (error) {
-    console.error("[api/version] Error:", error);
+    logger.error({ err: error }, "[api/version] Error");
     return NextResponse.json(
       { error: "Internal server error" },
       { status: 500 },

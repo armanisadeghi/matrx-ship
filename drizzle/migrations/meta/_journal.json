@@ -8,6 +8,13 @@
       "when": 1770755866242,
       "tag": "0000_watery_giant_girl",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1770832181604,
+      "tag": "0001_parallel_starbolt",
+      "breakpoints": true
     }
   ]
 }

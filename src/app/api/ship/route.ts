@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { validateApiKey } from "@/lib/auth/api-key";
+import { logger } from "@/lib/logger";
 import { createVersion } from "@/lib/services/version";
 
 export const dynamic = "force-dynamic";
@@ -79,7 +80,7 @@ export async function POST(request: Request) {
       { status: 201 },
     );
   } catch (error) {
-    console.error("[api/ship] Error:", error);
+    logger.error({ err: error }, "[api/ship] Error");
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Internal server error" },
       { status: 500 },

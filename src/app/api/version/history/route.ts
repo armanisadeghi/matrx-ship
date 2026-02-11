@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import { appVersion } from "@/lib/db/schema";
 import { desc, count } from "drizzle-orm";
 import { syncPendingDeployments } from "@/lib/services/vercel-sync";
@@ -48,7 +49,7 @@ export async function GET(request: Request) {
       offset,
     });
   } catch (error) {
-    console.error("[api/version/history] Error:", error);
+    logger.error({ err: error }, "[api/version/history] Error");
     return NextResponse.json(
       { error: "Internal server error" },
       { status: 500 },

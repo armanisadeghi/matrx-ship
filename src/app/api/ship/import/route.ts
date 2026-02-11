@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { validateApiKey } from "@/lib/auth/api-key";
 import { db } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import { appVersion } from "@/lib/db/schema";
 import { eq, inArray } from "drizzle-orm";
 
@@ -137,7 +138,7 @@ export async function POST(request: Request) {
       { status: 201 },
     );
   } catch (error) {
-    console.error("[api/ship/import] Error:", error);
+    logger.error({ err: error }, "[api/ship/import] Error");
     return NextResponse.json(
       {
         error:

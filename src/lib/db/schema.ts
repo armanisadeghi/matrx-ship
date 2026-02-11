@@ -5,6 +5,7 @@ import {
   integer,
   timestamp,
   index,
+  jsonb,
 } from "drizzle-orm/pg-core";
 
 /**
@@ -57,8 +58,41 @@ export const apiKeys = pgTable("api_keys", {
   isActive: integer("is_active").notNull().default(1),
 });
 
+/**
+ * logs table — stores application and system logs for the unified logging system.
+ */
+export const logs = pgTable(
+  "logs",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    timestamp: timestamp("timestamp", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    level: text("level").notNull().default("info"), // info, warn, error, debug, fatal
+    source: text("source").notNull().default("app"), // app identifier
+    environment: text("environment").notNull().default("production"), // production, preview, dev
+    message: text("message").notNull(),
+    metadata: jsonb("metadata"),
+    requestId: text("request_id"),
+    traceId: text("trace_id"),
+    durationMs: integer("duration_ms"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    index("idx_logs_source_timestamp").on(table.source, table.timestamp),
+    index("idx_logs_level_timestamp").on(table.level, table.timestamp),
+    index("idx_logs_timestamp").on(table.timestamp),
+    index("idx_logs_environment").on(table.environment),
+    index("idx_logs_request_id").on(table.requestId),
+  ],
+);
+
 // Type exports for use across the app
 export type AppVersion = typeof appVersion.$inferSelect;
 export type NewAppVersion = typeof appVersion.$inferInsert;
 export type ApiKey = typeof apiKeys.$inferSelect;
 export type NewApiKey = typeof apiKeys.$inferInsert;
+export type Log = typeof logs.$inferSelect;
+export type NewLog = typeof logs.$inferInsert;

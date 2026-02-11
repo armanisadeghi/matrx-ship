@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import { appVersion } from "@/lib/db/schema";
 import { eq, gte, desc } from "drizzle-orm";
 import crypto from "crypto";
@@ -32,7 +33,7 @@ export async function POST(request: Request) {
         .digest("hex");
 
       if (signature !== expectedSignature) {
-        console.error("[webhook/vercel] Invalid signature");
+        logger.error("[webhook/vercel] Invalid signature");
         return NextResponse.json(
           { error: "Invalid signature" },
           { status: 401 },
@@ -104,11 +105,10 @@ export async function POST(request: Request) {
     }
 
     if (!versionId) {
-      console.warn("[webhook/vercel] No matching version found", {
-        gitCommit,
-        deploymentId,
-        type,
-      });
+      logger.warn(
+        { gitCommit, deploymentId, type },
+        "[webhook/vercel] No matching version found"
+      );
       return NextResponse.json(
         { message: "No matching version found, webhook ignored" },
         { status: 200 },
@@ -132,12 +132,15 @@ export async function POST(request: Request) {
       .set(updateData)
       .where(eq(appVersion.id, versionId));
 
-    console.log("[webhook/vercel] Updated deployment status:", {
-      versionId,
-      status: deploymentStatus,
-      deploymentId,
-      gitCommit,
-    });
+    logger.info(
+      {
+        versionId,
+        status: deploymentStatus,
+        deploymentId,
+        gitCommit,
+      },
+      "[webhook/vercel] Updated deployment status"
+    );
 
     return NextResponse.json({
       message: "Webhook processed successfully",
@@ -145,7 +148,7 @@ export async function POST(request: Request) {
       status: deploymentStatus,
     });
   } catch (error) {
-    console.error("[webhook/vercel] Error:", error);
+    logger.error({ err: error }, "[webhook/vercel] Error");
     return NextResponse.json(
       { error: "Internal server error" },
       { status: 500 },
