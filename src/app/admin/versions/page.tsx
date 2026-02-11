@@ -123,6 +123,40 @@ export default function VersionsPage() {
     }
   };
 
+  const loadAll = async () => {
+    if (loadingMore || !hasMore) return;
+    setLoadingMore(true);
+
+    try {
+      // Calculate how many versions remain
+      const remaining = total - history.length;
+      
+      // Fetch all remaining versions (API max is 100 per request)
+      const batchSize = 100;
+      const batches = Math.ceil(remaining / batchSize);
+      
+      for (let i = 0; i < batches; i++) {
+        const offset = history.length + (i * batchSize);
+        const limit = Math.min(batchSize, remaining - (i * batchSize));
+        
+        const res = await fetch(
+          `/api/version/history?limit=${limit}&offset=${offset}`,
+        );
+        
+        if (!res.ok) throw new Error("Failed to load versions");
+        
+        const data: HistoryResponse = await res.json();
+        setHistory((prev) => [...prev, ...data.versions]);
+      }
+      
+      setHasMore(false);
+    } catch (err) {
+      console.error("Error loading all versions:", err);
+    } finally {
+      setLoadingMore(false);
+    }
+  };
+
   const getStatusBadge = (status?: string | null) => {
     const styles: Record<string, string> = {
       pending: "bg-slate-100 text-slate-700",
@@ -384,29 +418,47 @@ export default function VersionsPage() {
           </table>
         </div>
 
-        {/* Load More */}
+        {/* Load More / Load All */}
         {hasMore && (
           <div className="px-4 py-3 border-t border-slate-200 flex items-center justify-between">
             <p className="text-sm text-slate-600">
               Showing {history.length} of {total}
             </p>
-            <button
-              onClick={loadMore}
-              disabled={loadingMore}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm bg-ship-600 text-white rounded-lg hover:bg-ship-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-            >
-              {loadingMore ? (
-                <>
-                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  Loading
-                </>
-              ) : (
-                <>
-                  Load More
-                  <ChevronDown className="w-3.5 h-3.5" />
-                </>
-              )}
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={loadMore}
+                disabled={loadingMore}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm bg-white border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              >
+                {loadingMore ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    Loading
+                  </>
+                ) : (
+                  <>
+                    Load More
+                    <ChevronDown className="w-3.5 h-3.5" />
+                  </>
+                )}
+              </button>
+              <button
+                onClick={loadAll}
+                disabled={loadingMore}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm bg-ship-600 text-white rounded-lg hover:bg-ship-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              >
+                {loadingMore ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    Loading
+                  </>
+                ) : (
+                  <>
+                    Load All ({total - history.length})
+                  </>
+                )}
+              </button>
+            </div>
           </div>
         )}
       </div>
