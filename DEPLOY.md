@@ -2,7 +2,7 @@
 
 This guide covers deploying one or more matrx-ship instances on a single server using Docker Compose. Each instance tracks a single project.
 
-## Prerequisites
+## Prerequisites 
 
 The server needs:
 - Docker and Docker Compose (v2)
