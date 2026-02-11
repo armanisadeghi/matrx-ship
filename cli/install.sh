@@ -6,6 +6,8 @@
 # 1. Downloads the ship CLI script into your project's scripts/matrx/ directory
 # 2. Adds "ship" scripts to your package.json (if it exists)
 # 3. Creates a .matrx-ship.json template if one doesn't exist
+#
+# After installation, update anytime with: pnpm ship:update
 
 set -euo pipefail
 
@@ -90,6 +92,9 @@ echo '     pnpm ship:init my-project "My Project Name"'
 echo ""
 echo "  3. Ship!"
 echo '     pnpm ship "your commit message"'
+echo ""
+echo "  4. Update CLI anytime:"
+echo "     pnpm ship:update"
 echo ""
 echo -e "  Run ${BOLD}pnpm ship help${NC} for all options."
 echo ""

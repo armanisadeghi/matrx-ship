@@ -101,7 +101,7 @@ function loadConfig(): ShipConfig {
     process.exit(1);
   }
 
-  let config: ShipConfig;
+  let config!: ShipConfig;
   try {
     const raw = readFileSync(configPath, "utf-8");
     config = JSON.parse(raw);
@@ -344,7 +344,7 @@ async function shipVersion(
     });
     clearTimeout(timeout);
 
-    const data = await response.json();
+    const data = (await response.json()) as Record<string, unknown>;
     return { ok: response.ok, data };
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
@@ -381,7 +381,7 @@ async function getStatus(config: ShipConfig): Promise<void> {
     });
     clearTimeout(timeout);
 
-    const data = await response.json();
+    const data = (await response.json()) as Record<string, unknown>;
 
     console.log("\n📦 Current Version Status");
     console.log(`   Server:  ${config.url}`);
@@ -444,7 +444,7 @@ async function handleSetup(args: string[]): Promise<void> {
     const timeout = setTimeout(() => controller.abort(), 10000);
     const response = await fetch(`${server}/health`, { signal: controller.signal });
     clearTimeout(timeout);
-    const data = await response.json();
+    const data = (await response.json()) as Record<string, unknown>;
     if (data.status !== "ok") throw new Error("Health check failed");
     console.log(`✅ Connected to server manager`);
   } catch (error) {
@@ -550,13 +550,13 @@ async function handleInit(args: string[]): Promise<void> {
   console.log("🚀 Provisioning matrx-ship instance...");
   console.log(`   Project:  ${projectName}`);
   console.log(`   Display:  ${displayName}`);
-  console.log(`   Server:   ${serverConfig.server}`);
+  console.log(`   Server:   ${serverConfig!.server}`);
   console.log("");
 
   // Call MCP app_create
-  let result: Record<string, unknown>;
+  let result!: Record<string, unknown>;
   try {
-    result = await callMcpTool(serverConfig, "app_create", {
+    result = await callMcpTool(serverConfig!, "app_create", {
       name: projectName,
       display_name: displayName,
     });
@@ -608,7 +608,7 @@ async function handleInit(args: string[]): Promise<void> {
       const timeout = setTimeout(() => controller.abort(), 5000);
       const response = await fetch(`${instanceUrl}/api/health`, { signal: controller.signal });
       clearTimeout(timeout);
-      const data = await response.json();
+      const data = (await response.json()) as Record<string, unknown>;
       if (data.status === "ok") {
         healthy = true;
         break;
@@ -668,7 +668,7 @@ async function handleLegacyInit(args: string[]): Promise<void> {
     const timeout = setTimeout(() => controller.abort(), 10000);
     const response = await fetch(`${url}/api/health`, { signal: controller.signal });
     clearTimeout(timeout);
-    const data = await response.json();
+    const data = (await response.json()) as Record<string, unknown>;
     if (data.status !== "ok") throw new Error("Health check returned non-ok status");
     console.log(`✅ Connected to ${data.service} (project: ${data.project})`);
   } catch (error) {
@@ -702,17 +702,17 @@ async function handleShip(args: string[]): Promise<void> {
     console.error('\n   Usage: pnpm ship "Your commit message"');
     console.error('          pnpm ship:minor "Your commit message"');
     console.error('          pnpm ship:major "Your commit message"');
-    process.exit(1);
+    return void process.exit(1);
   }
 
   if (!isGitRepo()) {
     console.error("❌ Error: Not in a git repository");
-    process.exit(1);
+    return void process.exit(1);
   }
 
   if (!hasUncommittedChanges()) {
     console.log("⚠️  No uncommitted changes detected. Nothing to ship!");
-    process.exit(0);
+    return void process.exit(0);
   }
 
   const config = loadConfig();
@@ -924,7 +924,7 @@ async function handleHistory(args: string[]): Promise<void> {
   if (branch) gitCmd += ` ${branch}`;
 
   console.log("🔍 Reading git history...");
-  let raw: string;
+  let raw!: string;
   try {
     raw = execSync(gitCmd, { encoding: "utf-8", maxBuffer: 50 * 1024 * 1024 });
   } catch (error) {
@@ -1009,15 +1009,15 @@ async function handleHistory(args: string[]): Promise<void> {
       });
       clearTimeout(timeout);
 
-      const data = await response.json();
+      const data = (await response.json()) as Record<string, unknown>;
 
       if (!response.ok) {
-        throw new Error(data.error || `Server returned ${response.status}`);
+        throw new Error((data.error as string) || `Server returned ${response.status}`);
       }
 
-      totalImported += data.imported || 0;
-      totalSkipped += data.skipped || 0;
-      if (data.cleared) totalCleared += data.cleared;
+      totalImported += (data.imported as number) || 0;
+      totalSkipped += (data.skipped as number) || 0;
+      if (data.cleared) totalCleared += data.cleared as number;
 
       const progress = Math.min(i + batchSize, versioned.length);
       process.stdout.write(`\r   Progress: ${progress}/${versioned.length} commits processed`);
@@ -1144,7 +1144,7 @@ async function handleUpdate(): Promise<void> {
 
   // Download the latest ship.ts
   console.log("   Downloading latest CLI from GitHub...");
-  let content: string;
+  let content!: string;
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 15000);
@@ -1255,6 +1255,7 @@ Quick Start:
   2. Per project: pnpm ship:init my-project "My Project"
   3. Import history: pnpm ship:history
   4. Ship: pnpm ship "your commit message"
+  5. Update CLI: pnpm ship:update
 `);
   } else {
     await handleShip(args);
