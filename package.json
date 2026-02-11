@@ -1,0 +1,42 @@
+{
+  "name": "matrx-ship",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Universal deployment & version tracking system",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "node server.js",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate",
+    "db:push": "drizzle-kit push",
+    "db:studio": "drizzle-kit studio",
+    "type-check": "tsc --noEmit",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "clsx": "^2.1.1",
+    "drizzle-orm": "^0.44.0",
+    "lucide-react": "^0.475.0",
+    "next": "^16.1.0",
+    "postgres": "^3.4.5",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "tailwind-merge": "^3.0.2"
+  },
+  "devDependencies": {
+    "@eslint/eslintrc": "^3.3.1",
+    "@tailwindcss/postcss": "^4.1.0",
+    "@types/node": "^22.15.0",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "babel-plugin-react-compiler": "^1.0.0",
+    "drizzle-kit": "^0.31.0",
+    "eslint": "^9.24.0",
+    "eslint-config-next": "^16.1.0",
+    "postcss": "^8.5.0",
+    "tailwindcss": "^4.1.0",
+    "typescript": "^5.9.0"
+  },
+  "packageManager": "pnpm@10.28.2"
+}

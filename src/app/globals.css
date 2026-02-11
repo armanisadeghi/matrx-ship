@@ -1,0 +1,15 @@
+@import "tailwindcss";
+
+@theme {
+  --color-ship-50: #f5f3ff;
+  --color-ship-100: #ede9fe;
+  --color-ship-200: #ddd6fe;
+  --color-ship-300: #c4b5fd;
+  --color-ship-400: #a78bfa;
+  --color-ship-500: #8b5cf6;
+  --color-ship-600: #7c3aed;
+  --color-ship-700: #6d28d9;
+  --color-ship-800: #5b21b6;
+  --color-ship-900: #4c1d95;
+  --color-ship-950: #2e1065;
+}

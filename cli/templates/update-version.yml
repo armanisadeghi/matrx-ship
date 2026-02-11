@@ -1,0 +1,101 @@
+# GitHub Actions workflow template for auto-versioning on push.
+# Copy this file to your project at .github/workflows/update-version.yml
+#
+# Required GitHub Secrets:
+#   MATRX_SHIP_URL   - Your matrx-ship instance URL (e.g., https://ship-myproject.yourdomain.com)
+#   MATRX_SHIP_API_KEY - API key for the ship instance
+#
+# This workflow auto-creates a patch version on every push to main.
+# The matrx-ship CLI handles all the version tracking via the ship API.
+
+name: Track Version
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - ".github/**"
+
+concurrency:
+  group: version-track
+  cancel-in-progress: false
+
+jobs:
+  track-version:
+    name: Track Version in Matrx Ship
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2 # Need at least 2 commits for diff stats
+
+      - name: Collect git metadata
+        id: meta
+        run: |
+          COMMIT_SHA=$(git rev-parse --short HEAD)
+          COMMIT_MSG=$(git log -1 --pretty=%B | head -1)
+          
+          # Get code change stats
+          STATS=$(git diff --numstat HEAD~1 HEAD 2>/dev/null || echo "")
+          LINES_ADDED=0
+          LINES_DELETED=0
+          FILES_CHANGED=0
+          
+          if [ -n "$STATS" ]; then
+            while IFS=$'\t' read -r added deleted file; do
+              if [ "$added" != "-" ] && [ "$deleted" != "-" ]; then
+                LINES_ADDED=$((LINES_ADDED + added))
+                LINES_DELETED=$((LINES_DELETED + deleted))
+                FILES_CHANGED=$((FILES_CHANGED + 1))
+              fi
+            done <<< "$STATS"
+          fi
+          
+          echo "commit_sha=$COMMIT_SHA" >> $GITHUB_OUTPUT
+          echo "commit_msg=$COMMIT_MSG" >> $GITHUB_OUTPUT
+          echo "lines_added=$LINES_ADDED" >> $GITHUB_OUTPUT
+          echo "lines_deleted=$LINES_DELETED" >> $GITHUB_OUTPUT
+          echo "files_changed=$FILES_CHANGED" >> $GITHUB_OUTPUT
+
+      - name: Create version via Ship API
+        env:
+          MATRX_SHIP_URL: ${{ secrets.MATRX_SHIP_URL }}
+          MATRX_SHIP_API_KEY: ${{ secrets.MATRX_SHIP_API_KEY }}
+        run: |
+          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${MATRX_SHIP_URL}/api/ship" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer ${MATRX_SHIP_API_KEY}" \
+            -d '{
+              "bumpType": "patch",
+              "gitCommit": "${{ steps.meta.outputs.commit_sha }}",
+              "commitMessage": "${{ steps.meta.outputs.commit_msg }}",
+              "linesAdded": ${{ steps.meta.outputs.lines_added }},
+              "linesDeleted": ${{ steps.meta.outputs.lines_deleted }},
+              "filesChanged": ${{ steps.meta.outputs.files_changed }}
+            }')
+          
+          HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+          BODY=$(echo "$RESPONSE" | head -n -1)
+          
+          echo "Response: $BODY"
+          echo "HTTP Code: $HTTP_CODE"
+          
+          if [ "$HTTP_CODE" -ge 400 ]; then
+            echo "::error::Failed to create version: $BODY"
+            exit 1
+          fi
+          
+          VERSION=$(echo "$BODY" | grep -o '"version":"[^"]*"' | cut -d'"' -f4)
+          BUILD=$(echo "$BODY" | grep -o '"buildNumber":[0-9]*' | cut -d':' -f2)
+          echo "::notice::Version v${VERSION} (build #${BUILD}) tracked successfully"
+
+      - name: Notify on failure
+        if: failure()
+        run: |
+          echo "::error::Failed to track version in Matrx Ship"
+          echo "Check that MATRX_SHIP_URL and MATRX_SHIP_API_KEY secrets are set correctly"
