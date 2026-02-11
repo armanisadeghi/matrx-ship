@@ -13,7 +13,7 @@ import {
   HeartPulse,
   KeyRound,
   Settings,
-  Bug,
+  Ticket,
   Bell,
   ClipboardList,
   Package,
@@ -73,9 +73,14 @@ const navGroups: NavGroup[] = [
     ],
   },
   {
+    label: "Support",
+    items: [
+      { href: "/admin/tickets", label: "Tickets", icon: Ticket },
+    ],
+  },
+  {
     label: "Coming Soon",
     items: [
-      { href: "/admin/bug-reports", label: "Bug Reports", icon: Bug, soon: true },
       { href: "/admin/alerts", label: "Alerts", icon: Bell, soon: true },
       { href: "/admin/audit-trail", label: "Audit Trail", icon: ClipboardList, soon: true },
     ],
