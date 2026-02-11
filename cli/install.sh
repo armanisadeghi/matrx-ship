@@ -304,7 +304,8 @@ INIT_EXIT=$?
 
 if [ $INIT_EXIT -ne 0 ]; then
   echo ""
-  echo -e "  ${RED}Provisioning failed.${NC} You can retry:"
+  echo -e "  ${DIM}See the messages above for details.${NC}"
+  echo -e "  ${DIM}You can retry provisioning anytime:${NC}"
   echo -e "    ${CYAN}${SHIP_INIT_DISPLAY} ${PROJECT_NAME} \"${DISPLAY_NAME}\"${NC}"
   echo ""
   exit 1
