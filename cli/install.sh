@@ -39,27 +39,6 @@ else
   exit 1
 fi
 
-# Handle .matrx-ship.json
-NEEDS_CONFIG=false
-if [ ! -f ".matrx-ship.json" ]; then
-  cat > ".matrx-ship.json" << 'EOF'
-{
-  "url": "https://ship-YOURPROJECT.yourdomain.com",
-  "apiKey": "sk_ship_YOUR_API_KEY_HERE"
-}
-EOF
-  NEEDS_CONFIG=true
-  echo -e "${GREEN}✓${NC} Created .matrx-ship.json template"
-else
-  # Check if existing file has placeholder values
-  if grep -q "yourdomain.com\|YOUR_API_KEY_HERE\|YOUR" ".matrx-ship.json" 2>/dev/null; then
-    NEEDS_CONFIG=true
-    echo -e "${YELLOW}→${NC} .matrx-ship.json exists but has placeholder values"
-  else
-    echo -e "${GREEN}✓${NC} .matrx-ship.json already configured"
-  fi
-fi
-
 # Add to .gitignore if not already there
 if [ -f ".gitignore" ]; then
   if ! grep -q ".matrx-ship.json" ".gitignore" 2>/dev/null; then
@@ -72,41 +51,41 @@ fi
 
 # Try to add scripts to package.json
 if [ -f "package.json" ]; then
-  if command -v npx &> /dev/null; then
-    if command -v jq &> /dev/null; then
-      UPDATED=$(jq '.scripts.ship = "tsx scripts/matrx/ship.ts" | .scripts["ship:minor"] = "tsx scripts/matrx/ship.ts --minor" | .scripts["ship:major"] = "tsx scripts/matrx/ship.ts --major"' package.json)
-      echo "$UPDATED" > package.json
-      echo -e "${GREEN}✓${NC} Added ship scripts to package.json"
-    else
-      echo -e "${YELLOW}→${NC} Install jq to auto-add scripts, or manually add to package.json:"
-      echo ""
-      echo '    "ship": "tsx scripts/matrx/ship.ts",'
-      echo '    "ship:minor": "tsx scripts/matrx/ship.ts --minor",'
-      echo '    "ship:major": "tsx scripts/matrx/ship.ts --major"'
-      echo ""
-    fi
+  if command -v jq &> /dev/null; then
+    UPDATED=$(jq '
+      .scripts.ship = "tsx scripts/matrx/ship.ts" |
+      .scripts["ship:minor"] = "tsx scripts/matrx/ship.ts --minor" |
+      .scripts["ship:major"] = "tsx scripts/matrx/ship.ts --major" |
+      .scripts["ship:init"] = "tsx scripts/matrx/ship.ts init" |
+      .scripts["ship:setup"] = "tsx scripts/matrx/ship.ts setup"
+    ' package.json)
+    echo "$UPDATED" > package.json
+    echo -e "${GREEN}✓${NC} Added ship scripts to package.json"
+  else
+    echo -e "${YELLOW}→${NC} Install jq to auto-add scripts, or manually add to package.json:"
+    echo ""
+    echo '    "ship": "tsx scripts/matrx/ship.ts",'
+    echo '    "ship:minor": "tsx scripts/matrx/ship.ts --minor",'
+    echo '    "ship:major": "tsx scripts/matrx/ship.ts --major",'
+    echo '    "ship:init": "tsx scripts/matrx/ship.ts init",'
+    echo '    "ship:setup": "tsx scripts/matrx/ship.ts setup"'
+    echo ""
   fi
 fi
 
 echo ""
 echo -e "${GREEN}✓ Installation complete!${NC}"
 echo ""
-
-if [ "$NEEDS_CONFIG" = true ]; then
-  echo -e "${BOLD}${YELLOW}⚠  IMPORTANT: You need to configure your ship server before using pnpm ship${NC}"
-  echo ""
-  echo "   Your .matrx-ship.json has placeholder values. Before shipping, you need:"
-  echo ""
-  echo "   1. A running matrx-ship server instance"
-  echo "      (Deploy guide: https://github.com/armanisadeghi/matrx-ship/blob/main/DEPLOY.md)"
-  echo ""
-  echo "   2. Then configure this project:"
-  echo "      npx tsx scripts/matrx/ship.ts init --url https://YOUR-REAL-URL --key YOUR-REAL-KEY"
-  echo ""
-  echo "   Or manually edit .matrx-ship.json with your instance URL and API key."
-  echo ""
-else
-  echo "   Ready to go! Run:"
-  echo '     pnpm ship "your commit message"'
-  echo ""
-fi
+echo -e "${BOLD}Quick Start:${NC}"
+echo ""
+echo "  1. Save your server token (one-time per machine):"
+echo "     pnpm ship:setup --token YOUR_SERVER_TOKEN"
+echo ""
+echo "  2. Provision an instance for this project:"
+echo '     pnpm ship:init my-project "My Project Name"'
+echo ""
+echo "  3. Ship!"
+echo '     pnpm ship "your commit message"'
+echo ""
+echo -e "  Run ${BOLD}pnpm ship help${NC} for all options."
+echo ""

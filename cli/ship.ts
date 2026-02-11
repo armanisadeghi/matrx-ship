@@ -3,31 +3,46 @@
  * Matrx Ship CLI
  *
  * Universal deployment tool that:
- * 1. Collects git metadata (commit hash, message, code stats)
- * 2. Sends version data to the matrx-ship API
- * 3. Stages all changes
- * 4. Creates git commit
- * 5. Pushes to remote
+ * 1. Provisions a new ship instance on your server (init)
+ * 2. Collects git metadata (commit hash, message, code stats)
+ * 3. Sends version data to the matrx-ship API
+ * 4. Stages, commits, and pushes changes
  *
  * Usage:
- *   matrx-ship "commit message"             # Patch bump
- *   matrx-ship --minor "commit message"     # Minor bump
- *   matrx-ship --major "commit message"     # Major bump
- *   matrx-ship init --url URL --key KEY     # Configure for a project
- *   matrx-ship status                       # Show current version
+ *   pnpm ship "commit message"                              # Patch bump
+ *   pnpm ship:minor "commit message"                        # Minor bump
+ *   pnpm ship:major "commit message"                        # Major bump
+ *   pnpm ship:init my-project "My Project"                  # Auto-provision instance
+ *   pnpm ship:init --url URL --key KEY                      # Manual config (legacy)
+ *   pnpm ship:setup --token TOKEN [--server URL]            # Save server credentials
+ *   pnpm ship status                                        # Show current version
  */
 
 import { execSync } from "child_process";
-import { existsSync, readFileSync, writeFileSync } from "fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
 import * as path from "path";
+import { homedir } from "os";
 
-// ── Configuration ────────────────────────────────────────────────────
+// ── Constants ─────────────────────────────────────────────────────────
+
+const DEFAULT_MCP_SERVER = "https://mcp.dev.codematrx.com";
+const GLOBAL_CONFIG_DIR = path.join(homedir(), ".config", "matrx-ship");
+const GLOBAL_CONFIG_FILE = path.join(GLOBAL_CONFIG_DIR, "server.json");
+
+// ── Types ─────────────────────────────────────────────────────────────
 
 interface ShipConfig {
   url: string;
   apiKey: string;
   projectName?: string;
 }
+
+interface ServerConfig {
+  server: string;
+  token: string;
+}
+
+// ── Configuration ────────────────────────────────────────────────────
 
 function findConfigFile(): string | null {
   let dir = process.cwd();
@@ -40,9 +55,6 @@ function findConfigFile(): string | null {
   }
 }
 
-/**
- * Check if a URL looks like an unconfigured placeholder.
- */
 function isPlaceholderUrl(url: string): boolean {
   return (
     url.includes("yourdomain.com") ||
@@ -55,9 +67,6 @@ function isPlaceholderUrl(url: string): boolean {
   );
 }
 
-/**
- * Check if an API key looks like a placeholder.
- */
 function isPlaceholderKey(key: string): boolean {
   return (
     key === "" ||
@@ -69,7 +78,6 @@ function isPlaceholderKey(key: string): boolean {
 }
 
 function loadConfig(): ShipConfig {
-  // Check environment variables first
   const envUrl = process.env.MATRX_SHIP_URL;
   const envKey = process.env.MATRX_SHIP_API_KEY;
 
@@ -77,16 +85,15 @@ function loadConfig(): ShipConfig {
     return { url: envUrl.replace(/\/+$/, ""), apiKey: envKey };
   }
 
-  // Check config file
   const configPath = findConfigFile();
   if (!configPath) {
     console.error("❌ No .matrx-ship.json found in this project.");
     console.error("");
     console.error("   To set up, run:");
-    console.error("     npx tsx scripts/matrx/ship.ts init --url URL --key API_KEY");
+    console.error('     pnpm ship:init my-project "My Project Name"');
     console.error("");
     console.error("   Or set environment variables:");
-    console.error("     export MATRX_SHIP_URL=https://your-ship-instance.com");
+    console.error("     export MATRX_SHIP_URL=https://ship-myproject.dev.codematrx.com");
     console.error("     export MATRX_SHIP_API_KEY=sk_ship_xxxxx");
     process.exit(1);
   }
@@ -103,20 +110,16 @@ function loadConfig(): ShipConfig {
 
   if (!config.url || !config.apiKey) {
     console.error(`❌ Missing fields in ${configPath}`);
-    console.error("   Required: { \"url\": \"...\", \"apiKey\": \"...\" }");
+    console.error('   Required: { "url": "...", "apiKey": "..." }');
     process.exit(1);
   }
 
-  // Check for placeholder values
   if (isPlaceholderUrl(config.url)) {
     console.error("❌ Your .matrx-ship.json still has a placeholder URL.");
     console.error(`   Current:  ${config.url}`);
     console.error("");
-    console.error("   You need a running matrx-ship server instance first.");
-    console.error("   Once you have one, update .matrx-ship.json with the real URL, or run:");
-    console.error("     npx tsx scripts/matrx/ship.ts init --url https://your-real-url.com --key YOUR_KEY");
-    console.error("");
-    console.error("   No ship instance yet? See: https://github.com/armanisadeghi/matrx-ship/blob/main/DEPLOY.md");
+    console.error("   Run this to auto-provision an instance:");
+    console.error('     pnpm ship:init my-project "My Project Name"');
     process.exit(1);
   }
 
@@ -128,6 +131,43 @@ function loadConfig(): ShipConfig {
   }
 
   return { ...config, url: config.url.replace(/\/+$/, "") };
+}
+
+// ── Server Config (global) ──────────────────────────────────────────
+
+function loadServerConfig(): ServerConfig | null {
+  // 1. Environment variables (highest priority)
+  const envToken = process.env.MATRX_SHIP_SERVER_TOKEN;
+  const envServer = process.env.MATRX_SHIP_SERVER || DEFAULT_MCP_SERVER;
+  if (envToken) {
+    return { server: envServer, token: envToken };
+  }
+
+  // 2. Global config file
+  if (existsSync(GLOBAL_CONFIG_FILE)) {
+    try {
+      const raw = readFileSync(GLOBAL_CONFIG_FILE, "utf-8");
+      const config = JSON.parse(raw);
+      if (config.token) {
+        return { server: config.server || DEFAULT_MCP_SERVER, token: config.token };
+      }
+    } catch {
+      // Ignore corrupt file
+    }
+  }
+
+  return null;
+}
+
+function saveServerConfig(config: ServerConfig): void {
+  mkdirSync(GLOBAL_CONFIG_DIR, { recursive: true });
+  writeFileSync(GLOBAL_CONFIG_FILE, JSON.stringify(config, null, 2) + "\n", "utf-8");
+  // Restrict permissions
+  try {
+    execSync(`chmod 600 "${GLOBAL_CONFIG_FILE}"`, { stdio: "ignore" });
+  } catch {
+    // Windows doesn't have chmod
+  }
 }
 
 // ── Git Helpers ──────────────────────────────────────────────────────
@@ -148,15 +188,9 @@ function getCommitMessage(): string | null {
   }
 }
 
-function getCodeStats(): {
-  linesAdded: number;
-  linesDeleted: number;
-  filesChanged: number;
-} {
+function getCodeStats(): { linesAdded: number; linesDeleted: number; filesChanged: number } {
   try {
-    const stats = execSync("git diff --numstat HEAD~1 HEAD")
-      .toString()
-      .trim();
+    const stats = execSync("git diff --numstat HEAD~1 HEAD").toString().trim();
     let linesAdded = 0;
     let linesDeleted = 0;
     let filesChanged = 0;
@@ -180,9 +214,7 @@ function getCodeStats(): {
 
 function hasUncommittedChanges(): boolean {
   try {
-    const status = execSync("git status --porcelain", {
-      encoding: "utf-8",
-    });
+    const status = execSync("git status --porcelain", { encoding: "utf-8" });
     return status.trim().length > 0;
   } catch {
     return false;
@@ -198,32 +230,102 @@ function isGitRepo(): boolean {
   }
 }
 
-// ── API Client ───────────────────────────────────────────────────────
+// ── MCP Client ──────────────────────────────────────────────────────
 
-async function checkServerReachable(url: string): Promise<boolean> {
+async function callMcpTool(
+  serverConfig: ServerConfig,
+  toolName: string,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const mcpUrl = `${serverConfig.server.replace(/\/+$/, "")}/mcp`;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 60000);
+
   try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 5000);
-
-    const response = await fetch(`${url}/api/health`, {
+    const response = await fetch(mcpUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json, text/event-stream",
+        Authorization: `Bearer ${serverConfig.token}`,
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        method: "tools/call",
+        params: { name: toolName, arguments: args },
+        id: 1,
+      }),
       signal: controller.signal,
     });
     clearTimeout(timeout);
 
-    const data = await response.json();
-    return data.status === "ok";
-  } catch {
-    return false;
+    if (response.status === 401) {
+      throw new Error(
+        "Authentication failed. Your server token is invalid.\n" +
+          "   Run: pnpm ship:setup --token YOUR_TOKEN",
+      );
+    }
+
+    if (!response.ok) {
+      throw new Error(`Server returned ${response.status}: ${response.statusText}`);
+    }
+
+    // Parse SSE response
+    const body = await response.text();
+    const dataLine = body.split("\n").find((l) => l.startsWith("data: "));
+    if (!dataLine) {
+      throw new Error("Unexpected response format from MCP server");
+    }
+
+    const json = JSON.parse(dataLine.replace("data: ", ""));
+
+    if (json.result?.content?.[0]?.text) {
+      const text = json.result.content[0].text;
+      try {
+        return JSON.parse(text);
+      } catch {
+        // If the text isn't JSON, return it wrapped
+        return { message: text };
+      }
+    }
+
+    if (json.error) {
+      throw new Error(json.error.message || "MCP tool call failed");
+    }
+
+    return json;
+  } catch (error) {
+    clearTimeout(timeout);
+    const msg = error instanceof Error ? error.message : String(error);
+
+    if (msg.includes("abort") || msg.includes("timeout")) {
+      throw new Error(
+        `Connection to MCP server timed out.\n` +
+          `   Server: ${serverConfig.server}\n` +
+          "   Is the server running?",
+      );
+    }
+    if (msg.includes("fetch failed") || msg.includes("ECONNREFUSED") || msg.includes("ENOTFOUND")) {
+      throw new Error(
+        `Cannot reach MCP server at ${serverConfig.server}\n` +
+          "   Possible causes:\n" +
+          "     - The server is not running\n" +
+          "     - The URL is wrong\n" +
+          "     - Network/firewall is blocking the connection\n" +
+          `\n   To verify: curl ${serverConfig.server}/health`,
+      );
+    }
+    throw error;
   }
 }
+
+// ── API Client ───────────────────────────────────────────────────────
 
 async function shipVersion(
   config: ShipConfig,
   payload: Record<string, unknown>,
-): Promise<{
-  ok: boolean;
-  data: Record<string, unknown>;
-}> {
+): Promise<{ ok: boolean; data: Record<string, unknown> }> {
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 15000);
@@ -242,9 +344,7 @@ async function shipVersion(
     const data = await response.json();
     return { ok: response.ok, data };
   } catch (error) {
-    // Translate network errors into clear messages
-    const msg =
-      error instanceof Error ? error.message : String(error);
+    const msg = error instanceof Error ? error.message : String(error);
 
     if (msg.includes("abort") || msg.includes("timeout")) {
       throw new Error(
@@ -304,7 +404,240 @@ async function getStatus(config: ShipConfig): Promise<void> {
 
 // ── Commands ─────────────────────────────────────────────────────────
 
+async function handleSetup(args: string[]): Promise<void> {
+  let token = "";
+  let server = DEFAULT_MCP_SERVER;
+
+  for (let i = 0; i < args.length; i++) {
+    if ((args[i] === "--token" || args[i] === "-t") && args[i + 1]) {
+      token = args[i + 1];
+      i++;
+    } else if ((args[i] === "--server" || args[i] === "-s") && args[i + 1]) {
+      server = args[i + 1];
+      i++;
+    }
+  }
+
+  if (!token) {
+    console.error("❌ Usage: pnpm ship:setup --token YOUR_SERVER_TOKEN");
+    console.error("");
+    console.error("   The server token is the MCP bearer token from your deployment server.");
+    console.error("   This is a one-time setup per machine — the token is saved globally.");
+    console.error("");
+    console.error("   Options:");
+    console.error("     --token, -t   MCP server bearer token (required)");
+    console.error(`     --server, -s  MCP server URL (default: ${DEFAULT_MCP_SERVER})`);
+    console.error("");
+    console.error("   You can also set the MATRX_SHIP_SERVER_TOKEN environment variable instead.");
+    process.exit(1);
+  }
+
+  server = server.replace(/\/+$/, "");
+
+  // Verify connection
+  console.log(`🔍 Verifying connection to ${server}...`);
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000);
+    const response = await fetch(`${server}/health`, { signal: controller.signal });
+    clearTimeout(timeout);
+    const data = await response.json();
+    if (data.status !== "ok") throw new Error("Health check failed");
+    console.log(`✅ Connected to server manager`);
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    console.error(`❌ Cannot reach ${server}/health`);
+    if (msg.includes("abort")) {
+      console.error("   Connection timed out.");
+    } else {
+      console.error(`   Error: ${msg}`);
+    }
+    console.error("   Make sure the MCP server URL is correct and the server is running.");
+    process.exit(1);
+  }
+
+  // Save
+  saveServerConfig({ server, token });
+  console.log(`💾 Server credentials saved to ${GLOBAL_CONFIG_FILE}`);
+  console.log("");
+  console.log("   You can now provision instances in any project:");
+  console.log('     pnpm ship:init my-project "My Project Name"');
+  console.log("");
+}
+
 async function handleInit(args: string[]): Promise<void> {
+  // Detect legacy mode: init --url URL --key KEY
+  if (args.includes("--url") || args.includes("--key")) {
+    return handleLegacyInit(args);
+  }
+
+  // New auto-provision mode: init PROJECT_NAME "Display Name" [--token TOKEN] [--server URL]
+  let projectName = "";
+  let displayName = "";
+  let tokenOverride = "";
+  let serverOverride = "";
+
+  const positional: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    if ((args[i] === "--token" || args[i] === "-t") && args[i + 1]) {
+      tokenOverride = args[i + 1];
+      i++;
+    } else if ((args[i] === "--server" || args[i] === "-s") && args[i + 1]) {
+      serverOverride = args[i + 1];
+      i++;
+    } else if (!args[i].startsWith("--")) {
+      positional.push(args[i]);
+    }
+  }
+
+  projectName = positional[0] || "";
+  displayName = positional[1] || "";
+
+  // If no project name given, derive from current directory
+  if (!projectName) {
+    projectName = path.basename(process.cwd()).toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/^-+|-+$/g, "").replace(/-{2,}/g, "-");
+    if (!projectName) {
+      console.error("❌ Could not determine project name from directory.");
+      console.error('   Usage: pnpm ship:init my-project "My Project Name"');
+      process.exit(1);
+    }
+    console.log(`📁 Using project name from directory: ${projectName}`);
+  }
+
+  if (!displayName) {
+    // Convert kebab-case to Title Case
+    displayName = projectName.split("-").map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+  }
+
+  // Validate project name
+  if (!/^[a-z0-9][a-z0-9-]*[a-z0-9]$/.test(projectName) && !/^[a-z0-9]$/.test(projectName)) {
+    console.error(`❌ Invalid project name: "${projectName}"`);
+    console.error("   Must be lowercase letters, numbers, and hyphens only.");
+    console.error("   Examples: real-singles, matrx-platform, clawdbot");
+    process.exit(1);
+  }
+
+  // Load server config
+  let serverConfig: ServerConfig | null = null;
+
+  if (tokenOverride) {
+    serverConfig = {
+      server: serverOverride || DEFAULT_MCP_SERVER,
+      token: tokenOverride,
+    };
+  } else {
+    serverConfig = loadServerConfig();
+  }
+
+  if (!serverConfig) {
+    console.error("❌ No server token found.");
+    console.error("");
+    console.error("   You need to configure your server credentials first (one-time per machine):");
+    console.error("     pnpm ship:setup --token YOUR_MCP_SERVER_TOKEN");
+    console.error("");
+    console.error("   Or pass the token directly:");
+    console.error(`     pnpm ship:init ${projectName} "${displayName}" --token YOUR_TOKEN`);
+    console.error("");
+    console.error("   Or set the environment variable:");
+    console.error("     export MATRX_SHIP_SERVER_TOKEN=your_token_here");
+    process.exit(1);
+  }
+
+  console.log("");
+  console.log("🚀 Provisioning matrx-ship instance...");
+  console.log(`   Project:  ${projectName}`);
+  console.log(`   Display:  ${displayName}`);
+  console.log(`   Server:   ${serverConfig.server}`);
+  console.log("");
+
+  // Call MCP app_create
+  let result: Record<string, unknown>;
+  try {
+    result = await callMcpTool(serverConfig, "app_create", {
+      name: projectName,
+      display_name: displayName,
+    });
+  } catch (error) {
+    console.error("❌ Failed to provision instance");
+    console.error("   ", error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  }
+
+  if (result.error) {
+    console.error(`❌ ${result.error}`);
+    process.exit(1);
+  }
+
+  if (!result.success) {
+    console.error("❌ Instance creation failed");
+    console.error("   ", JSON.stringify(result, null, 2));
+    process.exit(1);
+  }
+
+  const instanceUrl = result.url as string;
+  const apiKey = result.api_key as string;
+
+  // Write .matrx-ship.json
+  const configPath = path.join(process.cwd(), ".matrx-ship.json");
+  const config: ShipConfig = { url: instanceUrl, apiKey };
+  writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n");
+
+  // Add to .gitignore if needed
+  const gitignorePath = path.join(process.cwd(), ".gitignore");
+  if (existsSync(gitignorePath)) {
+    const gitignore = readFileSync(gitignorePath, "utf-8");
+    if (!gitignore.includes(".matrx-ship.json")) {
+      writeFileSync(
+        gitignorePath,
+        gitignore.trimEnd() + "\n\n# Matrx Ship config (contains API key)\n.matrx-ship.json\n",
+      );
+      console.log("📄 Added .matrx-ship.json to .gitignore");
+    }
+  }
+
+  // Wait for the instance to boot
+  console.log("⏳ Waiting for instance to boot (migrations + seeding)...");
+  let healthy = false;
+  for (let attempt = 0; attempt < 12; attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 5000));
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 5000);
+      const response = await fetch(`${instanceUrl}/api/health`, { signal: controller.signal });
+      clearTimeout(timeout);
+      const data = await response.json();
+      if (data.status === "ok") {
+        healthy = true;
+        break;
+      }
+    } catch {
+      // Still booting
+      process.stdout.write(".");
+    }
+  }
+
+  if (!healthy) {
+    console.log("");
+    console.log("⚠️  Instance may still be starting up. Check manually:");
+    console.log(`   curl ${instanceUrl}/api/health`);
+  }
+
+  console.log("");
+  console.log("╔══════════════════════════════════════════════════════════════╗");
+  console.log("║   ✅ Instance provisioned and configured!                    ║");
+  console.log("╚══════════════════════════════════════════════════════════════╝");
+  console.log("");
+  console.log(`   🌐 URL:       ${instanceUrl}`);
+  console.log(`   🔧 Admin:     ${instanceUrl}/admin`);
+  console.log(`   🔑 API Key:   ${apiKey}`);
+  console.log(`   📄 Config:    ${configPath}`);
+  console.log("");
+  console.log("   You're ready to ship:");
+  console.log('     pnpm ship "your first commit message"');
+  console.log("");
+}
+
+async function handleLegacyInit(args: string[]): Promise<void> {
   let url = "";
   let key = "";
 
@@ -319,14 +652,10 @@ async function handleInit(args: string[]): Promise<void> {
   }
 
   if (!url || !key) {
-    console.error("❌ Usage: matrx-ship init --url URL --key API_KEY");
-    console.error("");
-    console.error("   Example:");
-    console.error("     npx tsx scripts/matrx/ship.ts init --url https://ship-myproject.example.com --key sk_ship_abc123");
+    console.error("❌ Usage: pnpm ship:init --url URL --key API_KEY");
     process.exit(1);
   }
 
-  // Strip trailing slash
   url = url.replace(/\/+$/, "");
 
   // Verify connection
@@ -334,16 +663,10 @@ async function handleInit(args: string[]): Promise<void> {
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 10000);
-
-    const response = await fetch(`${url}/api/health`, {
-      signal: controller.signal,
-    });
+    const response = await fetch(`${url}/api/health`, { signal: controller.signal });
     clearTimeout(timeout);
-
     const data = await response.json();
-    if (data.status !== "ok") {
-      throw new Error("Health check returned non-ok status");
-    }
+    if (data.status !== "ok") throw new Error("Health check returned non-ok status");
     console.log(`✅ Connected to ${data.service} (project: ${data.project})`);
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
@@ -355,9 +678,6 @@ async function handleInit(args: string[]): Promise<void> {
     } else {
       console.error(`   Error: ${msg}`);
     }
-    console.error("");
-    console.error("   Make sure your matrx-ship instance is deployed and accessible.");
-    console.error("   Deploy guide: https://github.com/armanisadeghi/matrx-ship/blob/main/DEPLOY.md");
     process.exit(1);
   }
 
@@ -392,7 +712,6 @@ async function handleShip(args: string[]): Promise<void> {
     process.exit(0);
   }
 
-  // Load and validate config (exits with clear message if misconfigured)
   const config = loadConfig();
   const bumpType = isMajor ? "major" : isMinor ? "minor" : "patch";
 
@@ -414,26 +733,17 @@ async function handleShip(args: string[]): Promise<void> {
     });
 
     if (!result.ok) {
-      throw new Error(
-        (result.data.error as string) || "Failed to create version",
-      );
+      throw new Error((result.data.error as string) || "Failed to create version");
     }
 
     if (result.data.duplicate) {
-      console.log(
-        `⚠️  Version already exists for commit ${gitCommit}. Continuing...`,
-      );
+      console.log(`⚠️  Version already exists for commit ${gitCommit}. Continuing...`);
     } else {
-      console.log(
-        `✅ Version v${result.data.version} (build #${result.data.buildNumber}) created`,
-      );
+      console.log(`✅ Version v${result.data.version} (build #${result.data.buildNumber}) created`);
     }
   } catch (error) {
     console.error("\n❌ Failed to create version");
-    console.error(
-      "   ",
-      error instanceof Error ? error.message : String(error),
-    );
+    console.error("   ", error instanceof Error ? error.message : String(error));
     process.exit(1);
   }
 
@@ -466,9 +776,7 @@ async function handleShip(args: string[]): Promise<void> {
     console.log("✅ Pushed to remote");
   } catch {
     console.error("\n❌ Failed to push to remote");
-    console.error(
-      "   Your commit was created locally but not pushed.",
-    );
+    console.error("   Your commit was created locally but not pushed.");
     console.error("   You can manually push with: git push");
     process.exit(1);
   }
@@ -484,7 +792,9 @@ async function main() {
   const args = process.argv.slice(2);
   const command = args[0];
 
-  if (command === "init") {
+  if (command === "setup") {
+    await handleSetup(args.slice(1));
+  } else if (command === "init") {
     await handleInit(args.slice(1));
   } else if (command === "status") {
     const config = loadConfig();
@@ -498,18 +808,24 @@ Usage:
   pnpm ship:minor "commit message"       Minor version bump + deploy
   pnpm ship:major "commit message"       Major version bump + deploy
 
-Commands:
-  init --url URL --key KEY               Configure for this project
-  status                                 Show current version from server
-  help                                   Show this help
+Setup Commands:
+  pnpm ship:setup --token TOKEN          Save server credentials (one-time per machine)
+  pnpm ship:init PROJECT "Display Name"  Auto-provision an instance on the server
+  pnpm ship:init --url URL --key KEY     Manual config (provide your own URL + key)
 
-Environment Variables (override .matrx-ship.json):
-  MATRX_SHIP_URL       Ship instance URL
-  MATRX_SHIP_API_KEY   API key
+Info Commands:
+  pnpm ship status                       Show current version from server
+  pnpm ship help                         Show this help
 
-Setup:
-  1. Deploy a matrx-ship instance (see DEPLOY.md)
-  2. Run: npx tsx scripts/matrx/ship.ts init --url URL --key KEY
+Environment Variables:
+  MATRX_SHIP_SERVER_TOKEN   Server token for provisioning (or use ship:setup)
+  MATRX_SHIP_SERVER         MCP server URL (default: ${DEFAULT_MCP_SERVER})
+  MATRX_SHIP_URL            Instance URL (overrides .matrx-ship.json)
+  MATRX_SHIP_API_KEY        Instance API key (overrides .matrx-ship.json)
+
+Quick Start:
+  1. One-time: pnpm ship:setup --token YOUR_SERVER_TOKEN
+  2. Per project: pnpm ship:init my-project "My Project"
   3. Ship: pnpm ship "your commit message"
 `);
   } else {
