@@ -18,6 +18,7 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
+BOLD='\033[1m'
 NC='\033[0m'
 
 echo -e "${BLUE}╔══════════════════════════════════════╗${NC}"
@@ -38,7 +39,8 @@ else
   exit 1
 fi
 
-# Create config template if it doesn't exist
+# Handle .matrx-ship.json
+NEEDS_CONFIG=false
 if [ ! -f ".matrx-ship.json" ]; then
   cat > ".matrx-ship.json" << 'EOF'
 {
@@ -46,9 +48,16 @@ if [ ! -f ".matrx-ship.json" ]; then
   "apiKey": "sk_ship_YOUR_API_KEY_HERE"
 }
 EOF
-  echo -e "${GREEN}✓${NC} Created .matrx-ship.json (edit with your ship instance details)"
+  NEEDS_CONFIG=true
+  echo -e "${GREEN}✓${NC} Created .matrx-ship.json template"
 else
-  echo -e "${YELLOW}→${NC} .matrx-ship.json already exists, skipping"
+  # Check if existing file has placeholder values
+  if grep -q "yourdomain.com\|YOUR_API_KEY_HERE\|YOUR" ".matrx-ship.json" 2>/dev/null; then
+    NEEDS_CONFIG=true
+    echo -e "${YELLOW}→${NC} .matrx-ship.json exists but has placeholder values"
+  else
+    echo -e "${GREEN}✓${NC} .matrx-ship.json already configured"
+  fi
 fi
 
 # Add to .gitignore if not already there
@@ -63,9 +72,7 @@ fi
 
 # Try to add scripts to package.json
 if [ -f "package.json" ]; then
-  # Check if tsx is available
   if command -v npx &> /dev/null; then
-    # Check if jq is available for safe JSON manipulation
     if command -v jq &> /dev/null; then
       UPDATED=$(jq '.scripts.ship = "tsx scripts/matrx/ship.ts" | .scripts["ship:minor"] = "tsx scripts/matrx/ship.ts --minor" | .scripts["ship:major"] = "tsx scripts/matrx/ship.ts --major"' package.json)
       echo "$UPDATED" > package.json
@@ -82,10 +89,24 @@ if [ -f "package.json" ]; then
 fi
 
 echo ""
-echo -e "${GREEN}Installation complete!${NC}"
+echo -e "${GREEN}✓ Installation complete!${NC}"
 echo ""
-echo "Next steps:"
-echo "  1. Edit .matrx-ship.json with your ship instance URL and API key"
-echo "  2. Make sure tsx is installed: pnpm add -D tsx"
-echo '  3. Ship! pnpm ship "your commit message"'
-echo ""
+
+if [ "$NEEDS_CONFIG" = true ]; then
+  echo -e "${BOLD}${YELLOW}⚠  IMPORTANT: You need to configure your ship server before using pnpm ship${NC}"
+  echo ""
+  echo "   Your .matrx-ship.json has placeholder values. Before shipping, you need:"
+  echo ""
+  echo "   1. A running matrx-ship server instance"
+  echo "      (Deploy guide: https://github.com/armanisadeghi/matrx-ship/blob/main/DEPLOY.md)"
+  echo ""
+  echo "   2. Then configure this project:"
+  echo "      npx tsx scripts/matrx/ship.ts init --url https://YOUR-REAL-URL --key YOUR-REAL-KEY"
+  echo ""
+  echo "   Or manually edit .matrx-ship.json with your instance URL and API key."
+  echo ""
+else
+  echo "   Ready to go! Run:"
+  echo '     pnpm ship "your commit message"'
+  echo ""
+fi

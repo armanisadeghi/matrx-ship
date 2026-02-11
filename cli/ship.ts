@@ -40,32 +40,94 @@ function findConfigFile(): string | null {
   }
 }
 
+/**
+ * Check if a URL looks like an unconfigured placeholder.
+ */
+function isPlaceholderUrl(url: string): boolean {
+  return (
+    url.includes("yourdomain.com") ||
+    url.includes("YOUR") ||
+    url.includes("example.com") ||
+    url.includes("localhost") ||
+    url === "" ||
+    url === "https://" ||
+    url === "http://"
+  );
+}
+
+/**
+ * Check if an API key looks like a placeholder.
+ */
+function isPlaceholderKey(key: string): boolean {
+  return (
+    key === "" ||
+    key.includes("YOUR") ||
+    key.includes("your") ||
+    key.includes("xxx") ||
+    key === "sk_ship_YOUR_API_KEY_HERE"
+  );
+}
+
 function loadConfig(): ShipConfig {
   // Check environment variables first
   const envUrl = process.env.MATRX_SHIP_URL;
   const envKey = process.env.MATRX_SHIP_API_KEY;
 
   if (envUrl && envKey) {
-    return { url: envUrl, apiKey: envKey };
+    return { url: envUrl.replace(/\/+$/, ""), apiKey: envKey };
   }
 
   // Check config file
   const configPath = findConfigFile();
-  if (configPath) {
-    try {
-      const raw = readFileSync(configPath, "utf-8");
-      const config = JSON.parse(raw);
-      if (config.url && config.apiKey) {
-        return config;
-      }
-    } catch {
-      // Fall through to error
-    }
+  if (!configPath) {
+    console.error("❌ No .matrx-ship.json found in this project.");
+    console.error("");
+    console.error("   To set up, run:");
+    console.error("     npx tsx scripts/matrx/ship.ts init --url URL --key API_KEY");
+    console.error("");
+    console.error("   Or set environment variables:");
+    console.error("     export MATRX_SHIP_URL=https://your-ship-instance.com");
+    console.error("     export MATRX_SHIP_API_KEY=sk_ship_xxxxx");
+    process.exit(1);
   }
 
-  console.error("❌ Not configured. Run: matrx-ship init --url URL --key KEY");
-  console.error("   Or set MATRX_SHIP_URL and MATRX_SHIP_API_KEY env vars.");
-  process.exit(1);
+  let config: ShipConfig;
+  try {
+    const raw = readFileSync(configPath, "utf-8");
+    config = JSON.parse(raw);
+  } catch {
+    console.error(`❌ Failed to parse ${configPath}`);
+    console.error("   Make sure it contains valid JSON with 'url' and 'apiKey'.");
+    process.exit(1);
+  }
+
+  if (!config.url || !config.apiKey) {
+    console.error(`❌ Missing fields in ${configPath}`);
+    console.error("   Required: { \"url\": \"...\", \"apiKey\": \"...\" }");
+    process.exit(1);
+  }
+
+  // Check for placeholder values
+  if (isPlaceholderUrl(config.url)) {
+    console.error("❌ Your .matrx-ship.json still has a placeholder URL.");
+    console.error(`   Current:  ${config.url}`);
+    console.error("");
+    console.error("   You need a running matrx-ship server instance first.");
+    console.error("   Once you have one, update .matrx-ship.json with the real URL, or run:");
+    console.error("     npx tsx scripts/matrx/ship.ts init --url https://your-real-url.com --key YOUR_KEY");
+    console.error("");
+    console.error("   No ship instance yet? See: https://github.com/armanisadeghi/matrx-ship/blob/main/DEPLOY.md");
+    process.exit(1);
+  }
+
+  if (isPlaceholderKey(config.apiKey)) {
+    console.error("❌ Your .matrx-ship.json still has a placeholder API key.");
+    console.error("   Update it with the real key from your matrx-ship instance.");
+    console.error(`   Config file: ${configPath}`);
+    process.exit(1);
+  }
+
+  return { ...config, url: config.url.replace(/\/+$/, "") };
 }
 
 // ── Git Helpers ──────────────────────────────────────────────────────
@@ -138,6 +200,23 @@ function isGitRepo(): boolean {
 
 // ── API Client ───────────────────────────────────────────────────────
 
+async function checkServerReachable(url: string): Promise<boolean> {
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
+
+    const response = await fetch(`${url}/api/health`, {
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+
+    const data = await response.json();
+    return data.status === "ok";
+  } catch {
+    return false;
+  }
+}
+
 async function shipVersion(
   config: ShipConfig,
   payload: Record<string, unknown>,
@@ -145,27 +224,64 @@ async function shipVersion(
   ok: boolean;
   data: Record<string, unknown>;
 }> {
-  const response = await fetch(`${config.url}/api/ship`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${config.apiKey}`,
-    },
-    body: JSON.stringify(payload),
-  });
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15000);
 
-  const data = await response.json();
-  return { ok: response.ok, data };
+    const response = await fetch(`${config.url}/api/ship`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${config.apiKey}`,
+      },
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+
+    const data = await response.json();
+    return { ok: response.ok, data };
+  } catch (error) {
+    // Translate network errors into clear messages
+    const msg =
+      error instanceof Error ? error.message : String(error);
+
+    if (msg.includes("abort") || msg.includes("timeout")) {
+      throw new Error(
+        `Connection to ${config.url} timed out after 15 seconds.\n` +
+          "   Is the matrx-ship server running?",
+      );
+    }
+    if (msg.includes("fetch failed") || msg.includes("ECONNREFUSED") || msg.includes("ENOTFOUND")) {
+      throw new Error(
+        `Cannot reach ${config.url}\n` +
+          "   Possible causes:\n" +
+          "     - The matrx-ship server is not running\n" +
+          "     - The URL in .matrx-ship.json is wrong\n" +
+          "     - DNS hasn't propagated yet\n" +
+          "     - Network/firewall is blocking the connection\n" +
+          `\n   To verify, try: curl ${config.url}/api/health`,
+      );
+    }
+    throw new Error(`Network error: ${msg}`);
+  }
 }
 
 async function getStatus(config: ShipConfig): Promise<void> {
   try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000);
+
     const response = await fetch(`${config.url}/api/version`, {
       headers: { Authorization: `Bearer ${config.apiKey}` },
+      signal: controller.signal,
     });
+    clearTimeout(timeout);
+
     const data = await response.json();
 
     console.log("\n📦 Current Version Status");
+    console.log(`   Server:  ${config.url}`);
     console.log(`   Version: v${data.version}`);
     console.log(`   Build:   #${data.buildNumber}`);
     console.log(`   Status:  ${data.deploymentStatus || "unknown"}`);
@@ -174,7 +290,14 @@ async function getStatus(config: ShipConfig): Promise<void> {
     console.log(`   Deployed: ${data.deployedAt}`);
     console.log();
   } catch (error) {
-    console.error("❌ Failed to fetch status:", error);
+    const msg = error instanceof Error ? error.message : String(error);
+    if (msg.includes("fetch failed") || msg.includes("ECONNREFUSED") || msg.includes("ENOTFOUND") || msg.includes("abort")) {
+      console.error(`❌ Cannot reach ${config.url}`);
+      console.error("   Is the matrx-ship server running?");
+      console.error(`   Try: curl ${config.url}/api/health`);
+    } else {
+      console.error("❌ Failed to fetch status:", msg);
+    }
     process.exit(1);
   }
 }
@@ -197,20 +320,44 @@ async function handleInit(args: string[]): Promise<void> {
 
   if (!url || !key) {
     console.error("❌ Usage: matrx-ship init --url URL --key API_KEY");
+    console.error("");
+    console.error("   Example:");
+    console.error("     npx tsx scripts/matrx/ship.ts init --url https://ship-myproject.example.com --key sk_ship_abc123");
     process.exit(1);
   }
 
+  // Strip trailing slash
+  url = url.replace(/\/+$/, "");
+
   // Verify connection
+  console.log(`🔍 Checking connection to ${url}...`);
   try {
-    const response = await fetch(`${url}/api/health`);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000);
+
+    const response = await fetch(`${url}/api/health`, {
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+
     const data = await response.json();
     if (data.status !== "ok") {
-      throw new Error("Health check failed");
+      throw new Error("Health check returned non-ok status");
     }
-    console.log(`✅ Connected to ${data.service} (${data.project})`);
+    console.log(`✅ Connected to ${data.service} (project: ${data.project})`);
   } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
     console.error(`❌ Cannot reach ${url}/api/health`);
-    console.error("   Make sure the matrx-ship instance is running.");
+    if (msg.includes("fetch failed") || msg.includes("ECONNREFUSED") || msg.includes("ENOTFOUND")) {
+      console.error("   The server doesn't appear to be running at that URL.");
+    } else if (msg.includes("abort")) {
+      console.error("   Connection timed out after 10 seconds.");
+    } else {
+      console.error(`   Error: ${msg}`);
+    }
+    console.error("");
+    console.error("   Make sure your matrx-ship instance is deployed and accessible.");
+    console.error("   Deploy guide: https://github.com/armanisadeghi/matrx-ship/blob/main/DEPLOY.md");
     process.exit(1);
   }
 
@@ -218,8 +365,7 @@ async function handleInit(args: string[]): Promise<void> {
   const configPath = path.join(process.cwd(), ".matrx-ship.json");
   writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n");
   console.log(`📄 Config saved to ${configPath}`);
-  console.log("\n   You can now run: matrx-ship \"your commit message\"");
-  console.log("   Or add to package.json: \"ship\": \"tsx cli/ship.ts\"");
+  console.log('\n   You can now run: pnpm ship "your commit message"');
   console.log();
 }
 
@@ -230,9 +376,9 @@ async function handleShip(args: string[]): Promise<void> {
 
   if (!commitMessage) {
     console.error("❌ Error: Commit message is required");
-    console.error('\n   Usage: matrx-ship "Your commit message"');
-    console.error('          matrx-ship --minor "Your commit message"');
-    console.error('          matrx-ship --major "Your commit message"');
+    console.error('\n   Usage: pnpm ship "Your commit message"');
+    console.error('          pnpm ship:minor "Your commit message"');
+    console.error('          pnpm ship:major "Your commit message"');
     process.exit(1);
   }
 
@@ -246,6 +392,7 @@ async function handleShip(args: string[]): Promise<void> {
     process.exit(0);
   }
 
+  // Load and validate config (exits with clear message if misconfigured)
   const config = loadConfig();
   const bumpType = isMajor ? "major" : isMinor ? "minor" : "patch";
 
@@ -347,16 +494,23 @@ async function main() {
 Matrx Ship CLI - Universal Deployment Tool
 
 Usage:
-  matrx-ship "commit message"             Patch version bump + deploy
-  matrx-ship --minor "commit message"     Minor version bump + deploy
-  matrx-ship --major "commit message"     Major version bump + deploy
-  matrx-ship init --url URL --key KEY     Configure for this project
-  matrx-ship status                       Show current version
-  matrx-ship help                         Show this help
+  pnpm ship "commit message"             Patch version bump + deploy
+  pnpm ship:minor "commit message"       Minor version bump + deploy
+  pnpm ship:major "commit message"       Major version bump + deploy
 
-Environment Variables:
-  MATRX_SHIP_URL       Ship instance URL (overrides .matrx-ship.json)
-  MATRX_SHIP_API_KEY   API key (overrides .matrx-ship.json)
+Commands:
+  init --url URL --key KEY               Configure for this project
+  status                                 Show current version from server
+  help                                   Show this help
+
+Environment Variables (override .matrx-ship.json):
+  MATRX_SHIP_URL       Ship instance URL
+  MATRX_SHIP_API_KEY   API key
+
+Setup:
+  1. Deploy a matrx-ship instance (see DEPLOY.md)
+  2. Run: npx tsx scripts/matrx/ship.ts init --url URL --key KEY
+  3. Ship: pnpm ship "your commit message"
 `);
   } else {
     await handleShip(args);
