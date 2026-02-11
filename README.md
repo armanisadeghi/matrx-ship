@@ -2,41 +2,73 @@
 
 Universal deployment and version tracking system. Dockerized per-project instance with full admin portal, CLI tools, and embeddable client components.
 
+Works with **any project** — Node (pnpm), Python, bash, Chrome extensions, anything with a git repo.
+
 ## Quick Start
 
-### 1. Deploy an Instance
+### 1. Install CLI in Your Project
 
 ```bash
-# Clone and configure
-git clone https://github.com/armanisadeghi/matrx-ship.git
-cd matrx-ship
-cp .env.example .env
-
-# Start with Docker Compose
-docker compose up -d
-```
-
-The instance will be available at `http://localhost:3000`. On first boot it:
-- Runs database migrations automatically
-- Seeds an initial v1.0.0 version
-- Generates an API key (printed to logs if `MATRX_SHIP_API_KEY` is not set)
-
-### 2. Install CLI in Your Project
-
-```bash
-# One-line installer
+# From your project root
 curl -sL https://raw.githubusercontent.com/armanisadeghi/matrx-ship/main/cli/install.sh | bash
-
-# Configure
-matrx-ship init --url https://ship-myproject.yourdomain.com --key sk_ship_xxxxx
 ```
 
-### 3. Ship!
+The installer auto-detects your project type:
+- **Node projects** (has `package.json`): adds `pnpm ship:*` scripts
+- **Everything else**: downloads a bash wrapper (`scripts/matrx/ship.sh`)
+
+### 2. Save Your Server Token (one-time per machine)
+
+Get your token from the [Server Manager](https://mcp.dev.codematrx.com/admin/) (Tokens tab).
 
 ```bash
+# Node projects
+pnpm ship:setup --token YOUR_SERVER_TOKEN
+
+# Non-Node projects
+bash scripts/matrx/ship.sh setup --token YOUR_SERVER_TOKEN
+```
+
+This saves the token to `~/.config/matrx-ship/server.json`. You only do this once — it works across all projects on this machine.
+
+### 3. Provision an Instance
+
+```bash
+# Node projects
+pnpm ship:init my-project "My Project Name"
+
+# Non-Node projects
+bash scripts/matrx/ship.sh init my-project "My Project Name"
+```
+
+This calls the MCP server, provisions a new Docker instance (Next.js + PostgreSQL), and writes `.matrx-ship.json` into your project with the URL and API key. The instance is live and ready immediately.
+
+### 4. Ship!
+
+```bash
+# Node projects
 pnpm ship "your commit message"           # Patch bump
 pnpm ship:minor "your commit message"     # Minor bump
 pnpm ship:major "your commit message"     # Major bump
+
+# Non-Node projects
+bash scripts/matrx/ship.sh "your commit message"
+bash scripts/matrx/ship.sh --minor "your commit message"
+bash scripts/matrx/ship.sh --major "your commit message"
+```
+
+### 5. Import Git History (optional)
+
+Backfill your existing git history into the ship dashboard:
+
+```bash
+# Node projects
+pnpm ship:history --dry              # Preview first
+pnpm ship:history                    # Import all commits
+
+# Non-Node projects
+bash scripts/matrx/ship.sh history --dry
+bash scripts/matrx/ship.sh history
 ```
 
 ## Architecture
@@ -71,6 +103,25 @@ Access at `/admin` with pages for:
 - **Versions** - Full version history table with pagination
 - **Statistics** - Deployment metrics by period (today, week, month)
 - **Deployments** - Deployment status timeline with Vercel links
+
+## CLI Reference
+
+All commands work with either `pnpm ship:*` (Node) or `bash scripts/matrx/ship.sh *` (non-Node).
+
+| Command | Description |
+|---------|-------------|
+| `setup --token TOKEN` | Save server credentials (one-time per machine) |
+| `init PROJECT "Name"` | Auto-provision an instance on the server |
+| `init --url URL --key KEY` | Manual config (bring your own instance) |
+| `"commit message"` | Patch bump + commit + push |
+| `--minor "message"` | Minor bump + commit + push |
+| `--major "message"` | Major bump + commit + push |
+| `history` | Import full git history |
+| `history --dry` | Preview what would be imported |
+| `history --clear` | Clear existing versions and reimport |
+| `status` | Show current version from server |
+| `update` | Update CLI to the latest version |
+| `help` | Show all options |
 
 ## Embeddable Components
 
@@ -115,6 +166,10 @@ import { UpdateBanner } from "@matrx/ship-client";
 - PostgreSQL 16 + Drizzle ORM
 - Tailwind CSS 4.1
 - Docker Compose
+
+## Self-Hosting
+
+See [DEPLOY.md](DEPLOY.md) for manual deployment of ship instances via Docker Compose.
 
 ## Development
 
