@@ -92,7 +92,7 @@ detect_project_type() {
     elif [[ -f "pyproject.toml" ]] || [[ -f "setup.py" ]] || [[ -f "requirements.txt" ]]; then
         echo "python"
     else
-        echo "node"
+        echo "other"
     fi
 }
 
@@ -968,6 +968,12 @@ if [[ "$SETUP_ENV" == true ]]; then
         echo -e "    ${CYAN}make env-pull${NC}        Safe merge from Doppler"
         echo -e "    ${CYAN}make env-push${NC}        Safe merge to Doppler"
         echo -e "    ${CYAN}make env-sync${NC}        Interactive conflict resolution"
+    else
+        echo -e "    ${CYAN}bash scripts/matrx/env-sync.sh status${NC}      Quick sync summary"
+        echo -e "    ${CYAN}bash scripts/matrx/env-sync.sh diff${NC}        Show differences"
+        echo -e "    ${CYAN}bash scripts/matrx/env-sync.sh pull${NC}        Safe merge from Doppler"
+        echo -e "    ${CYAN}bash scripts/matrx/env-sync.sh push${NC}        Safe merge to Doppler"
+        echo -e "    ${CYAN}bash scripts/matrx/env-sync.sh sync${NC}        Interactive conflict resolution"
     fi
     echo ""
 fi

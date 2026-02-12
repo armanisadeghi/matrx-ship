@@ -364,11 +364,14 @@ elif [[ "$HAS_LEGACY_SHIP_JSON" == true ]] || [[ "$HAS_LEGACY_TOOLS_CONF" == tru
             changed "Migrated config to .matrx.json"
             CONFIG_MIGRATED=true
 
+            # Remove legacy config files — their values are now in .matrx.json
             if [[ "$HAS_LEGACY_SHIP_JSON" == true ]]; then
-                info "Legacy .matrx-ship.json preserved (still works as fallback)"
+                rm -f ".matrx-ship.json"
+                changed "Removed .matrx-ship.json (migrated into .matrx.json)"
             fi
             if [[ "$HAS_LEGACY_TOOLS_CONF" == true ]]; then
-                info "Legacy .matrx-tools.conf preserved (still works as fallback)"
+                rm -f ".matrx-tools.conf"
+                changed "Removed .matrx-tools.conf (migrated into .matrx.json)"
             fi
         else
             skip "No config values to migrate"

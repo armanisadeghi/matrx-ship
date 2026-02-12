@@ -958,7 +958,7 @@ async function handleShip(args: string[]): Promise<void> {
       clearTimeout(timeout);
       
       if (response.ok) {
-        const data = await response.json();
+        const data = await response.json() as Record<string, unknown>;
         console.log(`✅ Deployment verified - server is healthy`);
         if (data.version) {
           console.log(`   Version: ${data.version} (build #${data.buildNumber || '?'})`);
