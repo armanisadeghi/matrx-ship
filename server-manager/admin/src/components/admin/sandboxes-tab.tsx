@@ -1,10 +1,12 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { RotateCw, Square } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { PageShell } from "@/components/admin/page-shell";
+import { Button } from "@matrx/admin-ui/ui/button";
+import { Card, CardContent } from "@matrx/admin-ui/ui/card";
+import { Badge } from "@matrx/admin-ui/ui/badge";
+import { Table, TableHeader, TableHead, TableBody, TableRow, TableCell } from "@matrx/admin-ui/ui/table";
+import { PageShell } from "@matrx/admin-ui/components/page-shell";
 import type { SandboxInfo } from "@/lib/types";
 
 interface SandboxesTabProps {
@@ -13,7 +15,9 @@ interface SandboxesTabProps {
   onSandboxAction: (name: string, action: string) => void;
 }
 
-export function SandboxesTab({ sandboxes, onOpenSandbox, onSandboxAction }: SandboxesTabProps) {
+export function SandboxesTab({ sandboxes, onSandboxAction }: SandboxesTabProps) {
+  const router = useRouter();
+
   return (
     <PageShell
       title="Sandbox Environments"
@@ -21,32 +25,34 @@ export function SandboxesTab({ sandboxes, onOpenSandbox, onSandboxAction }: Sand
     >
       <Card>
         <CardContent className="p-0">
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b">
-                  <th className="text-left p-3 text-muted-foreground font-medium">Name</th>
-                  <th className="text-left p-3 text-muted-foreground font-medium">Status</th>
-                  <th className="text-left p-3 text-muted-foreground font-medium hidden sm:table-cell">ID</th>
-                  <th className="text-left p-3 text-muted-foreground font-medium hidden md:table-cell">Image</th>
-                  <th className="text-right p-3 text-muted-foreground font-medium">Actions</th>
-                </tr>
-              </thead>
-              <tbody>
+          {sandboxes.length === 0 ? (
+            <div className="p-6 text-center text-muted-foreground text-sm">No sandboxes</div>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Name</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead className="hidden sm:table-cell">ID</TableHead>
+                  <TableHead className="hidden md:table-cell">Image</TableHead>
+                  <TableHead className="text-right">Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
                 {sandboxes.map((sbx) => (
-                  <tr
+                  <TableRow
                     key={sbx.name}
-                    className="border-b last:border-0 hover:bg-muted/50 cursor-pointer transition-colors"
-                    onClick={() => onOpenSandbox(sbx.name)}
+                    className="cursor-pointer"
+                    onClick={() => router.push(`/admin/sandboxes/${sbx.name}`)}
                   >
-                    <td className="p-3 font-medium">{sbx.name}</td>
-                    <td className="p-3">
+                    <TableCell className="font-medium">{sbx.name}</TableCell>
+                    <TableCell>
                       <Badge variant={sbx.status === "running" ? "success" : "destructive"}>{sbx.status}</Badge>
-                    </td>
-                    <td className="p-3 font-mono text-xs text-muted-foreground hidden sm:table-cell">{sbx.sandbox_id}</td>
-                    <td className="p-3 font-mono text-xs text-muted-foreground hidden md:table-cell">{sbx.image}</td>
-                    <td className="p-3 text-right">
-                      <div className="flex gap-1 justify-end" onClick={(e) => e.stopPropagation()}>
+                    </TableCell>
+                    <TableCell className="font-mono text-xs text-muted-foreground hidden sm:table-cell">{sbx.sandbox_id}</TableCell>
+                    <TableCell className="font-mono text-xs text-muted-foreground hidden md:table-cell">{sbx.image}</TableCell>
+                    <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
+                      <div className="flex gap-1 justify-end">
                         <Button variant="ghost" size="sm" onClick={() => onSandboxAction(sbx.name, "restart")}>
                           <RotateCw className="size-3" />
                         </Button>
@@ -54,17 +60,12 @@ export function SandboxesTab({ sandboxes, onOpenSandbox, onSandboxAction }: Sand
                           <Square className="size-3" />
                         </Button>
                       </div>
-                    </td>
-                  </tr>
+                    </TableCell>
+                  </TableRow>
                 ))}
-                {sandboxes.length === 0 && (
-                  <tr>
-                    <td colSpan={5} className="p-6 text-center text-muted-foreground">No sandboxes</td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
+              </TableBody>
+            </Table>
+          )}
         </CardContent>
       </Card>
     </PageShell>

@@ -3,10 +3,9 @@ import { resolve } from "path";
 
 const nextConfig: NextConfig = {
   output: "standalone",
+  outputFileTracingRoot: resolve(__dirname, ".."),
   reactCompiler: true,
-  turbopack: {
-    root: resolve(__dirname),
-  },
+  transpilePackages: ["@matrx/admin-ui"],
 };
 
 export default nextConfig;

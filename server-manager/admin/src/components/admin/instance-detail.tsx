@@ -1,23 +1,13 @@
 "use client";
 
 import { useState } from "react";
-import {
-  ChevronLeft,
-  Rocket,
-  RotateCw,
-  Square,
-  Play,
-  Trash2,
-  Settings,
-  Database,
-  ExternalLink,
-  Loader2,
-} from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { Input } from "@/components/ui/input";
-import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { ChevronLeft, Rocket, RotateCw, Square, Play, Trash2, Settings, Database, ExternalLink, Loader2 } from "lucide-react";
+import { Button } from "@matrx/admin-ui/ui/button";
+import { Card, CardHeader, CardTitle, CardContent } from "@matrx/admin-ui/ui/card";
+import { Badge } from "@matrx/admin-ui/ui/badge";
+import { Input } from "@matrx/admin-ui/ui/input";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@matrx/admin-ui/ui/tabs";
+import { CodeBlock } from "@matrx/admin-ui/components/code-block";
 import type { InstanceInfo } from "@/lib/types";
 
 interface InstanceDetailProps {
@@ -39,20 +29,9 @@ interface InstanceDetailProps {
 }
 
 export function InstanceDetail({
-  instance,
-  instanceDetail,
-  instanceLogs,
-  instanceEnv,
-  instanceCompose,
-  instanceBackups,
-  deploying,
-  onBack,
-  onDeploy,
-  onAction,
-  onRemove,
-  onLoadLogs,
-  onSaveEnv,
-  onCreateBackup,
+  instance, instanceDetail, instanceLogs, instanceEnv, instanceCompose,
+  instanceBackups, deploying, onBack, onDeploy, onAction, onRemove, onLoadLogs,
+  onSaveEnv, onCreateBackup,
 }: InstanceDetailProps) {
   const [editingEnv, setEditingEnv] = useState(false);
   const [envDraft, setEnvDraft] = useState<Record<string, string>>({});
@@ -69,19 +48,14 @@ export function InstanceDetail({
 
   return (
     <div className="space-y-6">
-      {/* Breadcrumb */}
       <div className="flex items-center gap-2 text-sm">
-        <button
-          onClick={onBack}
-          className="text-primary hover:underline flex items-center gap-1"
-        >
+        <button onClick={onBack} className="text-primary hover:underline flex items-center gap-1">
           <ChevronLeft className="size-4" /> Instances
         </button>
         <span className="text-muted-foreground">/</span>
         <span>{instance.display_name}</span>
       </div>
 
-      {/* Instance header */}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h2 className="text-xl font-semibold">{instance.display_name}</h2>
@@ -98,7 +72,6 @@ export function InstanceDetail({
         </div>
       </div>
 
-      {/* Section tabs */}
       <Tabs defaultValue="overview">
         <TabsList variant="line" className="w-full justify-start overflow-x-auto">
           <TabsTrigger value="overview">Overview</TabsTrigger>
@@ -151,11 +124,7 @@ export function InstanceDetail({
                   <div key={k} className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 text-sm">
                     <span className="font-mono text-muted-foreground sm:w-52 shrink-0 truncate">{k}</span>
                     {editingEnv ? (
-                      <Input
-                        value={v}
-                        onChange={(e) => setEnvDraft({ ...envDraft, [k]: e.target.value })}
-                        className="font-mono text-sm"
-                      />
+                      <Input value={v} onChange={(e) => setEnvDraft({ ...envDraft, [k]: e.target.value })} className="font-mono text-sm" />
                     ) : (
                       <span className="font-mono truncate">{v}</span>
                     )}
@@ -179,9 +148,7 @@ export function InstanceDetail({
               </div>
             </CardHeader>
             <CardContent>
-              <pre className="bg-muted rounded-md p-4 text-xs font-mono max-h-[500px] overflow-auto whitespace-pre-wrap">
-                {instanceLogs || "Click a button to load logs..."}
-              </pre>
+              <CodeBlock code={instanceLogs || "Click a button to load logs..."} language="log" showLineNumbers={false} />
             </CardContent>
           </Card>
         </TabsContent>
@@ -215,16 +182,7 @@ export function InstanceDetail({
         </TabsContent>
 
         <TabsContent value="compose">
-          <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-base">docker-compose.yml</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <pre className="bg-muted rounded-md p-4 text-xs font-mono max-h-[600px] overflow-auto whitespace-pre-wrap">
-                {instanceCompose}
-              </pre>
-            </CardContent>
-          </Card>
+          <CodeBlock code={instanceCompose} language="yaml" showLineNumbers />
         </TabsContent>
 
         <TabsContent value="portal">
@@ -232,21 +190,13 @@ export function InstanceDetail({
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-base">Admin Portal</CardTitle>
-                <a
-                  href={`${instance.url}/admin`}
-                  target="_blank"
-                  rel="noopener"
-                  className="text-primary text-sm hover:underline flex items-center gap-1"
-                >
+                <a href={`${instance.url}/admin`} target="_blank" rel="noopener" className="text-primary text-sm hover:underline flex items-center gap-1">
                   <ExternalLink className="size-3" /> Open in New Tab
                 </a>
               </div>
             </CardHeader>
             <CardContent className="p-0">
-              <iframe
-                src={`${instance.url}/admin?token=${instance.api_key}`}
-                className="w-full h-[600px] border-0 rounded-b-xl"
-              />
+              <iframe src={`${instance.url}/admin?token=${instance.api_key}`} className="w-full h-[600px] border-0 rounded-b-xl" />
             </CardContent>
           </Card>
         </TabsContent>

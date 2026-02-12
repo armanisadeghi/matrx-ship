@@ -1,20 +1,16 @@
 "use client";
 
+import { useState } from "react";
 import {
-  Rocket,
-  Loader2,
-  Trash2,
-  RotateCcw,
-  ArrowDownToLine,
-  CheckCircle2,
-  AlertTriangle,
-  Clock,
+  Rocket, Loader2, Trash2, RotateCcw, ArrowDownToLine,
+  CheckCircle2, AlertTriangle, ChevronDown, ChevronRight,
 } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { BuildLogViewer } from "@/components/admin/build-log-viewer";
-import { PageShell } from "@/components/admin/page-shell";
+import { Button } from "@matrx/admin-ui/ui/button";
+import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@matrx/admin-ui/ui/card";
+import { Badge } from "@matrx/admin-ui/ui/badge";
+import { Table, TableHeader, TableHead, TableBody, TableRow, TableCell } from "@matrx/admin-ui/ui/table";
+import { BuildLogViewer } from "@matrx/admin-ui/components/build-log-viewer";
+import { PageShell } from "@matrx/admin-ui/components/page-shell";
 import type { BuildInfo, BuildRecord } from "@/lib/types";
 
 interface BuildsTabProps {
@@ -44,6 +40,8 @@ export function BuildsTab({
   onCleanup,
   onClearLogs,
 }: BuildsTabProps) {
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+
   return (
     <PageShell
       title="Build History"
@@ -102,76 +100,111 @@ export function BuildsTab({
         onClear={onClearLogs}
       />
 
-      {/* Available images / rollback */}
-      {buildInfo && buildInfo.available_tags.length > 0 && (
-        <Card>
-          <CardHeader className="pb-3">
-            <CardTitle className="text-base flex items-center gap-2">
-              <RotateCcw className="size-4" /> Available Images
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-2">
-              {buildInfo.available_tags.map((t) => (
-                <div key={t.tag} className="flex flex-col sm:flex-row sm:items-center sm:justify-between py-2 px-3 rounded bg-muted/50 gap-2">
-                  <div className="flex items-center gap-3 flex-wrap">
-                    <span className="font-mono text-sm font-medium">{t.tag}</span>
-                    <span className="text-xs text-muted-foreground font-mono">{t.id}</span>
-                    <span className="text-xs text-muted-foreground">{t.age}</span>
-                    {t.tag === "latest" && <Badge className="text-[10px]">current</Badge>}
-                  </div>
-                  {t.tag !== "latest" && t.tag !== "<none>" && (
-                    <Button variant="outline" size="sm" onClick={() => onRollback(t.tag)} disabled={rollingBack === t.tag}>
-                      {rollingBack === t.tag ? <Loader2 className="size-3 animate-spin" /> : <ArrowDownToLine className="size-3" />} Rollback
-                    </Button>
-                  )}
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Build history */}
+      {/* Build history table */}
       <Card>
         <CardHeader className="pb-3">
           <CardTitle className="text-base">{buildHistory.length} build(s)</CardTitle>
+          <CardDescription>Click a row to see build details</CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="p-0">
           {buildHistory.length === 0 ? (
-            <p className="text-muted-foreground text-sm">No builds recorded yet.</p>
+            <div className="p-6 text-muted-foreground text-sm">No builds recorded yet.</div>
           ) : (
-            <div className="space-y-3">
-              {buildHistory.map((b) => (
-                <div key={b.id} className="flex flex-col sm:flex-row sm:items-start sm:justify-between p-3 rounded-lg border bg-card gap-3">
-                  <div className="space-y-1">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      {b.success ? <CheckCircle2 className="size-4 text-success" /> : <AlertTriangle className="size-4 text-destructive" />}
-                      <span className="font-mono text-sm font-medium">{b.tag}</span>
-                      <Badge variant={b.success ? "success" : "destructive"} className="text-[10px]">
-                        {b.success ? "success" : "failed"}
-                      </Badge>
-                    </div>
-                    <div className="text-xs text-muted-foreground space-x-3 flex flex-wrap gap-y-1">
-                      <span><Clock className="inline size-3 mr-1" />{new Date(b.timestamp).toLocaleString()}</span>
-                      <span>{Math.round(b.duration_ms / 1000)}s</span>
-                      <span className="font-mono">{b.git_commit}</span>
-                      <span>by {b.triggered_by}</span>
-                    </div>
-                    {b.git_message && <div className="text-xs text-muted-foreground">{b.git_message}</div>}
-                    {b.error && <div className="text-xs text-destructive">{b.error}</div>}
-                  </div>
-                  {b.success && b.tag && !b.tag.startsWith("rollback") && (
-                    <Button variant="outline" size="sm" onClick={() => onRollback(b.tag)} disabled={rollingBack === b.tag} className="shrink-0">
-                      <ArrowDownToLine className="size-3" /> Rollback
-                    </Button>
-                  )}
-                </div>
-              ))}
-            </div>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-8"></TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Tag</TableHead>
+                  <TableHead>Date</TableHead>
+                  <TableHead>Duration</TableHead>
+                  <TableHead>Commit</TableHead>
+                  <TableHead className="text-right">Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {buildHistory.map((b) => {
+                  const isExpanded = expandedId === b.id;
+                  return (
+                    <TableRow key={b.id}>
+                      <TableCell className="w-8 pr-0">
+                        <button
+                          onClick={() => setExpandedId(isExpanded ? null : b.id)}
+                          className="p-1 hover:bg-muted rounded"
+                        >
+                          {isExpanded ? <ChevronDown className="size-3.5 text-muted-foreground" /> : <ChevronRight className="size-3.5 text-muted-foreground" />}
+                        </button>
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex items-center gap-2">
+                          {b.success ? <CheckCircle2 className="size-4 text-success" /> : <AlertTriangle className="size-4 text-destructive" />}
+                          <Badge variant={b.success ? "success" : "destructive"} className="text-[10px]">{b.success ? "success" : "failed"}</Badge>
+                        </div>
+                      </TableCell>
+                      <TableCell><span className="font-mono text-sm font-medium">{b.tag}</span></TableCell>
+                      <TableCell className="text-muted-foreground text-sm">{new Date(b.timestamp).toLocaleDateString()}</TableCell>
+                      <TableCell className="text-muted-foreground text-sm">{Math.round(b.duration_ms / 1000)}s</TableCell>
+                      <TableCell><span className="font-mono text-xs text-muted-foreground">{b.git_commit?.slice(0, 8)}</span></TableCell>
+                      <TableCell className="text-right">
+                        {b.success && b.tag && !b.tag.startsWith("rollback") && (
+                          <Button variant="outline" size="sm" onClick={() => onRollback(b.tag)} disabled={rollingBack === b.tag}>
+                            {rollingBack === b.tag ? <Loader2 className="size-3 animate-spin" /> : <ArrowDownToLine className="size-3" />} Rollback
+                          </Button>
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
           )}
         </CardContent>
       </Card>
+
+      {/* Expanded build detail */}
+      {expandedId && (() => {
+        const build = buildHistory.find((b) => b.id === expandedId);
+        if (!build) return null;
+        return (
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base">Build Details: {build.tag}</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {build.git_message && (
+                <div>
+                  <div className="text-xs font-medium text-muted-foreground mb-1">Commit Message</div>
+                  <p className="text-sm">{build.git_message}</p>
+                </div>
+              )}
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                <div>
+                  <div className="text-xs font-medium text-muted-foreground">Full Commit</div>
+                  <div className="font-mono text-xs mt-1">{build.git_commit}</div>
+                </div>
+                <div>
+                  <div className="text-xs font-medium text-muted-foreground">Image ID</div>
+                  <div className="font-mono text-xs mt-1">{build.image_id || "N/A"}</div>
+                </div>
+                <div>
+                  <div className="text-xs font-medium text-muted-foreground">Instances Restarted</div>
+                  <div className="text-xs mt-1">{build.instances_restarted?.join(", ") || "None"}</div>
+                </div>
+                <div>
+                  <div className="text-xs font-medium text-muted-foreground">Triggered By</div>
+                  <div className="text-xs mt-1">{build.triggered_by}</div>
+                </div>
+              </div>
+              {build.error && (
+                <div>
+                  <div className="text-xs font-medium text-destructive mb-1">Error</div>
+                  <pre className="p-3 bg-destructive/5 border border-destructive/20 rounded-md text-xs text-destructive overflow-x-auto whitespace-pre-wrap">{build.error}</pre>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        );
+      })()}
     </PageShell>
   );
 }

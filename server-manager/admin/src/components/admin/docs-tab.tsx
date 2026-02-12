@@ -1,48 +1,45 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { FileText, ChevronRight, Loader2, Book, RefreshCw } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import { PageShell } from "@/components/admin/page-shell";
+import { useState, useEffect, useCallback } from "react";
+import { Loader2, FileText, ChevronRight } from "lucide-react";
+import { Card, CardHeader, CardTitle, CardContent } from "@matrx/admin-ui/ui/card";
+import { ScrollArea } from "@matrx/admin-ui/ui/scroll-area";
+import { PageShell } from "@matrx/admin-ui/components/page-shell";
+import { MarkdownRenderer } from "@matrx/admin-ui/components/markdown-renderer";
+import { cn } from "@/lib/utils";
 
 interface DocEntry {
   slug: string;
   title: string;
 }
 
-interface Props {
-  api: (path: string, opts?: RequestInit) => Promise<unknown>;
+interface DocsTabProps {
+  api: <T = Record<string, unknown>>(path: string, opts?: RequestInit) => Promise<T>;
 }
 
-export function DocsTab({ api }: Props) {
+export function DocsTab({ api }: DocsTabProps) {
   const [docs, setDocs] = useState<DocEntry[]>([]);
   const [selectedSlug, setSelectedSlug] = useState<string | null>(null);
-  const [content, setContent] = useState("");
+  const [content, setContent] = useState<string>("");
   const [loading, setLoading] = useState(true);
   const [loadingDoc, setLoadingDoc] = useState(false);
 
-  async function loadDocs() {
-    setLoading(true);
+  const loadDocs = useCallback(async () => {
     try {
-      const result = (await api("/api/docs")) as { docs?: DocEntry[] };
+      const result = await api<{ docs?: DocEntry[] }>("/api/docs");
       setDocs(result.docs || []);
-    } catch {
-      setDocs([]);
-    } finally {
-      setLoading(false);
-    }
-  }
+    } catch { /* handled */ }
+    finally { setLoading(false); }
+  }, [api]);
+
+  useEffect(() => { loadDocs(); }, [loadDocs]);
 
   async function loadDoc(slug: string) {
     setLoadingDoc(true);
     setSelectedSlug(slug);
     try {
-      const result = (await api(`/api/docs?slug=${encodeURIComponent(slug)}`)) as {
-        content?: string;
-      };
-      setContent(result.content || "");
+      const result = await api<{ content?: string }>(`/api/docs?slug=${encodeURIComponent(slug)}`);
+      setContent(result.content || "Document not found");
     } catch {
       setContent("Failed to load document");
     } finally {
@@ -50,44 +47,28 @@ export function DocsTab({ api }: Props) {
     }
   }
 
-  useEffect(() => {
-    loadDocs();
-  }, []);
+  if (loading) return <div className="flex items-center justify-center py-20"><Loader2 className="size-8 animate-spin text-muted-foreground" /></div>;
 
   return (
     <PageShell
       title="Documentation"
       description="Operational guides, runbooks, and reference documentation"
-      icon={Book}
-      actions={
-        <Button variant="outline" size="sm" onClick={loadDocs} disabled={loading}>
-          <RefreshCw className="size-4" />
-          <span className="ml-2">Refresh</span>
-        </Button>
-      }
     >
-      {loading ? (
-        <div className="flex items-center justify-center py-20">
-          <Loader2 className="size-8 animate-spin text-muted-foreground" />
-        </div>
-      ) : docs.length === 0 ? (
+      {docs.length === 0 ? (
         <Card>
           <CardContent className="pt-6">
             <div className="text-center py-8">
               <FileText className="size-12 mx-auto text-muted-foreground mb-4" />
               <h3 className="text-lg font-semibold mb-2">No documentation found</h3>
               <p className="text-sm text-muted-foreground">
-                Create markdown files in{" "}
-                <code className="bg-muted px-1 py-0.5 rounded text-xs">
-                  /srv/projects/matrx-ship/docs/ops/
-                </code>{" "}
-                to see them here.
+                Documentation files will appear here once created.
               </p>
             </div>
           </CardContent>
         </Card>
       ) : (
         <div className="grid gap-6 lg:grid-cols-[280px_1fr]">
+          {/* Doc list sidebar */}
           <Card className="lg:sticky lg:top-6 lg:self-start">
             <CardHeader className="pb-3">
               <CardTitle className="text-base">Contents</CardTitle>
@@ -99,11 +80,12 @@ export function DocsTab({ api }: Props) {
                     <button
                       key={doc.slug}
                       onClick={() => loadDoc(doc.slug)}
-                      className={`flex w-full items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${
+                      className={cn(
+                        "flex w-full items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors",
                         selectedSlug === doc.slug
                           ? "bg-accent text-accent-foreground font-medium"
-                          : "text-muted-foreground hover:bg-muted hover:text-foreground"
-                      }`}
+                          : "text-muted-foreground hover:bg-muted hover:text-foreground",
+                      )}
                     >
                       <FileText className="size-4 shrink-0" />
                       <span className="flex-1 text-left truncate">{doc.title}</span>
@@ -115,7 +97,8 @@ export function DocsTab({ api }: Props) {
             </CardContent>
           </Card>
 
-          <Card>
+          {/* Doc content */}
+          <Card className="min-h-[60vh]">
             <CardContent className="pt-6">
               {!selectedSlug ? (
                 <div className="text-center py-12 text-muted-foreground">
@@ -127,8 +110,8 @@ export function DocsTab({ api }: Props) {
                   <Loader2 className="size-6 animate-spin text-muted-foreground" />
                 </div>
               ) : (
-                <ScrollArea className="max-h-[80vh]">
-                  <pre className="whitespace-pre-wrap text-sm leading-relaxed">{content}</pre>
+                <ScrollArea className="max-h-[75vh]">
+                  <MarkdownRenderer content={content} className="pr-4" />
                 </ScrollArea>
               )}
             </CardContent>

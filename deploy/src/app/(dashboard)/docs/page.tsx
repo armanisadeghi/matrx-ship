@@ -2,10 +2,12 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { Loader2, FileText, ChevronRight } from "lucide-react";
-import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { ScrollArea } from "@/components/ui/scroll-area";
+import { Card, CardHeader, CardTitle, CardContent } from "@matrx/admin-ui/ui/card";
+import { ScrollArea } from "@matrx/admin-ui/ui/scroll-area";
+import { PageShell } from "@matrx/admin-ui/components/page-shell";
+import { MarkdownRenderer } from "@matrx/admin-ui/components/markdown-renderer";
 import { useAuth } from "@/lib/auth-context";
+import { cn } from "@/lib/utils";
 
 interface DocEntry {
   slug: string;
@@ -46,12 +48,10 @@ export default function DocsPage() {
   if (loading) return <div className="flex items-center justify-center py-20"><Loader2 className="size-8 animate-spin text-muted-foreground" /></div>;
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight">Documentation</h1>
-        <p className="text-muted-foreground">Operational guides, runbooks, and reference documentation</p>
-      </div>
-
+    <PageShell
+      title="Documentation"
+      description="Operational guides, runbooks, and reference documentation"
+    >
       {docs.length === 0 ? (
         <Card>
           <CardContent className="pt-6">
@@ -81,11 +81,12 @@ export default function DocsPage() {
                     <button
                       key={doc.slug}
                       onClick={() => loadDoc(doc.slug)}
-                      className={`flex w-full items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${
+                      className={cn(
+                        "flex w-full items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors",
                         selectedSlug === doc.slug
                           ? "bg-accent text-accent-foreground font-medium"
-                          : "text-muted-foreground hover:bg-muted hover:text-foreground"
-                      }`}
+                          : "text-muted-foreground hover:bg-muted hover:text-foreground",
+                      )}
                     >
                       <FileText className="size-4 shrink-0" />
                       <span className="flex-1 text-left truncate">{doc.title}</span>
@@ -97,8 +98,8 @@ export default function DocsPage() {
             </CardContent>
           </Card>
 
-          {/* Doc content */}
-          <Card>
+          {/* Doc content — fixed height container, no layout shift */}
+          <Card className="min-h-[60vh]">
             <CardContent className="pt-6">
               {!selectedSlug ? (
                 <div className="text-center py-12 text-muted-foreground">
@@ -110,16 +111,14 @@ export default function DocsPage() {
                   <Loader2 className="size-6 animate-spin text-muted-foreground" />
                 </div>
               ) : (
-                <ScrollArea className="max-h-[80vh]">
-                  <div className="prose prose-sm dark:prose-invert max-w-none">
-                    <pre className="whitespace-pre-wrap text-sm leading-relaxed">{content}</pre>
-                  </div>
+                <ScrollArea className="max-h-[75vh]">
+                  <MarkdownRenderer content={content} className="pr-4" />
                 </ScrollArea>
               )}
             </CardContent>
           </Card>
         </div>
       )}
-    </div>
+    </PageShell>
   );
 }

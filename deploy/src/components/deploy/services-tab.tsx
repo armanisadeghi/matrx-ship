@@ -4,12 +4,14 @@ import {
   ExternalLink, ShieldCheck, Rocket, Globe,
   Database, Container, Server, Terminal, Cpu,
 } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
-import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
-import { PageShell } from "@/components/deploy/page-shell";
+import { Badge } from "@matrx/admin-ui/ui/badge";
+import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@matrx/admin-ui/ui/card";
+import { Table, TableHeader, TableHead, TableBody, TableRow, TableCell } from "@matrx/admin-ui/ui/table";
+import { Button } from "@matrx/admin-ui/ui/button";
+import { PageShell } from "@matrx/admin-ui/components/page-shell";
 import type { BuildInfo } from "@/lib/types";
 
-interface ServiceLinkProps {
+interface ServiceRow {
   name: string;
   url: string;
   description: string;
@@ -18,29 +20,64 @@ interface ServiceLinkProps {
   status?: "running" | "stopped" | "ssh-only";
 }
 
-function ServiceLink({ name, url, description, icon, badge, status }: ServiceLinkProps) {
+function ServiceTable({ title, description, icon, services }: {
+  title: string;
+  description: string;
+  icon: React.ReactNode;
+  services: ServiceRow[];
+}) {
   return (
-    <a
-      href={url}
-      target="_blank"
-      rel="noopener noreferrer"
-      className="flex items-center justify-between p-3 rounded-lg border bg-card hover:bg-accent/50 transition-colors group"
-    >
-      <div className="flex items-center gap-3 min-w-0">
-        <div className="shrink-0">{icon}</div>
-        <div className="min-w-0">
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-sm font-medium">{name}</span>
-            {badge && <Badge variant="secondary" className="text-[10px]">{badge}</Badge>}
-            {status === "running" && <Badge variant="success" className="text-[10px]">running</Badge>}
-            {status === "stopped" && <Badge variant="destructive" className="text-[10px]">stopped</Badge>}
-            {status === "ssh-only" && <Badge variant="outline" className="text-[10px]">SSH only</Badge>}
-          </div>
-          <div className="text-xs text-muted-foreground mt-0.5 truncate">{description}</div>
-        </div>
-      </div>
-      <ExternalLink className="size-4 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity shrink-0 ml-2" />
-    </a>
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="text-base flex items-center gap-2">
+          {icon} {title}
+        </CardTitle>
+        <CardDescription>{description}</CardDescription>
+      </CardHeader>
+      <CardContent className="p-0">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Service</TableHead>
+              <TableHead>Status</TableHead>
+              <TableHead>Description</TableHead>
+              <TableHead className="text-right">Actions</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {services.map((svc) => (
+              <TableRow key={svc.name}>
+                <TableCell>
+                  <div className="flex items-center gap-2">
+                    {svc.icon}
+                    <span className="font-medium">{svc.name}</span>
+                    {svc.badge && <Badge variant="secondary" className="text-[10px]">{svc.badge}</Badge>}
+                  </div>
+                </TableCell>
+                <TableCell>
+                  {svc.status === "running" && <Badge variant="success">running</Badge>}
+                  {svc.status === "stopped" && <Badge variant="destructive">stopped</Badge>}
+                  {svc.status === "ssh-only" && <Badge variant="outline">SSH only</Badge>}
+                  {!svc.status && <Badge variant="secondary">available</Badge>}
+                </TableCell>
+                <TableCell className="text-sm text-muted-foreground max-w-xs truncate">
+                  {svc.description}
+                </TableCell>
+                <TableCell className="text-right">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => window.open(svc.url, "_blank")}
+                  >
+                    <ExternalLink className="size-3.5" /> Open
+                  </Button>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -49,154 +86,109 @@ interface ServicesTabProps {
 }
 
 export function ServicesTab({ buildInfo }: ServicesTabProps) {
+  const managementTools: ServiceRow[] = [
+    {
+      name: "Server Manager",
+      url: "https://manager.dev.codematrx.com/admin/",
+      description: "Central admin dashboard — instances, sandboxes, builds, tokens, and system health",
+      icon: <ShieldCheck className="size-4 text-orange-500" />,
+    },
+    {
+      name: "Deploy App",
+      url: "https://deploy.dev.codematrx.com",
+      description: "Deploy watcher — safe rebuilds, rollbacks, and image management",
+      icon: <Rocket className="size-4 text-blue-500" />,
+      badge: "You are here",
+    },
+    {
+      name: "Traefik Dashboard",
+      url: "https://traefik.dev.codematrx.com",
+      description: "Reverse proxy — routing rules, SSL certificates, and service discovery",
+      icon: <Globe className="size-4 text-green-500" />,
+    },
+  ];
+
+  const databaseTools: ServiceRow[] = [
+    {
+      name: "pgAdmin",
+      url: "https://pg.dev.codematrx.com",
+      description: "PostgreSQL web admin for the central database",
+      icon: <Database className="size-4 text-blue-600" />,
+    },
+  ];
+
+  const shipInstances: ServiceRow[] = (buildInfo?.instances || []).map((inst) => ({
+    name: inst.display_name,
+    url: `https://ship-${inst.name}.dev.codematrx.com`,
+    description: "Ship instance admin portal",
+    icon: <Server className="size-4 text-violet-500" />,
+    status: inst.status === "running" ? "running" as const : "stopped" as const,
+  }));
+
+  const sandboxes: ServiceRow[] = [1, 2, 3, 4, 5].map((n) => ({
+    name: `Sandbox ${n}`,
+    url: `https://sandbox-${n}.dev.codematrx.com`,
+    description: "Web-based development sandbox (ttyd terminal)",
+    icon: <Terminal className="size-4 text-emerald-500" />,
+  }));
+
+  const otherServices: ServiceRow[] = [
+    {
+      name: "MCP Example Server",
+      url: "https://mcp-example.dev.codematrx.com",
+      description: "Example MCP server (Streamable HTTP) — POST /mcp with bearer token",
+      icon: <Cpu className="size-4 text-amber-500" />,
+    },
+    {
+      name: "Agent 1",
+      url: "https://agent-1.dev.codematrx.com",
+      description: "Sysbox agent container — SSH access only, no web UI",
+      icon: <Terminal className="size-4 text-red-400" />,
+      status: "ssh-only" as const,
+    },
+  ];
+
   return (
     <PageShell
       title="Services Directory"
       description="All services running on this infrastructure, with quick-access links"
     >
-      {/* Management Tools */}
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="text-base flex items-center gap-2">
-            <ShieldCheck className="size-4" /> Management Tools
-          </CardTitle>
-          <CardDescription>Admin dashboards and management UIs</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="space-y-3">
-            <ServiceLink
-              name="Server Manager"
-              url="https://manager.dev.codematrx.com/admin/"
-              description="Central admin dashboard — instances, sandboxes, builds, tokens, and system health"
-              icon={<ShieldCheck className="size-4 text-orange-500" />}
-            />
-            <ServiceLink
-              name="Deploy App"
-              url="https://deploy.dev.codematrx.com"
-              description="Deploy watcher — safe rebuilds, rollbacks, and image management"
-              icon={<Rocket className="size-4 text-blue-500" />}
-              badge="You are here"
-            />
-            <ServiceLink
-              name="Traefik Dashboard"
-              url="https://traefik.dev.codematrx.com"
-              description="Reverse proxy — routing rules, SSL certificates, and service discovery"
-              icon={<Globe className="size-4 text-green-500" />}
-            />
-          </div>
-        </CardContent>
-      </Card>
+      <ServiceTable
+        title="Management Tools"
+        description="Admin dashboards and management UIs"
+        icon={<ShieldCheck className="size-4" />}
+        services={managementTools}
+      />
 
-      {/* Database Tools */}
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="text-base flex items-center gap-2">
-            <Database className="size-4" /> Database
-          </CardTitle>
-          <CardDescription>Database management and access</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="space-y-3">
-            <ServiceLink
-              name="pgAdmin"
-              url="https://pg.dev.codematrx.com"
-              description="PostgreSQL web admin for the central database"
-              icon={<Database className="size-4 text-blue-600" />}
-            />
-            <div className="mt-4 p-4 rounded-lg border bg-muted/30">
-              <h4 className="text-sm font-medium mb-2">Central Database Credentials</h4>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs font-mono">
-                <div className="text-muted-foreground">pgAdmin Email:</div><div>admin@matrxserver.com</div>
-                <div className="text-muted-foreground">pgAdmin Password:</div><div>Dsi4t4slbdSH9hzeEu5waQ==</div>
-                <div className="text-muted-foreground">Postgres Host:</div><div>postgres (Docker network)</div>
-                <div className="text-muted-foreground">Postgres User:</div><div>matrx</div>
-                <div className="text-muted-foreground">Postgres DB:</div><div>matrx</div>
-              </div>
-              <p className="text-xs text-muted-foreground mt-3">
-                Per-instance databases use isolated containers. Credentials are in each instance&apos;s <code>.env</code> at <code>/srv/apps/&#123;name&#125;/.env</code>.
-              </p>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
+      <ServiceTable
+        title="Database"
+        description="Database management and access"
+        icon={<Database className="size-4" />}
+        services={databaseTools}
+      />
 
-      {/* Ship Instances */}
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="text-base flex items-center gap-2">
-            <Container className="size-4" /> Ship Instances
-          </CardTitle>
-          <CardDescription>Deployed project instances running matrx-ship</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="space-y-3">
-            {buildInfo?.instances && buildInfo.instances.length > 0 ? (
-              buildInfo.instances.map((inst) => (
-                <ServiceLink
-                  key={inst.name}
-                  name={inst.display_name}
-                  url={`https://ship-${inst.name}.dev.codematrx.com`}
-                  description="Ship instance admin portal"
-                  icon={<Server className="size-4 text-violet-500" />}
-                  status={inst.status === "running" ? "running" : "stopped"}
-                />
-              ))
-            ) : (
-              <p className="text-sm text-muted-foreground">No instances loaded. Refresh to see ship instances.</p>
-            )}
-          </div>
-        </CardContent>
-      </Card>
+      {shipInstances.length > 0 && (
+        <ServiceTable
+          title="Ship Instances"
+          description="Deployed project instances running matrx-ship"
+          icon={<Container className="size-4" />}
+          services={shipInstances}
+        />
+      )}
 
-      {/* Dev Sandboxes */}
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="text-base flex items-center gap-2">
-            <Terminal className="size-4" /> Dev Sandboxes
-          </CardTitle>
-          <CardDescription>Isolated development environments</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="space-y-3">
-            {[1, 2, 3, 4, 5].map((n) => (
-              <ServiceLink
-                key={n}
-                name={`Sandbox ${n}`}
-                url={`https://sandbox-${n}.dev.codematrx.com`}
-                description="Web-based development sandbox (ttyd terminal)"
-                icon={<Terminal className="size-4 text-emerald-500" />}
-              />
-            ))}
-          </div>
-        </CardContent>
-      </Card>
+      <ServiceTable
+        title="Dev Sandboxes"
+        description="Isolated development environments"
+        icon={<Terminal className="size-4" />}
+        services={sandboxes}
+      />
 
-      {/* Other Services */}
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="text-base flex items-center gap-2">
-            <Cpu className="size-4" /> Other Services
-          </CardTitle>
-          <CardDescription>Additional infrastructure services</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="space-y-3">
-            <ServiceLink
-              name="MCP Example Server"
-              url="https://mcp-example.dev.codematrx.com"
-              description="Example MCP server (Streamable HTTP) — POST /mcp with bearer token"
-              icon={<Cpu className="size-4 text-amber-500" />}
-            />
-            <ServiceLink
-              name="Agent 1"
-              url="https://agent-1.dev.codematrx.com"
-              description="Sysbox agent container — SSH access only, no web UI"
-              icon={<Terminal className="size-4 text-red-400" />}
-              status="ssh-only"
-            />
-          </div>
-        </CardContent>
-      </Card>
+      <ServiceTable
+        title="Other Services"
+        description="Additional infrastructure services"
+        icon={<Cpu className="size-4" />}
+        services={otherServices}
+      />
     </PageShell>
   );
 }

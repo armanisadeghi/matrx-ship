@@ -1,10 +1,15 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { Loader2, RefreshCw, CheckCircle2, AlertTriangle, Database, Globe, Cpu } from "lucide-react";
-import { Card, CardHeader, CardTitle, CardContent, CardDescription } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
+import {
+  Loader2, RefreshCw, CheckCircle2, AlertTriangle, XCircle,
+  Database, Globe, Cpu, ExternalLink, BookOpen, Play,
+} from "lucide-react";
+import { Card, CardHeader, CardTitle, CardContent, CardDescription } from "@matrx/admin-ui/ui/card";
+import { Button } from "@matrx/admin-ui/ui/button";
+import { Badge } from "@matrx/admin-ui/ui/badge";
+import { Table, TableHeader, TableHead, TableBody, TableRow, TableCell } from "@matrx/admin-ui/ui/table";
+import { PageShell } from "@matrx/admin-ui/components/page-shell";
 import { useAuth } from "@/lib/auth-context";
 
 interface InfraStatus {
@@ -16,11 +21,23 @@ interface InfraStatus {
 }
 
 function StatusBadge({ status }: { status: string }) {
-  const isRunning = status === "running";
+  if (status === "running") {
+    return (
+      <Badge variant="success" className="gap-1">
+        <CheckCircle2 className="size-3" /> running
+      </Badge>
+    );
+  }
+  if (status === "not found" || status === "unknown") {
+    return (
+      <Badge variant="destructive" className="gap-1">
+        <XCircle className="size-3" /> not found
+      </Badge>
+    );
+  }
   return (
-    <Badge variant={isRunning ? "default" : "destructive"} className="gap-1">
-      {isRunning ? <CheckCircle2 className="size-3" /> : <AlertTriangle className="size-3" />}
-      {status}
+    <Badge variant="warning" className="gap-1">
+      <AlertTriangle className="size-3" /> {status}
     </Badge>
   );
 }
@@ -49,19 +66,51 @@ export default function InfrastructurePage() {
 
   const sys = system as { hostname?: string; cpus?: number; memory?: { total: string; used: string; percent: string }; disk?: { total: string; used: string; percent: string }; uptime_hours?: string; docker?: string } | null;
 
-  return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">Infrastructure</h1>
-          <p className="text-muted-foreground">Core services and system health</p>
-        </div>
-        <Button variant="outline" size="sm" onClick={loadData}>
-          <RefreshCw className="size-4 mr-2" /> Refresh
-        </Button>
-      </div>
+  // Build services list for the table
+  const services = [
+    {
+      name: "Traefik",
+      type: "Reverse Proxy",
+      status: infra?.traefik?.status || "unknown",
+      details: "Routes all HTTPS traffic, manages Let's Encrypt certificates",
+      url: "https://traefik.dev.codematrx.com",
+      icon: <Globe className="size-4 text-green-500" />,
+    },
+    {
+      name: "PostgreSQL",
+      type: "Database",
+      status: infra?.postgres?.status || "unknown",
+      details: infra?.postgres ? `Size: ${infra.postgres.size} | Connections: ${infra.postgres.connections}` : "Central PostgreSQL database",
+      icon: <Database className="size-4 text-blue-600" />,
+    },
+    {
+      name: "pgAdmin",
+      type: "Database UI",
+      status: infra?.pgadmin?.status || "unknown",
+      details: "Web-based PostgreSQL administration",
+      url: "https://pg.dev.codematrx.com",
+      icon: <Database className="size-4 text-blue-400" />,
+    },
+    ...(infra?.agents || []).map((agent) => ({
+      name: agent.name,
+      type: "Agent",
+      status: agent.status || "not found",
+      details: "Sysbox agent container for isolated development",
+      icon: <Cpu className="size-4 text-amber-500" />,
+    })),
+  ];
 
-      {/* System overview */}
+  return (
+    <PageShell
+      title="Infrastructure"
+      description="Core services and system health"
+      actions={
+        <Button variant="outline" size="sm" onClick={loadData}>
+          <RefreshCw className="size-4" /> Refresh
+        </Button>
+      }
+    >
+      {/* System overview cards */}
       {sys && (
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
           <Card>
@@ -105,73 +154,66 @@ export default function InfrastructurePage() {
         </div>
       )}
 
-      {/* Service statuses */}
-      <div className="grid gap-4 md:grid-cols-2">
-        <Card>
-          <CardHeader className="pb-3">
-            <CardTitle className="text-base flex items-center gap-2">
-              <Globe className="size-4" /> Traefik Reverse Proxy
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="flex items-center justify-between mb-3">
-              <span className="font-mono text-sm">traefik</span>
-              <StatusBadge status={infra?.traefik?.status || "unknown"} />
-            </div>
-            <p className="text-xs text-muted-foreground">Routes all HTTPS traffic, manages Let&apos;s Encrypt certificates</p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="pb-3">
-            <CardTitle className="text-base flex items-center gap-2">
-              <Database className="size-4" /> PostgreSQL
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="flex items-center justify-between mb-3">
-              <span className="font-mono text-sm">postgres</span>
-              <StatusBadge status={infra?.postgres?.status || "unknown"} />
-            </div>
-            <div className="grid grid-cols-2 gap-2 text-sm">
-              <div>
-                <p className="text-muted-foreground">Size</p>
-                <p className="font-mono">{infra?.postgres?.size}</p>
-              </div>
-              <div>
-                <p className="text-muted-foreground">Connections</p>
-                <p className="font-mono">{infra?.postgres?.connections}</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="pb-3">
-            <CardTitle className="text-base">pgAdmin</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="flex items-center justify-between">
-              <span className="font-mono text-sm">pgadmin</span>
-              <StatusBadge status={infra?.pgadmin?.status || "unknown"} />
-            </div>
-          </CardContent>
-        </Card>
-
-        {infra?.agents?.map((agent) => (
-          <Card key={agent.name}>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-base">Agent: {agent.name}</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="flex items-center justify-between">
-                <span className="font-mono text-sm">{agent.name}</span>
-                <StatusBadge status={agent.status || "not found"} />
-              </div>
-            </CardContent>
-          </Card>
-        ))}
-      </div>
+      {/* Services status table */}
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base">Service Status</CardTitle>
+          <CardDescription>Core infrastructure services and their current health</CardDescription>
+        </CardHeader>
+        <CardContent className="p-0">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Service</TableHead>
+                <TableHead>Type</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead>Details</TableHead>
+                <TableHead className="text-right">Actions</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {services.map((svc) => (
+                <TableRow key={svc.name}>
+                  <TableCell>
+                    <div className="flex items-center gap-2">
+                      {svc.icon}
+                      <span className="font-medium">{svc.name}</span>
+                    </div>
+                  </TableCell>
+                  <TableCell className="text-muted-foreground text-sm">{svc.type}</TableCell>
+                  <TableCell>
+                    <StatusBadge status={svc.status} />
+                  </TableCell>
+                  <TableCell className="text-sm text-muted-foreground max-w-xs truncate">
+                    {svc.details}
+                  </TableCell>
+                  <TableCell className="text-right">
+                    <div className="flex items-center justify-end gap-1">
+                      {svc.status === "not found" || svc.status === "unknown" ? (
+                        <Button variant="outline" size="sm" disabled>
+                          <BookOpen className="size-3.5" /> Setup Guide
+                        </Button>
+                      ) : (
+                        <>
+                          {"url" in svc && svc.url && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => window.open(svc.url, "_blank")}
+                            >
+                              <ExternalLink className="size-3.5" /> Open
+                            </Button>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
 
       {/* Docker system info */}
       {infra?.docker && (
@@ -181,7 +223,7 @@ export default function InfrastructurePage() {
             <CardDescription>Container and image statistics</CardDescription>
           </CardHeader>
           <CardContent>
-            <pre className="text-xs font-mono bg-muted/30 rounded p-3 whitespace-pre-wrap">
+            <pre className="text-xs font-mono bg-muted/30 rounded-lg p-4 whitespace-pre-wrap overflow-x-auto">
               {infra.docker.summary}
               {"\n\n"}
               {infra.docker.disk_usage}
@@ -189,6 +231,6 @@ export default function InfrastructurePage() {
           </CardContent>
         </Card>
       )}
-    </div>
+    </PageShell>
   );
 }

@@ -29,29 +29,48 @@ RUN curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "/t
     && /tmp/aws/install \
     && rm -rf /tmp/awscliv2.zip /tmp/aws /var/lib/apt/lists/*
 
-# ── Stage 1: Build the React admin UI ────────────────────────────────────────
+# ── Stage 1: Build the Next.js admin UI (standalone mode) ─────────────────
 FROM base AS admin-builder
 RUN corepack enable && corepack prepare pnpm@10.28.2 --activate
-WORKDIR /admin
-COPY admin/package.json admin/pnpm-lock.yaml* ./
+WORKDIR /build
+
+# Copy workspace config for pnpm workspace resolution
+COPY pnpm-workspace.yaml ./
+COPY packages/admin-ui/package.json ./packages/admin-ui/
+
+# Install shared package deps
+WORKDIR /build/packages/admin-ui
+COPY packages/admin-ui/ ./
+
+# Install admin deps
+WORKDIR /build/admin
+COPY server-manager/admin/package.json server-manager/admin/pnpm-lock.yaml* ./
 RUN pnpm install --frozen-lockfile 2>/dev/null || pnpm install
-COPY admin/ ./
+COPY server-manager/admin/ ./
 RUN pnpm build
 
 # ── Stage 2: Final server image ──────────────────────────────────────────────
 FROM base AS runner
 WORKDIR /app
 
-COPY package.json ./
+# Express API server
+COPY server-manager/package.json ./
 RUN npm install --omit=dev
 
-COPY src/ ./src/
-# Copy legacy public dir first (favicons, manifest, etc.)
-COPY public/ ./public/
-# Overlay the React static export — replaces index.html with the new React SPA
-COPY --from=admin-builder /admin/out/ ./public/
+COPY server-manager/src/ ./src/
+# Copy legacy public dir (favicons, manifest, etc.)
+COPY server-manager/public/ ./public/
 
-EXPOSE 3000
+# Copy Next.js standalone build
+COPY --from=admin-builder /build/admin/.next/standalone/admin/ ./admin/
+COPY --from=admin-builder /build/admin/.next/static ./admin/.next/static
+COPY --from=admin-builder /build/admin/public ./admin/public
+
+# Startup script that runs both Express API and Next.js admin
+COPY server-manager/start.sh ./start.sh
+RUN chmod +x start.sh
+
+EXPOSE 3000 3001
 
 # Run as root to access Docker socket and host paths
-CMD ["node", "src/index.js"]
+CMD ["./start.sh"]

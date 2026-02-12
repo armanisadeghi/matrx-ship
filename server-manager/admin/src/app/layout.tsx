@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
-import { ThemeProvider } from "@/components/theme-provider";
-import { Toaster } from "@/components/ui/sonner";
+import { ThemeProvider } from "@matrx/admin-ui/components/theme-provider";
+import { Toaster } from "@matrx/admin-ui/ui/sonner";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -8,9 +8,9 @@ export const metadata: Metadata = {
   description: "Deploy and manage isolated application instances",
   icons: {
     icon: [
-      { url: "/admin/icon.svg", type: "image/svg+xml" },
+      { url: "/admin/matrx-icon-purple.svg", type: "image/svg+xml" },
     ],
-    apple: "/admin/icon.svg",
+    apple: "/admin/matrx-icon-purple.svg",
   },
 };
 

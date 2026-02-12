@@ -1,20 +1,13 @@
 "use client";
 
 import {
-  Globe,
-  Cpu,
-  HardDrive,
-  Clock,
-  Container,
-  ShieldCheck,
-  Wrench,
-  Loader2,
-  ExternalLink,
+  Globe, Cpu, HardDrive, Clock, Container, ShieldCheck,
+  Wrench, Loader2, ExternalLink,
 } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
-import { BuildLogViewer } from "@/components/admin/build-log-viewer";
-import { PageShell } from "@/components/admin/page-shell";
+import { Button } from "@matrx/admin-ui/ui/button";
+import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@matrx/admin-ui/ui/card";
+import { BuildLogViewer } from "@matrx/admin-ui/components/build-log-viewer";
+import { PageShell } from "@matrx/admin-ui/components/page-shell";
 import type { SystemInfo } from "@/lib/types";
 
 interface SystemTabProps {
@@ -78,14 +71,10 @@ export function SystemTab({
 
       <Card>
         <CardHeader className="pb-3">
-          <div className="flex items-center justify-between">
-            <div>
-              <CardTitle className="text-base flex items-center gap-2">
-                <Container className="size-4" /> Docker Containers
-              </CardTitle>
-              <CardDescription className="mt-1">{systemInfo.docker}</CardDescription>
-            </div>
-          </div>
+          <CardTitle className="text-base flex items-center gap-2">
+            <Container className="size-4" /> Docker Containers
+          </CardTitle>
+          <CardDescription>{systemInfo.docker}</CardDescription>
         </CardHeader>
         <CardContent>
           <div className="space-y-1 font-mono text-sm">
@@ -115,19 +104,13 @@ export function SystemTab({
             This rebuilds <code className="bg-muted px-1 py-0.5 rounded text-xs">/srv/apps/server-manager/</code> and restarts the server manager container. The admin UI will briefly disconnect.
           </p>
           <div className="mt-3">
-            <a
-              href="https://deploy.dev.codematrx.com"
-              target="_blank"
-              rel="noopener"
-              className="text-primary text-sm hover:underline flex items-center gap-1"
-            >
+            <a href="https://deploy.dev.codematrx.com" target="_blank" rel="noopener" className="text-primary text-sm hover:underline flex items-center gap-1">
               <ExternalLink className="size-3" /> Open Deploy App (safer for manager rebuilds)
             </a>
           </div>
         </CardContent>
       </Card>
 
-      {/* Build logs (visible when rebuilding manager) */}
       <BuildLogViewer
         buildLogs={buildLogs}
         buildPhase={buildPhase}

@@ -1,41 +1,34 @@
 "use client";
 
 import { useState } from "react";
-import { Server, Loader2, LogIn } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { api, setToken, clearToken, API } from "@/lib/api";
+import { Loader2, LogIn } from "lucide-react";
+import { Button } from "@matrx/admin-ui/ui/button";
+import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@matrx/admin-ui/ui/card";
+import { Input } from "@matrx/admin-ui/ui/input";
+import { useAuth } from "@/lib/auth-context";
 
-interface LoginScreenProps {
-  onLogin: () => void;
-}
-
-export function LoginScreen({ onLogin }: LoginScreenProps) {
+export function LoginScreen() {
+  const { login } = useAuth();
   const [token, setTokenValue] = useState("");
   const [error, setError] = useState(false);
   const [loading, setLoading] = useState(false);
 
   async function handleLogin() {
     setLoading(true);
-    try {
-      setToken(token);
-      await api(API.SYSTEM);
-      onLogin();
-    } catch {
+    const success = await login(token);
+    if (!success) {
       setError(true);
-      clearToken();
-    } finally {
-      setLoading(false);
     }
+    setLoading(false);
   }
 
   return (
     <div className="min-h-dvh flex items-center justify-center bg-background px-4">
       <Card className="w-full max-w-[420px]">
         <CardHeader className="text-center">
-          <div className="mx-auto mb-3 w-12 h-12 bg-gradient-to-br from-ship-500 to-ship-700 rounded-2xl flex items-center justify-center">
-            <Server className="w-6 h-6 text-primary-foreground" />
+          <div className="mx-auto mb-3 w-12 h-12 rounded-2xl overflow-hidden">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/admin/matrx-icon-purple.svg" alt="Matrx Logo" className="w-12 h-12" />
           </div>
           <CardTitle className="text-xl">Matrx Server Manager</CardTitle>
           <CardDescription>Enter your token to access the admin dashboard.</CardDescription>

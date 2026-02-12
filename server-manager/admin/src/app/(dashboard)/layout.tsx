@@ -1,0 +1,122 @@
+"use client";
+
+import { usePathname } from "next/navigation";
+import Link from "next/link";
+import { Loader2 } from "lucide-react";
+import {
+  Layers,
+  Terminal,
+  Key,
+  History,
+  Monitor,
+  Database,
+  Server,
+  FileText,
+} from "lucide-react";
+import { cn } from "@/lib/utils";
+import { AuthProvider, useAuth } from "@/lib/auth-context";
+import { LoginScreen } from "@/components/admin/login-screen";
+import { AdminShell, type NavGroup, type NavItem } from "@matrx/admin-ui/components/admin-shell";
+import { Badge } from "@matrx/admin-ui/ui/badge";
+
+const navGroups: NavGroup[] = [
+  {
+    label: "Main",
+    items: [
+      { id: "instances", href: "/admin/instances", label: "Instances", icon: Layers },
+      { id: "sandboxes", href: "/admin/sandboxes", label: "Sandboxes", icon: Terminal },
+    ],
+  },
+  {
+    label: "Operations",
+    items: [
+      { id: "builds", href: "/admin/builds", label: "Builds", icon: History },
+      { id: "tokens", href: "/admin/tokens", label: "Tokens", icon: Key },
+    ],
+  },
+  {
+    label: "Monitoring",
+    items: [
+      { id: "system", href: "/admin/system", label: "System", icon: Monitor },
+      { id: "db-health", href: "/admin/db-health", label: "DB Health", icon: Database },
+      { id: "infrastructure", href: "/admin/infrastructure", label: "Infrastructure", icon: Server },
+    ],
+  },
+  {
+    label: "Reference",
+    items: [
+      { id: "docs", href: "/admin/docs", label: "Documentation", icon: FileText },
+    ],
+  },
+];
+
+function DashboardContent({ children }: { children: React.ReactNode }) {
+  const { authed, loading, role, logout } = useAuth();
+  const pathname = usePathname();
+
+  if (loading) {
+    return (
+      <div className="min-h-dvh flex items-center justify-center bg-background">
+        <Loader2 className="size-8 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
+  if (!authed) {
+    return <LoginScreen />;
+  }
+
+  return (
+    <AdminShell
+      config={{
+        appName: "Server Manager",
+        appDescription: "Matrx Infrastructure",
+        logoSrc: "/admin/matrx-icon-purple.svg",
+        navGroups,
+        version: "v0.2.0",
+      }}
+      activePath={pathname}
+      onNavigate={() => {}}
+      role={role}
+      onLogout={logout}
+      renderNavLink={(item: NavItem, isActive: boolean, onClick: () => void) => (
+        <Link
+          key={item.id}
+          href={item.href}
+          onClick={onClick}
+          className={cn(
+            "flex w-full items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors",
+            isActive
+              ? "bg-sidebar-accent text-sidebar-accent-foreground"
+              : "text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
+          )}
+        >
+          <item.icon
+            className={cn(
+              "w-4.5 h-4.5 shrink-0",
+              isActive
+                ? "text-sidebar-primary"
+                : "text-muted-foreground",
+            )}
+          />
+          <span className="flex-1 text-left">{item.label}</span>
+          {item.badge && (
+            <Badge variant="default" className="text-[10px] h-5 px-1.5">
+              {item.badge}
+            </Badge>
+          )}
+        </Link>
+      )}
+    >
+      {children}
+    </AdminShell>
+  );
+}
+
+export default function DashboardLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <AuthProvider>
+      <DashboardContent>{children}</DashboardContent>
+    </AuthProvider>
+  );
+}

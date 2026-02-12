@@ -1,10 +1,11 @@
 "use client";
 
 import { ChevronLeft, RotateCw, Square, Play } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { Button } from "@matrx/admin-ui/ui/button";
+import { Card, CardContent } from "@matrx/admin-ui/ui/card";
+import { Badge } from "@matrx/admin-ui/ui/badge";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@matrx/admin-ui/ui/tabs";
+import { CodeBlock } from "@matrx/admin-ui/components/code-block";
 import type { SandboxInfo } from "@/lib/types";
 
 interface SandboxDetailProps {
@@ -17,16 +18,10 @@ interface SandboxDetailProps {
 }
 
 export function SandboxDetail({
-  sandbox,
-  sandboxDetail,
-  sandboxLogs,
-  onBack,
-  onAction,
-  onLoadLogs,
+  sandbox, sandboxDetail, sandboxLogs, onBack, onAction, onLoadLogs,
 }: SandboxDetailProps) {
   return (
     <div className="space-y-6">
-      {/* Breadcrumb */}
       <div className="flex items-center gap-2 text-sm">
         <button onClick={onBack} className="text-primary hover:underline flex items-center gap-1">
           <ChevronLeft className="size-4" /> Sandboxes
@@ -35,7 +30,6 @@ export function SandboxDetail({
         <span>{sandbox.name}</span>
       </div>
 
-      {/* Header */}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h2 className="text-xl font-semibold">{sandbox.name}</h2>
@@ -48,7 +42,6 @@ export function SandboxDetail({
         </div>
       </div>
 
-      {/* Tabs */}
       <Tabs defaultValue="overview">
         <TabsList variant="line" className="w-full justify-start overflow-x-auto">
           <TabsTrigger value="overview">Overview</TabsTrigger>
@@ -84,13 +77,7 @@ export function SandboxDetail({
         </TabsContent>
 
         <TabsContent value="logs">
-          <Card>
-            <CardContent className="pt-6">
-              <pre className="bg-muted rounded-md p-4 text-xs font-mono max-h-[500px] overflow-auto whitespace-pre-wrap">
-                {sandboxLogs || "Loading..."}
-              </pre>
-            </CardContent>
-          </Card>
+          <CodeBlock code={sandboxLogs || "Loading..."} language="log" showLineNumbers={false} />
         </TabsContent>
       </Tabs>
     </div>

@@ -1172,14 +1172,12 @@ function createServer() {
 const app = express();
 app.use(express.json());
 
-// Serve admin dashboard (static files, no auth — login handled client-side)
-app.use("/admin", express.static(join(__dirname, "..", "public")));
+// Admin UI is now served by Next.js on port 3001 — Traefik routes /admin/* there.
+// Keep favicon + root redirect for direct Express access.
+app.get("/favicon.ico", (_req, res) => res.sendFile(join(__dirname, "..", "public", "matrx-icon-purple.svg")));
+app.get("/icon.svg", (_req, res) => res.sendFile(join(__dirname, "..", "public", "matrx-icon-purple.svg")));
 
-// Serve favicon at root level so browsers find it
-app.get("/favicon.ico", (_req, res) => res.sendFile(join(__dirname, "..", "public", "icon.svg")));
-app.get("/icon.svg", (_req, res) => res.sendFile(join(__dirname, "..", "public", "icon.svg")));
-
-// Redirect bare / to /admin
+// Redirect bare / to /admin (handled by Next.js via Traefik)
 app.get("/", (_req, res) => res.redirect("/admin"));
 
 // Health (no auth)

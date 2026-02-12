@@ -1,10 +1,13 @@
 import type { NextConfig } from "next";
+import { resolve } from "path";
 
 const nextConfig: NextConfig = {
-  output: "export",
+  output: "standalone",
+  outputFileTracingRoot: resolve(__dirname, "../.."),
   basePath: "/admin",
   reactCompiler: true,
   images: { unoptimized: true },
+  transpilePackages: ["@matrx/admin-ui"],
 };
 
 export default nextConfig;
