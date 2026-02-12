@@ -1,87 +1,105 @@
 # Matrx Ship
 
-Universal deployment and version tracking system. Dockerized per-project instance with full admin portal, CLI tools, and embeddable client components.
+Universal deployment, version tracking, and environment management for all Matrx projects. One repo, one CLI -- works with Node, Python, or any project with a git repo.
 
-Works with **any project** — Node (pnpm), Python, bash, Chrome extensions, anything with a git repo.
+This repo contains:
+- **Ship** -- deployment versioning (CLI + per-project Docker instances + admin portal)
+- **Env-Sync** -- safe Doppler-to-local env synchronization
+- **Server Manager** -- admin UI for managing all running server instances
+- **Deploy UI** -- web interface for triggering rebuilds
 
-## Quick Start
+---
 
-### 1. Install CLI in Your Project 
+## Using in Other Projects
+
+### Install
 
 ```bash
-# From your project root
 curl -sL https://raw.githubusercontent.com/armanisadeghi/matrx-ship/main/cli/install.sh | bash
 ```
 
-The installer auto-detects your project type:
-- **Node projects** (has `package.json`): adds `pnpm ship:*` scripts
-- **Everything else**: downloads a bash wrapper (`scripts/matrx/ship.sh`)
+The installer will:
+1. Detect your project type (Node / Python / other)
+2. Ask what to set up (Ship, Env-Sync, or both)
+3. Download CLI files to `scripts/matrx/`
+4. Register commands (`package.json` for Node, `Makefile` for everything else)
+5. Walk you through config and write `.matrx.json`
 
-### 2. Save Your Server Token (one-time per machine)
+### Migrate / Update Existing Projects
 
-Get your token from the [Server Manager](https://mcp.dev.codematrx.com/admin/) (Tokens tab).
-
-```bash
-# Node projects
-pnpm ship:setup --token YOUR_SERVER_TOKEN
-
-# Non-Node projects
-bash scripts/matrx/ship.sh setup --token YOUR_SERVER_TOKEN
-```
-
-This saves the token to `~/.config/matrx-ship/server.json`. You only do this once — it works across all projects on this machine.
-
-### 3. Provision an Instance
+If a project was set up with the old `matrx-dev-tools` repo or an earlier version:
 
 ```bash
-# Node projects
-pnpm ship:init my-project "My Project Name"
-
-# Non-Node projects
-bash scripts/matrx/ship.sh init my-project "My Project Name"
+curl -sL https://raw.githubusercontent.com/armanisadeghi/matrx-ship/main/cli/migrate.sh | bash
 ```
 
-This calls the MCP server, provisions a new Docker instance (Next.js + PostgreSQL), and writes `.matrx-ship.json` into your project with the URL and API key. The instance is live and ready immediately.
+This re-downloads all scripts, migrates legacy configs (`.matrx-ship.json`, `.matrx-tools.conf`) into unified `.matrx.json`, fixes stale URLs, and registers any missing commands. Safe to run multiple times.
 
-### 4. Ship!
+### Ship Commands
+
+| Node | Make | What it does |
+|------|------|--------------|
+| `pnpm ship "message"` | `make ship MSG="message"` | Patch bump + commit + push |
+| `pnpm ship:minor "msg"` | `make ship-minor MSG="msg"` | Minor bump |
+| `pnpm ship:major "msg"` | `make ship-major MSG="msg"` | Major bump |
+| `pnpm ship:setup --token T` | `make ship-setup` | Save server token (once per machine) |
+| `pnpm ship:init name "Name"` | `make ship-init` | Provision a new instance |
+| `pnpm ship:history` | `make ship-history` | Import git history to dashboard |
+| `pnpm ship:update` | `make ship-update` | Update CLI to latest |
+| `pnpm ship status` | `make ship-status` | Show current version |
+| `pnpm ship help` | `make ship-help` | All options |
+
+### Env-Sync Commands
+
+| Node | Make | What it does |
+|------|------|--------------|
+| `pnpm env:pull` | `make env-pull` | Safe merge from Doppler (add + update, never delete) |
+| `pnpm env:push` | `make env-push` | Safe merge to Doppler |
+| `pnpm env:diff` | `make env-diff` | Show differences |
+| `pnpm env:status` | `make env-status` | Quick summary |
+| `pnpm env:pull:force` | `make env-pull-force` | Full replace from Doppler |
+| `pnpm env:push:force` | `make env-push-force` | Full replace to Doppler |
+
+### Update CLI
 
 ```bash
-# Node projects
-pnpm ship "your commit message"           # Patch bump
-pnpm ship:minor "your commit message"     # Minor bump
-pnpm ship:major "your commit message"     # Major bump
-
-# Non-Node projects
-bash scripts/matrx/ship.sh "your commit message"
-bash scripts/matrx/ship.sh --minor "your commit message"
-bash scripts/matrx/ship.sh --major "your commit message"
+pnpm tools:update       # Node
+make tools-update        # Make
+# or re-run the installer
 ```
 
-### 5. Import Git History (optional)
+Full CLI documentation: [`cli/README.md`](cli/README.md)
 
-Backfill your existing git history into the ship dashboard:
-
-```bash
-# Node projects
-pnpm ship:history --dry              # Preview first
-pnpm ship:history                    # Import all commits
-
-# Non-Node projects
-bash scripts/matrx/ship.sh history --dry
-bash scripts/matrx/ship.sh history
-```
+---
 
 ## Architecture
 
-Each project gets its own matrx-ship instance (Next.js + PostgreSQL) deployed via Docker. The CLI tool in each project communicates with its instance's API.
+Each project gets its own Ship instance (Next.js + PostgreSQL) deployed via Docker. The CLI communicates with its instance's API.
 
 ```
-Your Project (Next.js / Python / Chrome Extension / etc.)
-  └── CLI (scripts/matrx/ship.ts)
-        └── POST /api/ship ──→ Matrx Ship Instance
-                                  ├── Next.js Admin Portal
-                                  ├── PostgreSQL Database
-                                  └── Webhook Endpoints
+Your Project (Node / Python / anything)
+  └── scripts/matrx/
+        ├── ship.ts          → POST /api/ship → Your Ship Instance
+        ├── env-sync.sh      → Doppler CLI
+        └── .matrx.json      → Config (URL, API key, Doppler settings)
+```
+
+## Repo Structure
+
+```
+matrx-ship/
+  cli/                 # Source for all CLI tools (installed into other projects)
+    ship.ts            # Ship CLI
+    ship.sh            # Bash wrapper for non-Node
+    env-sync.sh        # Env-Sync CLI
+    install.sh         # Installer
+    migrate.sh         # Migration tool
+    lib/               # Shared bash utilities
+    templates/         # Config file examples
+  deploy/              # Deploy UI source
+  server-manager/      # Server Manager source
+  src/                 # Ship app source (Next.js)
+  public/              # Static assets (logo variants, favicons)
 ```
 
 ## API Endpoints
@@ -94,58 +112,15 @@ Your Project (Next.js / Python / Chrome Extension / etc.)
 | POST | `/api/ship` | API Key | Create a new version (CLI) |
 | POST | `/api/webhooks/vercel` | Webhook | Vercel deployment status |
 | POST | `/api/webhooks/github` | Webhook | GitHub push events |
-| GET | `/api/health` | No | Health check for orchestration |
+| GET | `/api/health` | No | Health check |
 
 ## Admin Portal
 
-Access at `/admin` with pages for:
-- **Dashboard** - Current version hero, quick stats, navigation
-- **Versions** - Full version history table with pagination
-- **Statistics** - Deployment metrics by period (today, week, month)
-- **Deployments** - Deployment status timeline with Vercel links
-
-## CLI Reference
-
-All commands work with either `pnpm ship:*` (Node) or `bash scripts/matrx/ship.sh *` (non-Node).
-
-| Command | Description |
-|---------|-------------|
-| `setup --token TOKEN` | Save server credentials (one-time per machine) |
-| `init PROJECT "Name"` | Auto-provision an instance on the server |
-| `init --url URL --key KEY` | Manual config (bring your own instance) |
-| `"commit message"` | Patch bump + commit + push |
-| `--minor "message"` | Minor bump + commit + push |
-| `--major "message"` | Major bump + commit + push |
-| `history` | Import full git history |
-| `history --dry` | Preview what would be imported |
-| `history --clear` | Clear existing versions and reimport |
-| `status` | Show current version from server |
-| `update` | Update CLI to the latest version |
-| `help` | Show all options |
-
-## Embeddable Components
-
-### useAppVersion Hook
-
-```tsx
-import { useAppVersion } from "@matrx/ship-client";
-
-const { isUpdateAvailable, reloadApp } = useAppVersion({
-  baseUrl: "https://myproject.yourdomain.com",
-  pollingInterval: 300000,
-});
-```
-
-### UpdateBanner Component
-
-```tsx
-import { UpdateBanner } from "@matrx/ship-client";
-
-<UpdateBanner
-  baseUrl="https://myproject.yourdomain.com"
-  pollingInterval={300000}
-/>
-```
+Each Ship instance has an admin portal at `/admin`:
+- **Dashboard** -- current version, quick stats
+- **Versions** -- full version history with pagination
+- **Statistics** -- deployment metrics by period
+- **Deployments** -- status timeline with Vercel links
 
 ## Environment Variables
 
@@ -157,8 +132,6 @@ import { UpdateBanner } from "@matrx/ship-client";
 | `VERCEL_ACCESS_TOKEN` | No | For Vercel deployment sync |
 | `VERCEL_PROJECT_ID` | No | For Vercel deployment sync |
 | `VERCEL_TEAM_ID` | No | For Vercel team projects |
-| `VERCEL_WEBHOOK_SECRET` | No | Vercel webhook signature verification |
-| `GITHUB_WEBHOOK_SECRET` | No | GitHub webhook signature verification |
 
 ## Tech Stack
 
@@ -167,10 +140,6 @@ import { UpdateBanner } from "@matrx/ship-client";
 - Tailwind CSS 4.1
 - Docker Compose
 
-## Self-Hosting
-
-See [DEPLOY.md](DEPLOY.md) for manual deployment of ship instances via Docker Compose.
-
 ## Development
 
 ```bash
@@ -178,11 +147,15 @@ pnpm install
 pnpm dev
 ```
 
-Requires a PostgreSQL database. Set `DATABASE_URL` in `.env.local` or start the Postgres container:
+Requires PostgreSQL. Set `DATABASE_URL` in `.env` or start the container:
 
 ```bash
 docker compose up db -d
 ```
+
+## Self-Hosting
+
+See [DEPLOY.md](DEPLOY.md) for manual deployment of Ship instances via Docker Compose.
 
 ## License
 

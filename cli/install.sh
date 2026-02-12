@@ -362,42 +362,56 @@ echo ""
 echo -e "${CYAN}Registering commands...${NC}"
 
 if [[ "$IS_NODE" == true ]] && [[ -f "package.json" ]]; then
+    # Pass booleans as env vars so the JS doesn't depend on bash interpolation
+    SHIP_FLAG="false"
+    ENV_FLAG="false"
+    [[ "$SETUP_SHIP" == true ]] && SHIP_FLAG="true"
+    [[ "$SETUP_ENV" == true ]] && ENV_FLAG="true"
+
     if command -v node &>/dev/null; then
-        node -e "
-const fs = require('fs');
-const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+        SETUP_SHIP_JS="$SHIP_FLAG" SETUP_ENV_JS="$ENV_FLAG" node -e '
+const fs = require("fs");
+const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
 if (!pkg.scripts) pkg.scripts = {};
 
-const shipScripts = ${SETUP_SHIP:+true}${SETUP_SHIP:-false} ? {
-    'ship': 'tsx scripts/matrx/ship.ts',
-    'ship:minor': 'tsx scripts/matrx/ship.ts --minor',
-    'ship:major': 'tsx scripts/matrx/ship.ts --major',
-    'ship:init': 'tsx scripts/matrx/ship.ts init',
-    'ship:setup': 'tsx scripts/matrx/ship.ts setup',
-    'ship:history': 'tsx scripts/matrx/ship.ts history',
-    'ship:update': 'tsx scripts/matrx/ship.ts update',
-    'ship:force-remove': 'tsx scripts/matrx/ship.ts force-remove',
+const setupShip = process.env.SETUP_SHIP_JS === "true";
+const setupEnv = process.env.SETUP_ENV_JS === "true";
+
+const shipScripts = setupShip ? {
+    "ship": "tsx scripts/matrx/ship.ts",
+    "ship:minor": "tsx scripts/matrx/ship.ts --minor",
+    "ship:major": "tsx scripts/matrx/ship.ts --major",
+    "ship:init": "tsx scripts/matrx/ship.ts init",
+    "ship:setup": "tsx scripts/matrx/ship.ts setup",
+    "ship:history": "tsx scripts/matrx/ship.ts history",
+    "ship:update": "tsx scripts/matrx/ship.ts update",
+    "ship:force-remove": "tsx scripts/matrx/ship.ts force-remove",
 } : {};
 
-const envScripts = ${SETUP_ENV:+true}${SETUP_ENV:-false} ? {
-    'env:pull': 'bash scripts/matrx/env-sync.sh pull',
-    'env:push': 'bash scripts/matrx/env-sync.sh push',
-    'env:diff': 'bash scripts/matrx/env-sync.sh diff',
-    'env:status': 'bash scripts/matrx/env-sync.sh status',
-    'env:sync': 'bash scripts/matrx/env-sync.sh sync',
-    'env:pull:force': 'bash scripts/matrx/env-sync.sh pull --force',
-    'env:push:force': 'bash scripts/matrx/env-sync.sh push --force',
+const envScripts = setupEnv ? {
+    "env:pull": "bash scripts/matrx/env-sync.sh pull",
+    "env:push": "bash scripts/matrx/env-sync.sh push",
+    "env:diff": "bash scripts/matrx/env-sync.sh diff",
+    "env:status": "bash scripts/matrx/env-sync.sh status",
+    "env:sync": "bash scripts/matrx/env-sync.sh sync",
+    "env:pull:force": "bash scripts/matrx/env-sync.sh pull --force",
+    "env:push:force": "bash scripts/matrx/env-sync.sh push --force",
 } : {};
 
-const all = { ...shipScripts, ...envScripts };
+const toolsScripts = {
+    "tools:update": "curl -sL https://raw.githubusercontent.com/armanisadeghi/matrx-ship/main/cli/install.sh | bash",
+    "tools:migrate": "curl -sL https://raw.githubusercontent.com/armanisadeghi/matrx-ship/main/cli/migrate.sh | bash",
+};
+
+const all = { ...shipScripts, ...envScripts, ...toolsScripts };
 let added = 0;
 for (const [key, val] of Object.entries(all)) {
     if (pkg.scripts[key] !== val) { pkg.scripts[key] = val; added++; }
 }
 
-fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
-if (added > 0) console.log('Updated ' + added + ' script(s)');
-" 2>/dev/null && ok "package.json scripts updated" || warn "Could not update package.json scripts"
+fs.writeFileSync("package.json", JSON.stringify(pkg, null, 2) + "\n");
+if (added > 0) console.log("Updated " + added + " script(s)");
+' 2>/dev/null && ok "package.json scripts updated" || warn "Could not update package.json scripts"
     else
         warn "Node.js not found — skipping package.json script registration"
     fi
