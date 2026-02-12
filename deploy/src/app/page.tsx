@@ -9,7 +9,7 @@ import {
   Rocket, RotateCcw, Server, GitBranch, Clock, Container,
   RefreshCw, ShieldCheck, Loader2, AlertTriangle, CheckCircle2,
   History, Trash2, Wrench, ArrowDownToLine, LogIn, ExternalLink,
-  Globe, Database, Terminal, Cpu, LayoutDashboard,
+  Globe, Database, Terminal, Cpu, LayoutDashboard, Copy, Check,
 } from "lucide-react";
 
 type BuildInfo = {
@@ -141,6 +141,7 @@ export default function DeployPage() {
   const [activeTab, setActiveTab] = useState<"deploy" | "history" | "system" | "services">("deploy");
   const [buildLogs, setBuildLogs] = useState<string[]>([]);
   const [buildPhase, setBuildPhase] = useState<string | null>(null);
+  const [logsCopied, setLogsCopied] = useState(false);
 
   const loadData = useCallback(async () => {
     try {
@@ -478,11 +479,26 @@ export default function DeployPage() {
                       {buildPhase === "done" && <CheckCircle2 className="size-4 text-green-500" />}
                       {buildPhase === "error" && <AlertTriangle className="size-4 text-destructive" />}
                     </CardTitle>
-                    {!deploying && !deployingMgr && (
-                      <Button variant="ghost" size="sm" onClick={() => { setBuildLogs([]); setBuildPhase(null); }}>
-                        Clear
+                    <div className="flex items-center gap-1">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => {
+                          navigator.clipboard.writeText(buildLogs.join("\n"));
+                          setLogsCopied(true);
+                          setTimeout(() => setLogsCopied(false), 2000);
+                          toast.success("Build logs copied to clipboard");
+                        }}
+                      >
+                        {logsCopied ? <Check className="size-4 text-green-500" /> : <Copy className="size-4" />}
+                        {logsCopied ? "Copied" : "Copy"}
                       </Button>
-                    )}
+                      {!deploying && !deployingMgr && (
+                        <Button variant="ghost" size="sm" onClick={() => { setBuildLogs([]); setBuildPhase(null); }}>
+                          Clear
+                        </Button>
+                      )}
+                    </div>
                   </div>
                 </CardHeader>
                 <CardContent>

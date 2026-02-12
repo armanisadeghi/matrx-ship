@@ -1,8 +1,16 @@
 services:
   app:
     build: .
-    ports:
-      - "${PORT:-3000}:3000"
+    networks:
+      - proxy
+      - internal
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.matrx-ship.rule=Host(`ship-matrx-ship.dev.codematrx.com`)"
+      - "traefik.http.routers.matrx-ship.entrypoints=websecure"
+      - "traefik.http.routers.matrx-ship.tls.certresolver=letsencrypt"
+      - "traefik.http.services.matrx-ship.loadbalancer.server.port=3000"
+      - "traefik.docker.network=proxy"
     environment:
       DATABASE_URL: postgresql://ship:${POSTGRES_PASSWORD:-ship}@db:5432/ship
       MATRX_SHIP_API_KEY: ${MATRX_SHIP_API_KEY:-}
@@ -20,6 +28,8 @@ services:
 
   db:
     image: postgres:16-alpine
+    networks:
+      - internal
     volumes:
       - pgdata:/var/lib/postgresql/data
     environment:
@@ -32,6 +42,12 @@ services:
       timeout: 5s
       retries: 5
     restart: unless-stopped
+
+networks:
+  proxy:
+    external: true
+  internal:
+    driver: bridge
 
 volumes:
   pgdata:

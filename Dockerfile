@@ -7,8 +7,11 @@ RUN corepack enable && corepack prepare pnpm@10.28.2 --activate
 FROM base AS deps
 WORKDIR /app
 
-COPY package.json pnpm-lock.yaml* ./
-RUN pnpm install --frozen-lockfile || pnpm install
+COPY package.json pnpm-lock.yaml* .npmrc* ./
+ENV COREPACK_ENABLE_AUTO_PIN=0
+ENV PNPM_HOME=/root/.local/share/pnpm
+RUN pnpm config set update-notifier false 2>/dev/null; \
+    pnpm install --frozen-lockfile || pnpm install
 
 # --- Build ---
 FROM base AS builder

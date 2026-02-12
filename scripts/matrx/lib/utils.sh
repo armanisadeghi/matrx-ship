@@ -183,6 +183,66 @@ get_doppler_secrets() {
 
 # ─── Env File Helpers ────────────────────────────────────────────────────────
 
+# Check if a value contains shell variable references like ${VAR} or $VAR
+value_has_shell_refs() {
+    local val="$1"
+    # Match ${VAR} or $VAR (but not escaped \$ or standalone $)
+    echo "$val" | grep -qE '\$\{[A-Za-z_][A-Za-z0-9_]*\}|\$[A-Za-z_][A-Za-z0-9_]*' 2>/dev/null
+}
+
+# Resolve shell variable references in a value against a parsed env file.
+# E.g. "postgresql://ship:${POSTGRES_PASSWORD}@db:5432/ship"
+# with POSTGRES_PASSWORD=secret → "postgresql://ship:secret@db:5432/ship"
+resolve_shell_refs() {
+    local val="$1"
+    local env_parsed_file="$2"
+    local result="$val"
+
+    # Resolve ${VAR} references
+    while true; do
+        local ref
+        ref=$(echo "$result" | grep -oE '\$\{[A-Za-z_][A-Za-z0-9_]*\}' | head -1) || true
+        [[ -z "$ref" ]] && break
+
+        local var_name="${ref#\$\{}"
+        var_name="${var_name%\}}"
+
+        local var_val=""
+        if [[ -f "$env_parsed_file" ]]; then
+            var_val=$(lookup_value "$var_name" "$env_parsed_file") || true
+        fi
+
+        if [[ -n "$var_val" ]]; then
+            result="${result//$ref/$var_val}"
+        else
+            # Can't resolve — leave as-is to avoid breaking the value
+            break
+        fi
+    done
+
+    # Resolve $VAR references (without braces)
+    while true; do
+        local ref
+        ref=$(echo "$result" | grep -oE '\$[A-Za-z_][A-Za-z0-9_]*' | head -1) || true
+        [[ -z "$ref" ]] && break
+
+        local var_name="${ref#\$}"
+
+        local var_val=""
+        if [[ -f "$env_parsed_file" ]]; then
+            var_val=$(lookup_value "$var_name" "$env_parsed_file") || true
+        fi
+
+        if [[ -n "$var_val" ]]; then
+            result="${result//$ref/$var_val}"
+        else
+            break
+        fi
+    done
+
+    echo "$result"
+}
+
 parse_env_to_sorted_file() {
     local input="$1"
     local output="$2"
