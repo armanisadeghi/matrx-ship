@@ -80,6 +80,8 @@ jobs:
           username: ${{ inputs.environment == 'production' && secrets.DEPLOY_USER || secrets.STAGING_DEPLOY_USER }}
           key: ${{ inputs.environment == 'production' && secrets.DEPLOY_SSH_KEY || secrets.STAGING_DEPLOY_SSH_KEY }}
           port: ${{ inputs.environment == 'production' && secrets.DEPLOY_PORT || secrets.STAGING_DEPLOY_PORT || 22 }}
+          timeout: 60s
+          command_timeout: 15m
           script: |
             set -e
             

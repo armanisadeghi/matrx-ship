@@ -233,6 +233,8 @@ jobs:
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
           port: ${{ secrets.DEPLOY_PORT || 22 }}
+          timeout: 60s
+          command_timeout: 15m
           script: |
             set -e
             
@@ -338,6 +340,8 @@ jobs:
           username: ${{ secrets.STAGING_DEPLOY_USER || secrets.DEPLOY_USER }}
           key: ${{ secrets.STAGING_DEPLOY_SSH_KEY || secrets.DEPLOY_SSH_KEY }}
           port: ${{ secrets.STAGING_DEPLOY_PORT || secrets.DEPLOY_PORT || 22 }}
+          timeout: 60s
+          command_timeout: 15m
           script: |
             set -e
             
