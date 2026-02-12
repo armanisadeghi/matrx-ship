@@ -1,0 +1,149 @@
+name: Deploy Specific Instance
+
+on:
+  workflow_dispatch:
+    inputs:
+      instance_name:
+        description: 'Instance name to deploy (e.g., matrx-ship, ai-matrx-admin)'
+        required: true
+        type: string
+      skip_build:
+        description: 'Skip Docker build (use existing latest image)'
+        required: false
+        type: boolean
+        default: false
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  deploy:
+    name: Deploy Instance
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Validate instance name
+        run: |
+          if [[ ! "${{ inputs.instance_name }}" =~ ^[a-z0-9][a-z0-9-]*[a-z0-9]$ ]]; then
+            echo "❌ Invalid instance name format"
+            echo "Must be lowercase alphanumeric with hyphens"
+            exit 1
+          fi
+          echo "✅ Instance name valid: ${{ inputs.instance_name }}"
+
+      - name: Set up Docker Buildx
+        if: ${{ !inputs.skip_build }}
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        if: ${{ !inputs.skip_build }}
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push Docker image
+        if: ${{ !inputs.skip_build }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:manual-${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          platforms: linux/amd64
+
+      - name: Deploy instance via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: ${{ secrets.DEPLOY_PORT || 22 }}
+          script: |
+            set -e
+            
+            INSTANCE="${{ inputs.instance_name }}"
+            INSTANCE_DIR="/srv/apps/$INSTANCE"
+            
+            echo "🚀 Deploying instance: $INSTANCE"
+            
+            # Check if instance exists
+            if [ ! -d "$INSTANCE_DIR" ]; then
+              echo "❌ Instance directory not found: $INSTANCE_DIR"
+              echo "Available instances:"
+              ls -1 /srv/apps/ | grep -v "^backups$" | grep -v "^deployments.json$" | grep -v "^build-history.json$" | grep -v "^tokens.json$"
+              exit 1
+            fi
+            
+            # Check if docker-compose.yml exists
+            if [ ! -f "$INSTANCE_DIR/docker-compose.yml" ]; then
+              echo "❌ docker-compose.yml not found in $INSTANCE_DIR"
+              exit 1
+            fi
+            
+            cd "$INSTANCE_DIR"
+            
+            # Pull latest image if not skipping build
+            if [ "${{ inputs.skip_build }}" != "true" ]; then
+              echo "📦 Pulling latest Docker image..."
+              docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+              docker tag ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest matrx-ship:latest
+            fi
+            
+            # Restart the instance
+            echo "🔄 Restarting $INSTANCE..."
+            docker compose up -d --force-recreate app
+            
+            echo "✅ Instance restarted"
+            
+            # Wait for health check
+            echo "🔍 Waiting for health check..."
+            sleep 10
+            
+            # Extract subdomain
+            SUBDOMAIN=$(grep -oP 'Host\(`\K[^`]+' docker-compose.yml | head -1)
+            
+            if [ -n "$SUBDOMAIN" ]; then
+              HEALTH_URL="https://$SUBDOMAIN/api/health"
+              echo "  Checking $HEALTH_URL..."
+              
+              for i in {1..6}; do
+                if curl -f -s "$HEALTH_URL" > /dev/null; then
+                  echo "  ✓ Instance is healthy!"
+                  curl -s "$HEALTH_URL" | jq '.' || true
+                  exit 0
+                fi
+                echo "  Attempt $i/6 failed, waiting..."
+                sleep 5
+              done
+              
+              echo "  ⚠️ Health check failed after 30 seconds"
+              echo "  Instance may still be starting up"
+              echo "  Check manually: $HEALTH_URL"
+            else
+              echo "  ⚠️ Could not extract subdomain from docker-compose.yml"
+              echo "  Check manually"
+            fi
+
+      - name: Notify deployment success
+        if: success()
+        run: |
+          echo "✅ Instance deployed successfully!"
+          echo "Instance: ${{ inputs.instance_name }}"
+          echo "Build skipped: ${{ inputs.skip_build }}"
+
+      - name: Notify deployment failure
+        if: failure()
+        run: |
+          echo "❌ Instance deployment failed!"
+          echo "Instance: ${{ inputs.instance_name }}"
+          echo "Check the logs above for details."

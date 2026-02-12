@@ -11,7 +11,16 @@ export async function register() {
       await seedDatabase();
     } catch (error) {
       logger.error({ err: error }, "[matrx-ship] Startup initialization failed");
-      // Don't crash — the app can still serve static pages
+      
+      // In production, fail fast if migrations fail
+      // This prevents the app from starting in a broken state
+      if (process.env.NODE_ENV === "production") {
+        logger.error("[matrx-ship] Critical startup failure in production - exiting");
+        process.exit(1);
+      }
+      
+      // In development, log but continue (for hot reload scenarios)
+      logger.warn("[matrx-ship] Continuing despite initialization failure (development mode)");
     }
   }
 }

@@ -1,0 +1,174 @@
+name: Rollback Deployment
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to rollback'
+        required: true
+        type: choice
+        options:
+          - production
+          - staging
+      tag:
+        description: 'Docker image tag to rollback to (e.g., main-abc1234 or rollback)'
+        required: true
+        type: string
+      confirm:
+        description: 'Type "ROLLBACK" to confirm'
+        required: true
+        type: string
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  validate:
+    name: Validate Rollback Request
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate confirmation
+        run: |
+          if [ "${{ inputs.confirm }}" != "ROLLBACK" ]; then
+            echo "❌ Rollback not confirmed. You must type 'ROLLBACK' to proceed."
+            exit 1
+          fi
+          echo "✅ Rollback confirmed"
+
+      - name: Log rollback details
+        run: |
+          echo "🔄 Rollback requested:"
+          echo "  Environment: ${{ inputs.environment }}"
+          echo "  Target tag: ${{ inputs.tag }}"
+          echo "  Requested by: ${{ github.actor }}"
+          echo "  Timestamp: $(date -u +"%Y-%m-%d %H:%M:%S UTC")"
+
+  rollback:
+    name: Execute Rollback
+    runs-on: ubuntu-latest
+    needs: validate
+    environment: ${{ inputs.environment }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify image exists
+        run: |
+          echo "🔍 Verifying image exists..."
+          docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ inputs.tag }} || {
+            echo "❌ Image tag '${{ inputs.tag }}' not found in registry"
+            echo "Available tags:"
+            curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+              "https://api.github.com/users/${{ github.repository_owner }}/packages/container/$(echo ${{ env.IMAGE_NAME }} | cut -d'/' -f2)/versions" \
+              | jq -r '.[].metadata.container.tags[]' | head -10
+            exit 1
+          }
+          echo "✅ Image found"
+
+      - name: Execute rollback via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ inputs.environment == 'production' && secrets.DEPLOY_HOST || secrets.STAGING_DEPLOY_HOST }}
+          username: ${{ inputs.environment == 'production' && secrets.DEPLOY_USER || secrets.STAGING_DEPLOY_USER }}
+          key: ${{ inputs.environment == 'production' && secrets.DEPLOY_SSH_KEY || secrets.STAGING_DEPLOY_SSH_KEY }}
+          port: ${{ inputs.environment == 'production' && secrets.DEPLOY_PORT || secrets.STAGING_DEPLOY_PORT || 22 }}
+          script: |
+            set -e
+            
+            echo "🔄 Starting rollback to tag: ${{ inputs.tag }}..."
+            
+            # Pull the target image
+            echo "📦 Pulling image..."
+            docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ inputs.tag }}
+            
+            # Tag current latest as pre-rollback
+            docker tag matrx-ship:latest matrx-ship:pre-rollback 2>/dev/null || true
+            
+            # Tag the target image as latest
+            docker tag ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ inputs.tag }} matrx-ship:latest
+            
+            # Restart all instances
+            echo "🔄 Restarting instances..."
+            cd /srv/apps
+            for instance in */; do
+              instance_name="${instance%/}"
+              if [ -f "$instance_name/docker-compose.yml" ] && grep -q "matrx-ship:latest" "$instance_name/docker-compose.yml"; then
+                echo "  → Restarting $instance_name..."
+                cd "$instance_name"
+                docker compose up -d --force-recreate app
+                cd /srv/apps
+              fi
+            done
+            
+            echo "✅ Rollback complete!"
+            echo "Previous version saved as matrx-ship:pre-rollback"
+            
+            # Health check
+            echo "🔍 Running health checks..."
+            sleep 10
+            for instance in */; do
+              instance_name="${instance%/}"
+              if [ -f "$instance_name/docker-compose.yml" ] && grep -q "matrx-ship:latest" "$instance_name/docker-compose.yml"; then
+                subdomain=$(grep -oP 'Host\(`\K[^`]+' "$instance_name/docker-compose.yml" | head -1)
+                if [ -n "$subdomain" ]; then
+                  echo "  → Checking https://$subdomain/api/health..."
+                  curl -f -s "https://$subdomain/api/health" > /dev/null && echo "    ✓ Healthy" || echo "    ✗ Unhealthy"
+                fi
+              fi
+            done
+
+      - name: Create rollback issue
+        if: success()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issue = await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `Rollback executed: ${{ inputs.environment }} to ${{ inputs.tag }}`,
+              body: `## Rollback Summary
+              
+              **Environment:** ${{ inputs.environment }}
+              **Target Tag:** ${{ inputs.tag }}
+              **Executed by:** @${{ github.actor }}
+              **Timestamp:** ${new Date().toISOString()}
+              **Workflow Run:** ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+              
+              ## Next Steps
+              
+              - [ ] Verify all services are healthy
+              - [ ] Investigate root cause of the issue
+              - [ ] Document findings
+              - [ ] Create fix and test
+              - [ ] Deploy fix when ready
+              
+              ## Rollback Details
+              
+              Previous version saved as \`matrx-ship:pre-rollback\` for emergency recovery.
+              `,
+              labels: ['rollback', 'incident', ${{ inputs.environment }}]
+            });
+            console.log(`Created issue #${issue.data.number}`);
+
+      - name: Notify rollback completion
+        if: success()
+        run: |
+          echo "✅ Rollback completed successfully!"
+          echo "Environment: ${{ inputs.environment }}"
+          echo "Rolled back to: ${{ inputs.tag }}"
+          echo "Previous version saved as: matrx-ship:pre-rollback"
+
+      - name: Notify rollback failure
+        if: failure()
+        run: |
+          echo "❌ Rollback failed!"
+          echo "Manual intervention may be required."
+          echo "Check the logs above for details."
