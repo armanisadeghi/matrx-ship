@@ -28,7 +28,8 @@
     "env:pull:force": "bash scripts/matrx/env-sync.sh pull --force",
     "env:push:force": "bash scripts/matrx/env-sync.sh push --force",
     "tools:update": "curl -sL https://raw.githubusercontent.com/armanisadeghi/matrx-ship/main/cli/install.sh | bash",
-    "tools:migrate": "curl -sL https://raw.githubusercontent.com/armanisadeghi/matrx-ship/main/cli/migrate.sh | bash"
+    "tools:migrate": "curl -sL https://raw.githubusercontent.com/armanisadeghi/matrx-ship/main/cli/migrate.sh | bash",
+    "ship:force-remove": "tsx cli/ship.ts force-remove"
   },
   "dependencies": {
     "@codemirror/lang-sql": "^6.10.0",

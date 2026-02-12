@@ -385,6 +385,7 @@ const shipScripts = setupShip ? {
     "ship:setup": "tsx scripts/matrx/ship.ts setup",
     "ship:history": "tsx scripts/matrx/ship.ts history",
     "ship:update": "tsx scripts/matrx/ship.ts update",
+    "ship:help": "tsx scripts/matrx/ship.ts help",
     "ship:force-remove": "tsx scripts/matrx/ship.ts force-remove",
 } : {};
 
@@ -477,6 +478,12 @@ ship-major:
 ship-status:
 	@bash scripts/matrx/ship.sh status
 
+ship-setup:
+	@bash scripts/matrx/ship.sh setup $(ARGS)
+
+ship-init:
+	@bash scripts/matrx/ship.sh init $(ARGS)
+
 ship-history:
 	@bash scripts/matrx/ship.sh history
 
@@ -485,6 +492,9 @@ ship-update:
 
 ship-help:
 	@bash scripts/matrx/ship.sh help
+
+ship-force-remove:
+	@bash scripts/matrx/ship.sh force-remove $(ARGS)
 
 SHIP_MAKE
         fi
@@ -515,10 +525,20 @@ env-push-force:
 ENV_MAKE
         fi
 
+        # Tools targets (always included)
+        cat << 'TOOLS_MAKE'
+tools-update:
+	@curl -sL https://raw.githubusercontent.com/armanisadeghi/matrx-ship/main/cli/install.sh | bash
+
+tools-migrate:
+	@curl -sL https://raw.githubusercontent.com/armanisadeghi/matrx-ship/main/cli/migrate.sh | bash
+
+TOOLS_MAKE
+
         # .PHONY line
-        PHONY_TARGETS=""
+        PHONY_TARGETS="tools-update tools-migrate"
         if [[ "$SETUP_SHIP" == true ]]; then
-            PHONY_TARGETS="ship ship-minor ship-major ship-status ship-history ship-update ship-help"
+            PHONY_TARGETS="ship ship-minor ship-major ship-status ship-setup ship-init ship-history ship-update ship-help ship-force-remove $PHONY_TARGETS"
         fi
         if [[ "$SETUP_ENV" == true ]]; then
             PHONY_TARGETS="$PHONY_TARGETS env-pull env-push env-diff env-status env-sync env-pull-force env-push-force"

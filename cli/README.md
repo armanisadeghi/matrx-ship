@@ -90,53 +90,22 @@ The installer will automatically migrate legacy configs to `.matrx.json`.
 
 Ship tracks versions, commits, and pushes in one command.
 
-### Node projects (via pnpm)
-
-| Command | Description |
-|---------|-------------|
-| `pnpm ship "message"` | Patch version bump + commit + push |
-| `pnpm ship:minor "message"` | Minor version bump |
-| `pnpm ship:major "message"` | Major version bump |
-| `pnpm ship:init PROJECT "Name"` | Auto-provision a Ship instance |
-| `pnpm ship:init --url URL --key KEY` | Manual config (legacy) |
-| `pnpm ship:setup --token TOKEN` | Save server credentials (one-time per machine) |
-| `pnpm ship:history` | Import full git history |
-| `pnpm ship:history --dry` | Preview import without changes |
-| `pnpm ship:history --clear` | Clear existing + reimport |
-| `pnpm ship:history --since 2024-01-01` | Import since date |
-| `pnpm ship:update` | Update CLI to latest version |
-| `pnpm ship:force-remove INSTANCE` | Forcefully remove a broken instance |
-| `pnpm ship status` | Show current version |
-| `pnpm ship help` | Show all options |
-
-### Non-Node projects (via bash)
-
-Replace `pnpm ship` with `bash scripts/matrx/ship.sh`:
-
-```bash
-bash scripts/matrx/ship.sh "commit message"
-bash scripts/matrx/ship.sh --minor "commit message"
-bash scripts/matrx/ship.sh init my-project "My Project"
-bash scripts/matrx/ship.sh help
-```
-
-### Ship workflow
-
-```
-1. One-time (per machine):  pnpm ship:setup --token YOUR_TOKEN
-2. Per project:              pnpm ship:init my-project "My Project"
-3. Import history:           pnpm ship:history
-4. Daily usage:              pnpm ship "your commit message"
-```
-
-### Environment variables
-
-| Variable | Description |
-|----------|-------------|
-| `MATRX_SHIP_SERVER_TOKEN` | Server token for provisioning |
-| `MATRX_SHIP_SERVER` | MCP server URL (default: `https://mcp.dev.codematrx.com`) |
-| `MATRX_SHIP_URL` | Instance URL (overrides config file) |
-| `MATRX_SHIP_API_KEY` | Instance API key (overrides config file) |
+| Action | pnpm (Node) | make (non-Node) | bash (any) |
+|--------|-------------|------------------|------------|
+| Patch bump + ship | `pnpm ship "msg"` | `make ship MSG="msg"` | `bash scripts/matrx/ship.sh "msg"` |
+| Minor bump | `pnpm ship:minor "msg"` | `make ship-minor MSG="msg"` | `bash scripts/matrx/ship.sh --minor "msg"` |
+| Major bump | `pnpm ship:major "msg"` | `make ship-major MSG="msg"` | `bash scripts/matrx/ship.sh --major "msg"` |
+| Auto-provision | `pnpm ship:init PROJECT "Name"` | `make ship-init ARGS='...'` | `bash scripts/matrx/ship.sh init PROJECT "Name"` |
+| Manual config | `pnpm ship:init --url URL --key KEY` | — | `bash scripts/matrx/ship.sh init --url URL --key KEY` |
+| Save credentials | `pnpm ship:setup --token TOKEN` | `make ship-setup ARGS='--token TOKEN'` | `bash scripts/matrx/ship.sh setup --token TOKEN` |
+| Import git history | `pnpm ship:history` | `make ship-history` | `bash scripts/matrx/ship.sh history` |
+| Preview import | `pnpm ship:history --dry` | — | `bash scripts/matrx/ship.sh history --dry` |
+| Clear + reimport | `pnpm ship:history --clear` | — | `bash scripts/matrx/ship.sh history --clear` |
+| Import since date | `pnpm ship:history --since DATE` | — | `bash scripts/matrx/ship.sh history --since DATE` |
+| Update CLI | `pnpm ship:update` | `make ship-update` | `bash scripts/matrx/ship.sh update` |
+| Force remove | `pnpm ship:force-remove INST` | `make ship-force-remove ARGS='INST'` | `bash scripts/matrx/ship.sh force-remove INST` |
+| Show status | `pnpm ship status` | `make ship-status` | `bash scripts/matrx/ship.sh status` |
+| Show help | `pnpm ship:help` | `make ship-help` | `bash scripts/matrx/ship.sh help` |
 
 ---
 
@@ -144,29 +113,15 @@ bash scripts/matrx/ship.sh help
 
 Env-Sync safely merges secrets between Doppler and local `.env` files.
 
-### Node projects
-
-| Command | Description |
-|---------|-------------|
-| `pnpm env:status` | Quick summary of sync state |
-| `pnpm env:diff` | Show differences between local and Doppler |
-| `pnpm env:pull` | Safe merge from Doppler (adds new keys, preserves local) |
-| `pnpm env:push` | Safe merge to Doppler (adds new keys, preserves remote) |
-| `pnpm env:sync` | Interactive per-key conflict resolution |
-| `pnpm env:pull:force` | Full replace from Doppler (overwrites local) |
-| `pnpm env:push:force` | Full replace to Doppler (overwrites remote) |
-
-### Python projects
-
-| Command | Description |
-|---------|-------------|
-| `make env-status` | Quick summary |
-| `make env-diff` | Show differences |
-| `make env-pull` | Safe merge from Doppler |
-| `make env-push` | Safe merge to Doppler |
-| `make env-sync` | Interactive conflict resolution |
-| `make env-pull-force` | Full replace from Doppler |
-| `make env-push-force` | Full replace to Doppler |
+| Action | pnpm (Node) | make (non-Node) | bash (any) |
+|--------|-------------|------------------|------------|
+| Quick summary | `pnpm env:status` | `make env-status` | `bash scripts/matrx/env-sync.sh status` |
+| Show differences | `pnpm env:diff` | `make env-diff` | `bash scripts/matrx/env-sync.sh diff` |
+| Safe pull (merge from Doppler) | `pnpm env:pull` | `make env-pull` | `bash scripts/matrx/env-sync.sh pull` |
+| Safe push (merge to Doppler) | `pnpm env:push` | `make env-push` | `bash scripts/matrx/env-sync.sh push` |
+| Interactive sync | `pnpm env:sync` | `make env-sync` | `bash scripts/matrx/env-sync.sh sync` |
+| Force pull (overwrite local) | `pnpm env:pull:force` | `make env-pull-force` | `bash scripts/matrx/env-sync.sh pull --force` |
+| Force push (overwrite Doppler) | `pnpm env:push:force` | `make env-push-force` | `bash scripts/matrx/env-sync.sh push --force` |
 
 ### How pull/push work
 
@@ -271,14 +226,15 @@ Safe to run multiple times -- it's idempotent and won't touch configs that are a
 
 ## Updating the CLI
 
+| Action | pnpm (Node) | make (non-Node) |
+|--------|-------------|------------------|
+| Update CLI files + scripts | `pnpm ship:update` | `make ship-update` |
+| Re-run full installer | `pnpm tools:update` | `make tools-update` |
+| Migrate from old install | `pnpm tools:migrate` | `make tools-migrate` |
+
+Or re-run the installer directly:
+
 ```bash
-# Node projects
-pnpm ship:update
-
-# Non-Node projects
-bash scripts/matrx/ship.sh update
-
-# Or re-run the installer
 curl -sL https://raw.githubusercontent.com/armanisadeghi/matrx-ship/main/cli/install.sh | bash
 ```
 
