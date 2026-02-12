@@ -25,6 +25,7 @@ import { toast } from "sonner";
 import { TicketDetailDialog } from "@/components/admin/ticket-detail-dialog";
 import { WorkQueue } from "@/components/admin/ticket-work-queue";
 import { TicketStats } from "@/components/admin/ticket-stats";
+import { TicketSystemDocs } from "@/components/admin/ticket-system-docs";
 
 // ─── Pipeline Stage Definitions ─────────────────
 const PIPELINE_STAGES = [
@@ -299,6 +300,7 @@ export default function TicketsPage() {
           <TabsTrigger value="pipeline">Pipeline</TabsTrigger>
           <TabsTrigger value="work-queue">Work Queue</TabsTrigger>
           <TabsTrigger value="stats">Stats</TabsTrigger>
+          <TabsTrigger value="docs">Connect & Tools</TabsTrigger>
         </TabsList>
 
         {/* Pipeline View */}
@@ -373,6 +375,11 @@ export default function TicketsPage() {
         {/* Stats View */}
         <TabsContent value="stats" className="mt-0">
           <TicketStats />
+        </TabsContent>
+
+        {/* Docs View */}
+        <TabsContent value="docs" className="mt-0">
+          <TicketSystemDocs />
         </TabsContent>
       </Tabs>
 
