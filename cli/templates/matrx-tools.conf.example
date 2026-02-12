@@ -1,0 +1,24 @@
+# Legacy config format — .matrx-tools.conf
+# This format is supported for backward compatibility.
+# New projects should use .matrx.json instead.
+
+# Doppler project and config
+DOPPLER_PROJECT="my-project"
+DOPPLER_CONFIG="prd"
+
+# Path to the .env file (relative to project root)
+ENV_FILE=".env"
+
+# ─── Multi-config (monorepo) ─────────────────────────────────
+# Uncomment and set these if you have multiple env files:
+#
+# DOPPLER_MULTI="true"
+# DOPPLER_CONFIGS="web,api"
+#
+# DOPPLER_PROJECT_web="my-project"
+# DOPPLER_CONFIG_web="web"
+# ENV_FILE_web=".env.local"
+#
+# DOPPLER_PROJECT_api="my-project"
+# DOPPLER_CONFIG_api="api"
+# ENV_FILE_api="api/.env"

@@ -1,0 +1,25 @@
+{
+  "ship": {
+    "url": "https://ship-myproject.dev.codematrx.com",
+    "apiKey": "sk_ship_YOUR_API_KEY_HERE"
+  },
+  "env": {
+    "multi": true,
+    "configs": {
+      "web": {
+        "doppler": {
+          "project": "my-project",
+          "config": "web"
+        },
+        "file": ".env.local"
+      },
+      "api": {
+        "doppler": {
+          "project": "my-project",
+          "config": "api"
+        },
+        "file": "api/.env"
+      }
+    }
+  }
+}

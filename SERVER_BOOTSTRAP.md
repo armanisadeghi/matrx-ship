@@ -30,7 +30,7 @@ How to set up the full Matrx infrastructure from scratch on a new server.
 └── projects/         # Git repos (THE SOURCE OF TRUTH)
     ├── matrx-ship/        # github.com/armanisadeghi/matrx-ship
     ├── matrx-sandbox/     # github.com/armanisadeghi/matrx-sandbox
-    └── matrx-dev-tools/   # github.com/armanisadeghi/matrx-dev-tools
+    └── (dev-tools merged into matrx-ship/cli/)
 ```
 
 ---
@@ -63,7 +63,7 @@ mkdir -p /srv/projects
 cd /srv/projects
 git clone https://github.com/armanisadeghi/matrx-ship.git
 git clone https://github.com/armanisadeghi/matrx-sandbox.git
-git clone https://github.com/armanisadeghi/matrx-dev-tools.git
+# matrx-dev-tools is now part of matrx-ship (see cli/ directory)
 ```
 
 ### 2. Create the Docker network

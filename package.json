@@ -27,7 +27,7 @@
     "env:status": "bash scripts/matrx/env-sync.sh status",
     "env:pull:force": "bash scripts/matrx/env-sync.sh pull --force",
     "env:push:force": "bash scripts/matrx/env-sync.sh push --force",
-    "tools:update": "curl -sL https://raw.githubusercontent.com/armanisadeghi/matrx-dev-tools/main/install.sh | bash"
+    "tools:update": "curl -sL https://raw.githubusercontent.com/armanisadeghi/matrx-ship/main/cli/install.sh | bash"
   },
   "dependencies": {
     "@codemirror/lang-sql": "^6.10.0",
