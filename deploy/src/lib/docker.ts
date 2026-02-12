@@ -174,7 +174,7 @@ export function getBuildInfo() {
   }
 
   const instances = Object.entries(config.instances).map(([n, info]) => {
-    const status = exec(`docker inspect ship-${n} --format '{{.State.Status}}' 2>/dev/null`);
+    const status = exec(`docker inspect ${n} --format '{{.State.Status}}' 2>/dev/null`);
     return { name: n, display_name: info.display_name, status: status.output || "not found" };
   });
 
@@ -347,7 +347,7 @@ export function getSystemInfo() {
 export function getInstances() {
   const config = loadDeployments();
   return Object.entries(config.instances).map(([name, info]) => {
-    const status = exec(`docker inspect ship-${name} --format '{{.State.Status}}' 2>/dev/null`);
+    const status = exec(`docker inspect ${name} --format '{{.State.Status}}' 2>/dev/null`);
     return { name, display_name: info.display_name, url: info.url, status: status.output || "not found" };
   });
 }

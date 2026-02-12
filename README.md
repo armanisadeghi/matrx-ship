@@ -131,7 +131,7 @@ All commands work with either `pnpm ship:*` (Node) or `bash scripts/matrx/ship.s
 import { useAppVersion } from "@matrx/ship-client";
 
 const { isUpdateAvailable, reloadApp } = useAppVersion({
-  baseUrl: "https://ship-myproject.yourdomain.com",
+  baseUrl: "https://myproject.yourdomain.com",
   pollingInterval: 300000,
 });
 ```
@@ -142,7 +142,7 @@ const { isUpdateAvailable, reloadApp } = useAppVersion({
 import { UpdateBanner } from "@matrx/ship-client";
 
 <UpdateBanner
-  baseUrl="https://ship-myproject.yourdomain.com"
+  baseUrl="https://myproject.yourdomain.com"
   pollingInterval={300000}
 />
 ```
