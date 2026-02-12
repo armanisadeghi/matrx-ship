@@ -123,7 +123,7 @@ if [ -f ".gitignore" ]; then
   fi
 fi
 
-# Node projects: add scripts to package.json
+# Node projects: add scripts to package.json and install tsx
 if [ "$IS_NODE" = true ]; then
   if command -v jq &> /dev/null; then
     UPDATED=$(jq '
@@ -148,6 +148,33 @@ if [ "$IS_NODE" = true ]; then
     echo '    "ship:history": "tsx scripts/matrx/ship.ts history",'
     echo '    "ship:update": "tsx scripts/matrx/ship.ts update"'
     echo ""
+  fi
+
+  # Ensure tsx is installed as a devDependency so "pnpm ship" works
+  # The scripts reference "tsx" directly, which requires it to be a local dependency.
+  TSX_INSTALLED=false
+  if command -v jq &> /dev/null; then
+    if jq -e '.devDependencies.tsx // .dependencies.tsx' package.json &>/dev/null; then
+      TSX_INSTALLED=true
+    fi
+  else
+    if grep -q '"tsx"' package.json 2>/dev/null; then
+      TSX_INSTALLED=true
+    fi
+  fi
+
+  if [ "$TSX_INSTALLED" = false ]; then
+    echo -e "${YELLOW}↓${NC} Installing tsx as a dev dependency..."
+    # Detect package manager and install tsx
+    if [ -f "pnpm-lock.yaml" ] || [ -f "pnpm-workspace.yaml" ]; then
+      pnpm add -D tsx 2>/dev/null && echo -e "${GREEN}✓${NC} Installed tsx via pnpm" || echo -e "${YELLOW}→${NC} Run: pnpm add -D tsx"
+    elif [ -f "yarn.lock" ]; then
+      yarn add -D tsx 2>/dev/null && echo -e "${GREEN}✓${NC} Installed tsx via yarn" || echo -e "${YELLOW}→${NC} Run: yarn add -D tsx"
+    elif [ -f "bun.lockb" ] || [ -f "bun.lock" ]; then
+      bun add -D tsx 2>/dev/null && echo -e "${GREEN}✓${NC} Installed tsx via bun" || echo -e "${YELLOW}→${NC} Run: bun add -D tsx"
+    else
+      npm install -D tsx 2>/dev/null && echo -e "${GREEN}✓${NC} Installed tsx via npm" || echo -e "${YELLOW}→${NC} Run: npm install -D tsx"
+    fi
   fi
 fi
 
