@@ -6,7 +6,7 @@ services:
       - internal
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.matrx-ship.rule=Host(`ship-matrx-ship.dev.codematrx.com`)"
+      - "traefik.http.routers.matrx-ship.rule=Host(`matrx-ship.dev.codematrx.com`)"
       - "traefik.http.routers.matrx-ship.entrypoints=websecure"
       - "traefik.http.routers.matrx-ship.tls.certresolver=letsencrypt"
       - "traefik.http.services.matrx-ship.loadbalancer.server.port=3000"
