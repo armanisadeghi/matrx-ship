@@ -1,5 +1,5 @@
 export interface TicketWidgetConfig {
-  /** Base URL of the Matrx Ship instance (e.g., "https://ship-myapp.example.com") */
+  /** Base URL of the Matrx Ship instance (e.g., "https://myapp.example.com") */
   baseUrl: string;
   /** Reporter token for authentication */
   reporterToken?: string;

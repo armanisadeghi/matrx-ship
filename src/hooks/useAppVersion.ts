@@ -12,7 +12,7 @@ interface VersionInfo {
 interface UseAppVersionOptions {
   /**
    * Base URL of the matrx-ship instance.
-   * Example: "https://ship-myproject.yourdomain.com"
+   * Example: "https://myproject.yourdomain.com"
    * If not provided, uses relative URLs (for when this runs inside the ship app itself).
    */
   baseUrl?: string;
@@ -45,7 +45,7 @@ interface UseAppVersionOptions {
  *
  * @example
  * const { isUpdateAvailable, reloadApp } = useAppVersion({
- *   baseUrl: "https://ship-myproject.yourdomain.com",
+ *   baseUrl: "https://myproject.yourdomain.com",
  *   pollingInterval: 300000,
  * });
  */

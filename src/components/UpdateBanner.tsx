@@ -8,7 +8,7 @@ import { cn } from "@/lib/utils";
 interface UpdateBannerProps {
   /**
    * Base URL of the matrx-ship instance.
-   * Example: "https://ship-myproject.yourdomain.com"
+   * Example: "https://myproject.yourdomain.com"
    * If not provided, uses relative URLs.
    */
   baseUrl?: string;
@@ -37,7 +37,7 @@ interface UpdateBannerProps {
  *
  * @example
  * <UpdateBanner
- *   baseUrl="https://ship-myproject.yourdomain.com"
+ *   baseUrl="https://myproject.yourdomain.com"
  *   pollingInterval={300000}
  * />
  */
