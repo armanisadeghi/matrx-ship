@@ -587,9 +587,18 @@ echo ""
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  PHASE 4: Read or create .matrx.json config
+#
+#  Sources are checked in priority order:
+#    1. Existing .matrx.json
+#    2. Legacy .matrx-ship.json
+#    3. Legacy .matrx-tools.conf
+#    4. Environment variables (MATRX_SHIP_URL, MATRX_SHIP_API_KEY)
+#    5. .env files (.env.local, .env, .env.development)
+#
+#  Every source is checked. Values from higher-priority sources win,
+#  but lower-priority sources fill in any gaps.
 # ══════════════════════════════════════════════════════════════════════════════
 
-# Start building the config object. If .matrx.json exists, read it; otherwise start fresh.
 MATRX_JSON=".matrx.json"
 CONFIG_EXISTED=false
 
@@ -604,41 +613,89 @@ ENV_MULTI=false
 MULTI_CONFIGS_TMP=$(mktemp)
 trap "rm -f '$MULTI_CONFIGS_TMP'" EXIT
 
-if [[ -f "$MATRX_JSON" ]] && [[ "$HAS_JQ" == true ]]; then
+# ── Helper: extract a value from a .env file ──
+read_env_var() {
+    local file="$1"
+    local key="$2"
+    if [[ ! -f "$file" ]]; then return; fi
+    local val
+    val=$(grep -E "^${key}=" "$file" 2>/dev/null | head -1 | sed 's/^[^=]*=//' | sed 's/^"//;s/"$//' | sed "s/^'//;s/'$//")
+    echo "$val"
+}
+
+# ── Source 1: Existing .matrx.json ──
+if [[ -f "$MATRX_JSON" ]]; then
     CONFIG_EXISTED=true
     info "Found existing ${MATRX_JSON}"
 
-    SHIP_URL=$(jq -r '.ship.url // empty' "$MATRX_JSON" 2>/dev/null)
-    SHIP_API_KEY=$(jq -r '.ship.apiKey // empty' "$MATRX_JSON" 2>/dev/null)
-    ENV_DOPPLER_PROJECT=$(jq -r '.env.doppler.project // empty' "$MATRX_JSON" 2>/dev/null)
-    ENV_DOPPLER_CONFIG=$(jq -r '.env.doppler.config // empty' "$MATRX_JSON" 2>/dev/null)
-    ENV_FILE_PATH=$(jq -r '.env.file // empty' "$MATRX_JSON" 2>/dev/null)
-    ENV_MULTI=$(jq -r '.env.multi // false' "$MATRX_JSON" 2>/dev/null)
-elif [[ -f ".matrx-ship.json" ]]; then
-    # Migrate from legacy config
-    CONFIG_EXISTED=true
-    info "Found legacy .matrx-ship.json — will migrate to .matrx.json"
-
     if [[ "$HAS_JQ" == true ]]; then
-        SHIP_URL=$(jq -r '.url // empty' ".matrx-ship.json" 2>/dev/null)
-        SHIP_API_KEY=$(jq -r '.apiKey // empty' ".matrx-ship.json" 2>/dev/null)
+        SHIP_URL=$(jq -r '.ship.url // empty' "$MATRX_JSON" 2>/dev/null)
+        SHIP_API_KEY=$(jq -r '.ship.apiKey // empty' "$MATRX_JSON" 2>/dev/null)
+        ENV_DOPPLER_PROJECT=$(jq -r '.env.doppler.project // empty' "$MATRX_JSON" 2>/dev/null)
+        ENV_DOPPLER_CONFIG=$(jq -r '.env.doppler.config // empty' "$MATRX_JSON" 2>/dev/null)
+        ENV_FILE_PATH=$(jq -r '.env.file // empty' "$MATRX_JSON" 2>/dev/null)
+        ENV_MULTI=$(jq -r '.env.multi // false' "$MATRX_JSON" 2>/dev/null)
     elif command -v node &>/dev/null; then
-        SHIP_URL=$(node -e "try{const c=JSON.parse(require('fs').readFileSync('.matrx-ship.json','utf8'));console.log(c.url||'')}catch{console.log('')}" 2>/dev/null)
-        SHIP_API_KEY=$(node -e "try{const c=JSON.parse(require('fs').readFileSync('.matrx-ship.json','utf8'));console.log(c.apiKey||'')}catch{console.log('')}" 2>/dev/null)
+        SHIP_URL=$(node -e "try{const c=JSON.parse(require('fs').readFileSync('.matrx.json','utf8'));console.log(c.ship?.url||'')}catch{console.log('')}" 2>/dev/null)
+        SHIP_API_KEY=$(node -e "try{const c=JSON.parse(require('fs').readFileSync('.matrx.json','utf8'));console.log(c.ship?.apiKey||'')}catch{console.log('')}" 2>/dev/null)
+        ENV_DOPPLER_PROJECT=$(node -e "try{const c=JSON.parse(require('fs').readFileSync('.matrx.json','utf8'));console.log(c.env?.doppler?.project||'')}catch{console.log('')}" 2>/dev/null)
+        ENV_DOPPLER_CONFIG=$(node -e "try{const c=JSON.parse(require('fs').readFileSync('.matrx.json','utf8'));console.log(c.env?.doppler?.config||'')}catch{console.log('')}" 2>/dev/null)
+        ENV_FILE_PATH=$(node -e "try{const c=JSON.parse(require('fs').readFileSync('.matrx.json','utf8'));console.log(c.env?.file||'')}catch{console.log('')}" 2>/dev/null)
     fi
 fi
 
-if [[ -f ".matrx-tools.conf" ]] && [[ -z "$ENV_DOPPLER_PROJECT" ]]; then
-    # Migrate from legacy env config
+# ── Source 2: Legacy .matrx-ship.json ──
+if [[ -f ".matrx-ship.json" ]]; then
+    CONFIG_EXISTED=true
+    info "Found legacy .matrx-ship.json — will migrate to .matrx.json"
+
+    local_ship_url=""
+    local_ship_key=""
+    if [[ "$HAS_JQ" == true ]]; then
+        local_ship_url=$(jq -r '.url // empty' ".matrx-ship.json" 2>/dev/null)
+        local_ship_key=$(jq -r '.apiKey // empty' ".matrx-ship.json" 2>/dev/null)
+    elif command -v node &>/dev/null; then
+        local_ship_url=$(node -e "try{const c=JSON.parse(require('fs').readFileSync('.matrx-ship.json','utf8'));console.log(c.url||'')}catch{console.log('')}" 2>/dev/null)
+        local_ship_key=$(node -e "try{const c=JSON.parse(require('fs').readFileSync('.matrx-ship.json','utf8'));console.log(c.apiKey||'')}catch{console.log('')}" 2>/dev/null)
+    fi
+
+    # Fill gaps (don't override existing values)
+    [[ -z "$SHIP_URL" ]] && SHIP_URL="$local_ship_url"
+    [[ -z "$SHIP_API_KEY" ]] && SHIP_API_KEY="$local_ship_key"
+fi
+
+# ── Source 3: Legacy .matrx-tools.conf ──
+if [[ -f ".matrx-tools.conf" ]]; then
+    info "Found legacy .matrx-tools.conf — will migrate to .matrx.json"
     # shellcheck disable=SC1091
     source ".matrx-tools.conf" 2>/dev/null || true
-    ENV_DOPPLER_PROJECT="${DOPPLER_PROJECT:-}"
-    ENV_DOPPLER_CONFIG="${DOPPLER_CONFIG:-}"
-    ENV_FILE_PATH="${ENV_FILE:-}"
+    [[ -z "$ENV_DOPPLER_PROJECT" ]] && ENV_DOPPLER_PROJECT="${DOPPLER_PROJECT:-}"
+    [[ -z "$ENV_DOPPLER_CONFIG" ]] && ENV_DOPPLER_CONFIG="${DOPPLER_CONFIG:-}"
+    [[ -z "$ENV_FILE_PATH" ]] && ENV_FILE_PATH="${ENV_FILE:-}"
     if [[ "${DOPPLER_MULTI:-false}" == "true" ]]; then
         ENV_MULTI=true
     fi
-    info "Found legacy .matrx-tools.conf — will migrate to .matrx.json"
+fi
+
+# ── Source 4: Process environment variables ──
+[[ -z "$SHIP_URL" ]] && SHIP_URL="${MATRX_SHIP_URL:-}"
+[[ -z "$SHIP_API_KEY" ]] && SHIP_API_KEY="${MATRX_SHIP_API_KEY:-}"
+
+# ── Source 5: .env files (.env.local, .env, .env.development) ──
+for _env_file in .env.local .env .env.development; do
+    if [[ -f "$_env_file" ]]; then
+        [[ -z "$SHIP_URL" ]] && SHIP_URL=$(read_env_var "$_env_file" "MATRX_SHIP_URL")
+        [[ -z "$SHIP_API_KEY" ]] && SHIP_API_KEY=$(read_env_var "$_env_file" "MATRX_SHIP_API_KEY")
+    fi
+    # Stop scanning once we have both
+    [[ -n "$SHIP_URL" ]] && [[ -n "$SHIP_API_KEY" ]] && break
+done
+
+# ── Report what was found ──
+if [[ -n "$SHIP_URL" ]] && [[ -n "$SHIP_API_KEY" ]]; then
+    ok "Ship config found (URL: ${SHIP_URL})"
+elif [[ -n "$SHIP_URL" ]] || [[ -n "$SHIP_API_KEY" ]]; then
+    warn "Partial ship config found — missing $([ -z "$SHIP_URL" ] && echo 'URL' || echo 'API key')"
 fi
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -705,6 +762,7 @@ if [[ "$SETUP_SHIP" == true ]]; then
         fi
 
         # ── Instance provisioning ──
+        # Check if we already have BOTH valid ship values (from any source)
         if [[ -n "$SHIP_URL" ]] && [[ -n "$SHIP_API_KEY" ]]; then
             ok "Ship instance already configured: ${SHIP_URL}"
         elif [[ "$HAS_TOKEN" == true ]]; then
@@ -724,6 +782,9 @@ if [[ "$SETUP_SHIP" == true ]]; then
                     if [[ -f "$MATRX_JSON" ]] && [[ "$HAS_JQ" == true ]]; then
                         SHIP_URL=$(jq -r '.ship.url // empty' "$MATRX_JSON" 2>/dev/null)
                         SHIP_API_KEY=$(jq -r '.ship.apiKey // empty' "$MATRX_JSON" 2>/dev/null)
+                    elif [[ -f "$MATRX_JSON" ]] && command -v node &>/dev/null; then
+                        SHIP_URL=$(node -e "try{const c=JSON.parse(require('fs').readFileSync('.matrx.json','utf8'));console.log(c.ship?.url||'')}catch{console.log('')}" 2>/dev/null)
+                        SHIP_API_KEY=$(node -e "try{const c=JSON.parse(require('fs').readFileSync('.matrx.json','utf8'));console.log(c.ship?.apiKey||'')}catch{console.log('')}" 2>/dev/null)
                     elif [[ -f ".matrx-ship.json" ]]; then
                         if [[ "$HAS_JQ" == true ]]; then
                             SHIP_URL=$(jq -r '.url // empty' ".matrx-ship.json" 2>/dev/null)
@@ -733,6 +794,27 @@ if [[ "$SETUP_SHIP" == true ]]; then
                 else
                     warn "Instance provisioning failed. Try later: ${SHIP_INIT_DISPLAY} ${PROJECT_NAME} \"${DISPLAY_NAME}\""
                 fi
+            fi
+        else
+            # No token and no ship config — prompt for manual values
+            echo ""
+            echo -e "  ${YELLOW}Ship instance not configured and no server token available.${NC}"
+            echo -e "  ${DIM}If you have an existing instance, enter the details below.${NC}"
+            echo -e "  ${DIM}Otherwise press Enter to skip and set up later.${NC}"
+            echo ""
+
+            MANUAL_URL=$(prompt_user "Ship URL (e.g. https://ship-myproject.dev.codematrx.com)" "")
+            if [[ -n "$MANUAL_URL" ]]; then
+                MANUAL_KEY=$(prompt_user "Ship API Key (sk_ship_...)" "")
+                if [[ -n "$MANUAL_KEY" ]]; then
+                    SHIP_URL="$MANUAL_URL"
+                    SHIP_API_KEY="$MANUAL_KEY"
+                    ok "Ship config set manually"
+                else
+                    warn "API key required with URL. Set up later: ${SHIP_INIT_DISPLAY} my-project \"My Project\""
+                fi
+            else
+                warn "Ship not configured. Run: ${SHIP_INIT_DISPLAY} my-project \"My Project\""
             fi
         fi
     fi
@@ -869,6 +951,14 @@ if [[ "$SETUP_ENV" == true ]]; then
     fi
 
     # ── Env config ──
+    # Ensure defaults for config and file path even when project was found
+    if [[ -n "$ENV_DOPPLER_PROJECT" ]] && [[ -z "$ENV_DOPPLER_CONFIG" ]]; then
+        ENV_DOPPLER_CONFIG="dev"
+    fi
+    if [[ -n "$ENV_DOPPLER_PROJECT" ]] && [[ -z "$ENV_FILE_PATH" ]]; then
+        ENV_FILE_PATH=$(detect_env_file "$PROJECT_TYPE")
+    fi
+
     if [[ -n "$ENV_DOPPLER_PROJECT" ]] && [[ "$ENV_MULTI" != "true" ]]; then
         ok "Env-sync already configured: ${ENV_DOPPLER_PROJECT}/${ENV_DOPPLER_CONFIG} -> ${ENV_FILE_PATH}"
     elif [[ "$ENV_MULTI" == "true" ]]; then
@@ -939,18 +1029,24 @@ echo -e "${CYAN}Writing config...${NC}"
 
 write_config() {
     # Build JSON config. We use a heredoc approach if jq is available, otherwise node.
+    # IMPORTANT: We always write ALL sections we have data for, even partial.
+    # This ensures we don't lose data from previous installs.
     if [[ "$HAS_JQ" == true ]]; then
-        # Start with empty object
+        # If .matrx.json already exists, read it as the base to preserve any extra keys
         local json='{}'
-
-        # Add ship config
-        if [[ -n "$SHIP_URL" ]] && [[ -n "$SHIP_API_KEY" ]]; then
-            json=$(echo "$json" | jq --arg url "$SHIP_URL" --arg key "$SHIP_API_KEY" \
-                '. + { ship: { url: $url, apiKey: $key } }')
+        if [[ -f "$MATRX_JSON" ]]; then
+            json=$(jq '.' "$MATRX_JSON" 2>/dev/null || echo '{}')
         fi
 
-        # Add env config
-        if [[ "$SETUP_ENV" == true ]] && [[ -n "$ENV_DOPPLER_PROJECT" ]]; then
+        # Add/update ship config — always write both fields if either is present
+        if [[ -n "$SHIP_URL" ]] || [[ -n "$SHIP_API_KEY" ]]; then
+            json=$(echo "$json" | jq \
+                --arg url "${SHIP_URL}" --arg key "${SHIP_API_KEY}" \
+                '.ship = { url: $url, apiKey: $key }')
+        fi
+
+        # Add/update env config (only if we have actual Doppler project info)
+        if [[ -n "$ENV_DOPPLER_PROJECT" ]]; then
             if [[ "$ENV_MULTI" == "true" ]] && [[ -s "$MULTI_CONFIGS_TMP" ]]; then
                 # Build multi-config
                 local configs_json='{}'
@@ -961,27 +1057,37 @@ write_config() {
                 done < "$MULTI_CONFIGS_TMP"
 
                 json=$(echo "$json" | jq --argjson configs "$configs_json" \
-                    '. + { env: { multi: true, configs: $configs } }')
-            else
+                    '.env = { multi: true, configs: $configs }')
+            elif [[ -n "$ENV_DOPPLER_PROJECT" ]]; then
                 json=$(echo "$json" | jq \
                     --arg dp "$ENV_DOPPLER_PROJECT" \
                     --arg dc "${ENV_DOPPLER_CONFIG:-dev}" \
                     --arg ef "${ENV_FILE_PATH:-.env}" \
-                    '. + { env: { doppler: { project: $dp, config: $dc }, file: $ef } }')
+                    '.env = { doppler: { project: $dp, config: $dc }, file: $ef }')
             fi
         fi
 
         echo "$json" | jq '.' > "$MATRX_JSON"
     elif command -v node &>/dev/null; then
         node -e "
-const config = {};
-if ('${SHIP_URL}' && '${SHIP_API_KEY}') {
-    config.ship = { url: '${SHIP_URL}', apiKey: '${SHIP_API_KEY}' };
+const fs = require('fs');
+let config = {};
+try { config = JSON.parse(fs.readFileSync('${MATRX_JSON}', 'utf-8')); } catch {}
+
+const shipUrl = '${SHIP_URL}';
+const shipKey = '${SHIP_API_KEY}';
+if (shipUrl || shipKey) {
+    config.ship = { url: shipUrl, apiKey: shipKey };
 }
-if ('${ENV_DOPPLER_PROJECT}') {
-    config.env = { doppler: { project: '${ENV_DOPPLER_PROJECT}', config: '${ENV_DOPPLER_CONFIG:-dev}' }, file: '${ENV_FILE_PATH:-.env}' };
+
+const dp = '${ENV_DOPPLER_PROJECT}';
+const dc = '${ENV_DOPPLER_CONFIG:-dev}';
+const ef = '${ENV_FILE_PATH:-.env}';
+if (dp) {
+    config.env = { doppler: { project: dp, config: dc }, file: ef };
 }
-require('fs').writeFileSync('${MATRX_JSON}', JSON.stringify(config, null, 2) + '\n');
+
+fs.writeFileSync('${MATRX_JSON}', JSON.stringify(config, null, 2) + '\n');
 " 2>/dev/null
     else
         warn "Neither jq nor node available — could not write .matrx.json"
@@ -990,13 +1096,10 @@ require('fs').writeFileSync('${MATRX_JSON}', JSON.stringify(config, null, 2) + '
     fi
 }
 
-# Only write if we have something to write
-if [[ -n "$SHIP_URL" ]] || [[ -n "$ENV_DOPPLER_PROJECT" ]]; then
-    if write_config; then
-        ok "Wrote ${MATRX_JSON}"
-    fi
-else
-    info "No config values to write yet"
+# Always write config — even partial configs are better than no config.
+# The CLI will fill in gaps from env vars at runtime.
+if write_config; then
+    ok "Wrote ${MATRX_JSON}"
 fi
 
 # ── Update .gitignore ──
@@ -1040,12 +1143,99 @@ echo ""
 #  PHASE 8: Summary
 # ══════════════════════════════════════════════════════════════════════════════
 
-echo -e "${GREEN}${BOLD}╔══════════════════════════════════════════╗${NC}"
-echo -e "${GREEN}${BOLD}║  Installation complete!                   ║${NC}"
-echo -e "${GREEN}${BOLD}╚══════════════════════════════════════════╝${NC}"
+# ══════════════════════════════════════════════════════════════════════════════
+#  PHASE 8: Post-install validation
+#
+#  Before declaring success, verify the config is actually usable.
+#  This catches the case where provisioning failed but the installer continued.
+# ══════════════════════════════════════════════════════════════════════════════
+
+INSTALL_OK=true
+SHIP_READY=false
+ENV_READY=false
+POST_INSTALL_ISSUES=()
+
+# Re-read the final config to validate it
+if [[ -f "$MATRX_JSON" ]]; then
+    FINAL_SHIP_URL=""
+    FINAL_SHIP_KEY=""
+    FINAL_DOPPLER=""
+
+    if [[ "$HAS_JQ" == true ]]; then
+        FINAL_SHIP_URL=$(jq -r '.ship.url // empty' "$MATRX_JSON" 2>/dev/null)
+        FINAL_SHIP_KEY=$(jq -r '.ship.apiKey // empty' "$MATRX_JSON" 2>/dev/null)
+        FINAL_DOPPLER=$(jq -r '.env.doppler.project // empty' "$MATRX_JSON" 2>/dev/null)
+    elif command -v node &>/dev/null; then
+        FINAL_SHIP_URL=$(node -e "try{const c=JSON.parse(require('fs').readFileSync('.matrx.json','utf8'));console.log(c.ship?.url||'')}catch{console.log('')}" 2>/dev/null)
+        FINAL_SHIP_KEY=$(node -e "try{const c=JSON.parse(require('fs').readFileSync('.matrx.json','utf8'));console.log(c.ship?.apiKey||'')}catch{console.log('')}" 2>/dev/null)
+        FINAL_DOPPLER=$(node -e "try{const c=JSON.parse(require('fs').readFileSync('.matrx.json','utf8'));console.log(c.env?.doppler?.project||'')}catch{console.log('')}" 2>/dev/null)
+    fi
+
+    # Validate ship config
+    if [[ "$SETUP_SHIP" == true ]]; then
+        if [[ -n "$FINAL_SHIP_URL" ]] && [[ -n "$FINAL_SHIP_KEY" ]] && \
+           [[ "$FINAL_SHIP_URL" != *"yourdomain"* ]] && [[ "$FINAL_SHIP_URL" != *"YOUR"* ]] && \
+           [[ "$FINAL_SHIP_KEY" != *"YOUR"* ]] && [[ "$FINAL_SHIP_KEY" != *"xxx"* ]]; then
+            SHIP_READY=true
+        else
+            INSTALL_OK=false
+            if [[ -z "$FINAL_SHIP_URL" ]] && [[ -z "$FINAL_SHIP_KEY" ]]; then
+                POST_INSTALL_ISSUES+=("Ship URL and API key are both missing")
+            elif [[ -z "$FINAL_SHIP_URL" ]]; then
+                POST_INSTALL_ISSUES+=("Ship URL is missing (have API key)")
+            elif [[ -z "$FINAL_SHIP_KEY" ]]; then
+                POST_INSTALL_ISSUES+=("Ship API key is missing (have URL: ${FINAL_SHIP_URL})")
+            fi
+        fi
+    fi
+
+    # Validate env config
+    if [[ "$SETUP_ENV" == true ]]; then
+        if [[ -n "$FINAL_DOPPLER" ]]; then
+            ENV_READY=true
+        else
+            # Env is less critical — don't fail the install
+            POST_INSTALL_ISSUES+=("Doppler project not configured (env-sync won't work)")
+        fi
+    fi
+else
+    INSTALL_OK=false
+    POST_INSTALL_ISSUES+=(".matrx.json was not created")
+fi
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  PHASE 9: Summary
+# ══════════════════════════════════════════════════════════════════════════════
+
+if [[ "$INSTALL_OK" == true ]]; then
+    echo -e "${GREEN}${BOLD}╔══════════════════════════════════════════╗${NC}"
+    echo -e "${GREEN}${BOLD}║  Installation complete!                   ║${NC}"
+    echo -e "${GREEN}${BOLD}╚══════════════════════════════════════════╝${NC}"
+else
+    echo -e "${YELLOW}${BOLD}╔══════════════════════════════════════════╗${NC}"
+    echo -e "${YELLOW}${BOLD}║  Installation incomplete — action needed ║${NC}"
+    echo -e "${YELLOW}${BOLD}╚══════════════════════════════════════════╝${NC}"
+fi
 echo ""
 info "CLI files:  ${INSTALL_DIR}/"
 info "Config:     ${MATRX_JSON}"
+echo ""
+
+# Show readiness status
+if [[ "$SETUP_SHIP" == true ]]; then
+    if [[ "$SHIP_READY" == true ]]; then
+        echo -e "  ${GREEN}●${NC} Ship: ${GREEN}Ready${NC} — ${FINAL_SHIP_URL}"
+    else
+        echo -e "  ${RED}●${NC} Ship: ${RED}Not ready${NC} — missing configuration"
+    fi
+fi
+if [[ "$SETUP_ENV" == true ]]; then
+    if [[ "$ENV_READY" == true ]]; then
+        echo -e "  ${GREEN}●${NC} Env-Sync: ${GREEN}Ready${NC}"
+    else
+        echo -e "  ${YELLOW}●${NC} Env-Sync: ${YELLOW}Not configured${NC}"
+    fi
+fi
 echo ""
 
 if [[ "$SETUP_SHIP" == true ]]; then
@@ -1085,6 +1275,35 @@ if [[ "$SETUP_ENV" == true ]]; then
         echo -e "    ${CYAN}make env-sync${NC}        Interactive conflict resolution"
     fi
     echo ""
+fi
+
+# Print issues that need resolution
+if [[ ${#POST_INSTALL_ISSUES[@]} -gt 0 ]]; then
+    echo -e "  ${RED}${BOLD}Issues to fix before using ship:${NC}"
+    for issue in "${POST_INSTALL_ISSUES[@]}"; do
+        echo -e "    ${RED}✗${NC} $issue"
+    done
+    echo ""
+
+    if [[ "$SETUP_SHIP" == true ]] && [[ "$SHIP_READY" == false ]]; then
+        DETECTED_NAME=$(detect_project_name)
+        echo -e "  ${BOLD}To fix ship, do ONE of the following:${NC}"
+        echo ""
+        echo -e "    ${CYAN}Option 1${NC} — Auto-provision (recommended):"
+        if [[ "$IS_NODE" == true ]]; then
+            echo -e "      ${CYAN}pnpm ship:init ${DETECTED_NAME} \"$(detect_display_name "$DETECTED_NAME")\"${NC}"
+        else
+            echo -e "      ${CYAN}bash scripts/matrx/ship.sh init ${DETECTED_NAME} \"$(detect_display_name "$DETECTED_NAME")\"${NC}"
+        fi
+        echo ""
+        echo -e "    ${CYAN}Option 2${NC} — Add to your .env.local or .env file:"
+        echo -e "      ${DIM}MATRX_SHIP_URL=\"https://ship-${DETECTED_NAME}.dev.codematrx.com\"${NC}"
+        echo -e "      ${DIM}MATRX_SHIP_API_KEY=\"sk_ship_your_key_here\"${NC}"
+        echo ""
+        echo -e "    ${CYAN}Option 3${NC} — Re-run the installer after fixing:"
+        echo -e "      ${CYAN}curl -sL ${REPO_RAW}/cli/install.sh | bash${NC}"
+        echo ""
+    fi
 fi
 
 # Print warnings summary if any

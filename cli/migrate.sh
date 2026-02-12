@@ -335,110 +335,165 @@ if [[ "$HAS_ENV" == true ]]; then
     fi
 fi
 
-# ─── Step 3: Migrate config files ───────────────────────────────────────────
+# ─── Step 3: Config migration & validation ──────────────────────────────────
 
-header "Step 3 — Config migration"
+header "Step 3 — Config migration & validation"
 
 CONFIG_MIGRATED=false
 
-if [[ "$HAS_MATRX_JSON" == true ]]; then
-    skip ".matrx.json already exists — no migration needed"
-elif [[ "$HAS_LEGACY_SHIP_JSON" == true ]] || [[ "$HAS_LEGACY_TOOLS_CONF" == true ]]; then
-    # We have legacy config(s) to migrate
-    SHIP_URL=""
-    SHIP_KEY=""
-    DOPPLER_PROJECT=""
-    DOPPLER_CONFIG=""
-    ENV_FILE=""
-    DOPPLER_MULTI=""
-    LOCAL_KEYS=""
+# ── Helper: extract a value from a .env file ──
+read_env_var() {
+    local file="$1"
+    local key="$2"
+    if [[ ! -f "$file" ]]; then return; fi
+    local val
+    val=$(grep -E "^${key}=" "$file" 2>/dev/null | head -1 | sed 's/^[^=]*=//' | sed 's/^"//;s/"$//' | sed "s/^'//;s/'$//")
+    echo "$val"
+}
 
-    # Read from .matrx-ship.json
-    if [[ "$HAS_LEGACY_SHIP_JSON" == true ]] && command -v node &>/dev/null; then
-        SHIP_URL=$(node -e "const c=require('./.matrx-ship.json'); console.log(c.url||'')" 2>/dev/null || echo "")
-        SHIP_KEY=$(node -e "const c=require('./.matrx-ship.json'); console.log(c.apiKey||'')" 2>/dev/null || echo "")
+# Collect config values from ALL sources (in priority order)
+MIG_SHIP_URL=""
+MIG_SHIP_KEY=""
+MIG_DOPPLER_PROJECT=""
+MIG_DOPPLER_CONFIG=""
+MIG_ENV_FILE=""
+MIG_DOPPLER_MULTI=""
+MIG_LOCAL_KEYS=""
+
+# Source 1: Existing .matrx.json
+if [[ "$HAS_MATRX_JSON" == true ]] && command -v node &>/dev/null; then
+    MIG_SHIP_URL=$(node -e "try{const c=JSON.parse(require('fs').readFileSync('.matrx.json','utf8'));console.log(c.ship?.url||'')}catch{console.log('')}" 2>/dev/null)
+    MIG_SHIP_KEY=$(node -e "try{const c=JSON.parse(require('fs').readFileSync('.matrx.json','utf8'));console.log(c.ship?.apiKey||'')}catch{console.log('')}" 2>/dev/null)
+    MIG_DOPPLER_PROJECT=$(node -e "try{const c=JSON.parse(require('fs').readFileSync('.matrx.json','utf8'));console.log(c.env?.doppler?.project||'')}catch{console.log('')}" 2>/dev/null)
+    MIG_DOPPLER_CONFIG=$(node -e "try{const c=JSON.parse(require('fs').readFileSync('.matrx.json','utf8'));console.log(c.env?.doppler?.config||'')}catch{console.log('')}" 2>/dev/null)
+    MIG_ENV_FILE=$(node -e "try{const c=JSON.parse(require('fs').readFileSync('.matrx.json','utf8'));console.log(c.env?.file||'')}catch{console.log('')}" 2>/dev/null)
+fi
+
+# Source 2: Legacy .matrx-ship.json
+if [[ "$HAS_LEGACY_SHIP_JSON" == true ]] && command -v node &>/dev/null; then
+    [[ -z "$MIG_SHIP_URL" ]] && MIG_SHIP_URL=$(node -e "const c=require('./.matrx-ship.json'); console.log(c.url||'')" 2>/dev/null || echo "")
+    [[ -z "$MIG_SHIP_KEY" ]] && MIG_SHIP_KEY=$(node -e "const c=require('./.matrx-ship.json'); console.log(c.apiKey||'')" 2>/dev/null || echo "")
+fi
+
+# Source 3: Legacy .matrx-tools.conf
+if [[ "$HAS_LEGACY_TOOLS_CONF" == true ]]; then
+    source .matrx-tools.conf 2>/dev/null || true
+    [[ -z "$MIG_DOPPLER_PROJECT" ]] && MIG_DOPPLER_PROJECT="${DOPPLER_PROJECT:-}"
+    [[ -z "$MIG_DOPPLER_CONFIG" ]] && MIG_DOPPLER_CONFIG="${DOPPLER_CONFIG:-}"
+    [[ -z "$MIG_ENV_FILE" ]] && MIG_ENV_FILE="${ENV_FILE:-}"
+    MIG_DOPPLER_MULTI="${DOPPLER_MULTI:-}"
+    MIG_LOCAL_KEYS="${ENV_LOCAL_KEYS:-}"
+fi
+
+# Source 4: Process environment variables
+[[ -z "$MIG_SHIP_URL" ]] && MIG_SHIP_URL="${MATRX_SHIP_URL:-}"
+[[ -z "$MIG_SHIP_KEY" ]] && MIG_SHIP_KEY="${MATRX_SHIP_API_KEY:-}"
+
+# Source 5: .env files
+for _env_file in .env.local .env .env.development; do
+    if [[ -f "$_env_file" ]]; then
+        [[ -z "$MIG_SHIP_URL" ]] && MIG_SHIP_URL=$(read_env_var "$_env_file" "MATRX_SHIP_URL")
+        [[ -z "$MIG_SHIP_KEY" ]] && MIG_SHIP_KEY=$(read_env_var "$_env_file" "MATRX_SHIP_API_KEY")
     fi
+    [[ -n "$MIG_SHIP_URL" ]] && [[ -n "$MIG_SHIP_KEY" ]] && break
+done
 
-    # Read from .matrx-tools.conf
-    if [[ "$HAS_LEGACY_TOOLS_CONF" == true ]]; then
-        source .matrx-tools.conf 2>/dev/null || true
-        DOPPLER_PROJECT="${DOPPLER_PROJECT:-}"
-        DOPPLER_CONFIG="${DOPPLER_CONFIG:-}"
-        ENV_FILE="${ENV_FILE:-}"
-        DOPPLER_MULTI="${DOPPLER_MULTI:-}"
-        LOCAL_KEYS="${ENV_LOCAL_KEYS:-}"
-    fi
+# Now build/update .matrx.json with all collected values
+if command -v node &>/dev/null; then
+    node -e "
+        const fs = require('fs');
 
-    # Build .matrx.json
-    if command -v node &>/dev/null; then
-        node -e "
-            const fs = require('fs');
-            const config = {};
+        // Start with existing config if available
+        let config = {};
+        try { config = JSON.parse(fs.readFileSync('.matrx.json', 'utf-8')); } catch {}
 
-            // Ship section
-            const url = '${SHIP_URL}';
-            const key = '${SHIP_KEY}';
-            if (url || key) {
-                config.ship = {};
-                if (url) config.ship.url = url;
-                if (key) config.ship.apiKey = key;
+        // Ship section — always write both fields if either is present
+        const url = '${MIG_SHIP_URL}';
+        const key = '${MIG_SHIP_KEY}';
+        if (url || key) {
+            config.ship = { url: url || '', apiKey: key || '' };
+        }
+
+        // Env section
+        const dopplerProject = '${MIG_DOPPLER_PROJECT}';
+        const dopplerConfig = '${MIG_DOPPLER_CONFIG}';
+        const envFile = '${MIG_ENV_FILE}';
+        const multi = '${MIG_DOPPLER_MULTI}';
+        const localKeys = '${MIG_LOCAL_KEYS}'.split(',').filter(Boolean);
+
+        if (dopplerProject || dopplerConfig || envFile) {
+            if (!config.env) config.env = {};
+
+            if (multi === 'true') {
+                config.env.multi = true;
+                config.env._note = 'Multi-config was detected. Please verify configs section manually.';
+            } else {
+                config.env.doppler = {
+                    project: dopplerProject || config.env?.doppler?.project || '',
+                    config: dopplerConfig || config.env?.doppler?.config || 'dev'
+                };
+                config.env.file = envFile || config.env?.file || '.env';
             }
 
-            // Env section
-            const dopplerProject = '${DOPPLER_PROJECT}';
-            const dopplerConfig = '${DOPPLER_CONFIG}';
-            const envFile = '${ENV_FILE}';
-            const multi = '${DOPPLER_MULTI}';
-            const localKeys = '${LOCAL_KEYS}'.split(',').filter(Boolean);
-
-            if (dopplerProject || dopplerConfig || envFile) {
-                config.env = {};
-
-                if (multi === 'true') {
-                    config.env.multi = true;
-                    // Multi-config needs more complex parsing — leave a note
-                    config.env._note = 'Multi-config was detected. Please verify configs section manually.';
-                } else {
-                    if (dopplerProject || dopplerConfig) {
-                        config.env.doppler = {};
-                        if (dopplerProject) config.env.doppler.project = dopplerProject;
-                        if (dopplerConfig) config.env.doppler.config = dopplerConfig;
-                    }
-                    if (envFile) config.env.file = envFile;
-                }
-
-                if (localKeys.length > 0) {
-                    config.env.localKeys = localKeys;
-                }
+            if (localKeys.length > 0) {
+                config.env.localKeys = localKeys;
             }
+        }
 
-            if (Object.keys(config).length > 0) {
-                fs.writeFileSync('.matrx.json', JSON.stringify(config, null, 2) + '\n');
-            }
-        " 2>/dev/null
+        fs.writeFileSync('.matrx.json', JSON.stringify(config, null, 2) + '\n');
+    " 2>/dev/null
 
-        if [[ -f ".matrx.json" ]]; then
-            changed "Migrated config to .matrx.json"
-            CONFIG_MIGRATED=true
-
-            # Remove legacy config files — their values are now in .matrx.json
-            if [[ "$HAS_LEGACY_SHIP_JSON" == true ]]; then
-                rm -f ".matrx-ship.json"
-                changed "Removed .matrx-ship.json (migrated into .matrx.json)"
-            fi
-            if [[ "$HAS_LEGACY_TOOLS_CONF" == true ]]; then
-                rm -f ".matrx-tools.conf"
-                changed "Removed .matrx-tools.conf (migrated into .matrx.json)"
-            fi
+    if [[ -f ".matrx.json" ]]; then
+        if [[ "$HAS_MATRX_JSON" == true ]]; then
+            changed "Validated and updated .matrx.json"
         else
-            skip "No config values to migrate"
+            changed "Created .matrx.json from collected config values"
         fi
-    else
-        warn "Node.js not available — cannot migrate config to .matrx.json"
-        info "Legacy config files still work fine. Migrate later with: pnpm tools:migrate"
+        CONFIG_MIGRATED=true
+
+        # Remove legacy config files — their values are now in .matrx.json
+        if [[ "$HAS_LEGACY_SHIP_JSON" == true ]]; then
+            rm -f ".matrx-ship.json"
+            changed "Removed .matrx-ship.json (migrated into .matrx.json)"
+        fi
+        if [[ "$HAS_LEGACY_TOOLS_CONF" == true ]]; then
+            rm -f ".matrx-tools.conf"
+            changed "Removed .matrx-tools.conf (migrated into .matrx.json)"
+        fi
     fi
 else
-    skip "No config files to migrate"
+    warn "Node.js not available — cannot migrate/validate config"
+    info "Legacy config files still work fine. Migrate later with: pnpm tools:migrate"
+fi
+
+# ── Validate the final config ──
+SHIP_VALID=false
+ENV_VALID=false
+
+if [[ -n "$MIG_SHIP_URL" ]] && [[ -n "$MIG_SHIP_KEY" ]] && \
+   [[ "$MIG_SHIP_URL" != *"yourdomain"* ]] && [[ "$MIG_SHIP_URL" != *"YOUR"* ]] && \
+   [[ "$MIG_SHIP_KEY" != *"YOUR"* ]] && [[ "$MIG_SHIP_KEY" != *"xxx"* ]]; then
+    SHIP_VALID=true
+    skip "Ship config: ✓ ${MIG_SHIP_URL}"
+elif [[ "$HAS_SHIP" == true ]]; then
+    warn "Ship config is incomplete — 'pnpm ship' will not work"
+    if [[ -z "$MIG_SHIP_URL" ]] && [[ -z "$MIG_SHIP_KEY" ]]; then
+        info "Both URL and API key are missing"
+    elif [[ -z "$MIG_SHIP_URL" ]]; then
+        info "Ship URL is missing"
+    else
+        info "Ship API key is missing"
+    fi
+    info "Fix: Add MATRX_SHIP_URL and MATRX_SHIP_API_KEY to your .env.local"
+    info "  or: pnpm ship:init my-project \"My Project\""
+fi
+
+if [[ -n "$MIG_DOPPLER_PROJECT" ]]; then
+    ENV_VALID=true
+    skip "Env-sync config: ✓ ${MIG_DOPPLER_PROJECT}/${MIG_DOPPLER_CONFIG:-dev}"
+elif [[ "$HAS_ENV" == true ]]; then
+    warn "Env-sync config is incomplete — 'pnpm env:pull' will not work"
+    info "Fix: Re-run the installer: curl -sL ${REPO_RAW}/cli/install.sh | bash"
 fi
 
 # ─── Step 4: Update package.json / Makefile ──────────────────────────────────
@@ -671,10 +726,31 @@ fi
 echo ""
 echo -e "${BOLD}${CYAN}──────────────────────────────────────────${NC}"
 
-if [[ ${#CHANGES[@]} -gt 0 ]]; then
-    echo -e "${BOLD}${GREEN}  ✅ Migration complete — ${#CHANGES[@]} change(s)${NC}"
+if [[ ${#WARNINGS[@]} -gt 0 ]]; then
+    echo -e "${BOLD}${YELLOW}  ⚠️  Migration complete — issues found${NC}"
 else
-    echo -e "${BOLD}${GREEN}  ✅ Everything is already up to date!${NC}"
+    if [[ ${#CHANGES[@]} -gt 0 ]]; then
+        echo -e "${BOLD}${GREEN}  ✅ Migration complete — ${#CHANGES[@]} change(s)${NC}"
+    else
+        echo -e "${BOLD}${GREEN}  ✅ Everything is already up to date!${NC}"
+    fi
+fi
+
+# Readiness indicators
+echo ""
+if [[ "$HAS_SHIP" == true ]]; then
+    if [[ "$SHIP_VALID" == true ]]; then
+        echo -e "  ${GREEN}●${NC} Ship:     ${GREEN}Ready${NC}"
+    else
+        echo -e "  ${RED}●${NC} Ship:     ${RED}Not ready — config incomplete${NC}"
+    fi
+fi
+if [[ "$HAS_ENV" == true ]]; then
+    if [[ "$ENV_VALID" == true ]]; then
+        echo -e "  ${GREEN}●${NC} Env-Sync: ${GREEN}Ready${NC}"
+    else
+        echo -e "  ${YELLOW}●${NC} Env-Sync: ${YELLOW}Not configured${NC}"
+    fi
 fi
 
 if [[ ${#WARNINGS[@]} -gt 0 ]]; then
@@ -686,28 +762,37 @@ fi
 
 echo -e "${BOLD}${CYAN}──────────────────────────────────────────${NC}"
 
-# Show next steps if there were changes
-if [[ ${#CHANGES[@]} -gt 0 ]]; then
-    echo ""
-    echo -e "  ${BOLD}Next steps:${NC}"
+# Show next steps
+echo ""
+echo -e "  ${BOLD}Next steps:${NC}"
 
-    if [[ "$IS_NODE" == true ]]; then
-        if [[ "$UPDATED_ANY_FILE" == true ]] || [[ "$PKG_UPDATED" == true ]]; then
-            echo -e "    1. Run ${CYAN}pnpm install${NC} (if tsx was added)"
-        fi
-        echo -e "    2. Test: ${CYAN}pnpm ship status${NC}"
-        if [[ "$HAS_ENV" == true ]]; then
-            echo -e "    3. Test: ${CYAN}pnpm env:status${NC}"
-        fi
-    elif [[ "$IS_PYTHON" == true ]]; then
-        echo -e "    1. Test: ${CYAN}bash scripts/matrx/ship.sh status${NC}"
-        if [[ "$HAS_ENV" == true ]]; then
-            echo -e "    2. Test: ${CYAN}make env-status${NC}"
-        fi
-    fi
-
-    if [[ "$CONFIG_MIGRATED" == true ]]; then
-        echo -e "    · Review ${CYAN}.matrx.json${NC} to verify migrated config"
-    fi
-    echo ""
+if [[ "$HAS_SHIP" == true ]] && [[ "$SHIP_VALID" == false ]]; then
+    echo -e "    ${RED}→${NC} Fix ship config. Options:"
+    echo -e "      a) Add to .env.local: MATRX_SHIP_URL=... and MATRX_SHIP_API_KEY=..."
+    echo -e "      b) Run: ${CYAN}pnpm ship:init my-project \"My Project\"${NC}"
+    echo -e "      c) Re-run: ${CYAN}curl -sL ${REPO_RAW}/cli/install.sh | bash${NC}"
 fi
+
+if [[ "$IS_NODE" == true ]]; then
+    if [[ "$UPDATED_ANY_FILE" == true ]] || [[ "$PKG_UPDATED" == true ]]; then
+        echo -e "    · Run ${CYAN}pnpm install${NC} (if tsx was added)"
+    fi
+    if [[ "$SHIP_VALID" == true ]]; then
+        echo -e "    · Test: ${CYAN}pnpm ship status${NC}"
+    fi
+    if [[ "$HAS_ENV" == true ]] && [[ "$ENV_VALID" == true ]]; then
+        echo -e "    · Test: ${CYAN}pnpm env:status${NC}"
+    fi
+elif [[ "$IS_PYTHON" == true ]]; then
+    if [[ "$SHIP_VALID" == true ]]; then
+        echo -e "    · Test: ${CYAN}bash scripts/matrx/ship.sh status${NC}"
+    fi
+    if [[ "$HAS_ENV" == true ]] && [[ "$ENV_VALID" == true ]]; then
+        echo -e "    · Test: ${CYAN}make env-status${NC}"
+    fi
+fi
+
+if [[ "$CONFIG_MIGRATED" == true ]]; then
+    echo -e "    · Review ${CYAN}.matrx.json${NC} to verify migrated config"
+fi
+echo ""
