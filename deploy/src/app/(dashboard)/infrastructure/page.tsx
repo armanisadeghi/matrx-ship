@@ -37,7 +37,7 @@ export default function InfrastructurePage() {
         api("/api/infrastructure/status"),
         api("/api/system"),
       ]);
-      setInfra(i as InfraStatus);
+      setInfra(i as unknown as InfraStatus);
       setSystem(s as Record<string, unknown>);
     } catch { /* auth handles */ }
     finally { setLoading(false); }

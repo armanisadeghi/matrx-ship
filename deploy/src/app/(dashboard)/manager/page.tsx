@@ -74,7 +74,7 @@ export default function ManagerPage() {
         api("/api/manager/logs?tail=100"),
         api("/api/manager/env"),
       ]);
-      setStatus(s as ManagerStatus);
+      setStatus(s as unknown as ManagerStatus);
       setLogs((l as { output?: string }).output || "");
       setEnvVars((e as { vars?: EnvVar[] }).vars || []);
     } catch (err) {

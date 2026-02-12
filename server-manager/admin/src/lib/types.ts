@@ -29,6 +29,7 @@ export interface TokenInfo {
 export interface SystemInfo {
   hostname: string;
   cpus: number;
+  cpu_model?: string;
   memory: { total: string; used: string; free: string; percent: string };
   disk: { total: string; used: string; available: string; percent: string };
   uptime_hours: string;

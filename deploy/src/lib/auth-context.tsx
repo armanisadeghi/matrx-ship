@@ -8,7 +8,7 @@ interface AuthContextValue {
   loading: boolean;
   login: (token: string) => Promise<boolean>;
   logout: () => void;
-  api: (path: string, opts?: RequestInit) => Promise<unknown>;
+  api: (path: string, opts?: RequestInit) => Promise<Record<string, unknown>>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -34,7 +34,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             : JSON.stringify(opts.body)
           : undefined,
       });
-      const data = await res.json();
+      const data = (await res.json()) as Record<string, unknown>;
       if (res.status === 401) {
         setAuthed(false);
         setToken("");

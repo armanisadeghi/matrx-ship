@@ -15,10 +15,11 @@ import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardContent, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { PageShell } from "@/components/admin/page-shell";
+import type { SystemInfo } from "@/lib/types";
 
 interface Props {
   api: (path: string, opts?: RequestInit) => Promise<unknown>;
-  system: Record<string, unknown> | null | undefined;
+  system: SystemInfo | null | undefined;
 }
 
 function StatusBadge({ status }: { status: string }) {
@@ -46,19 +47,11 @@ export function InfraTab({ api, system }: Props) {
 
   useEffect(() => {
     if (system) {
-      setContainers((system as { containers?: string[] }).containers || []);
+      setContainers(system.containers || []);
     }
   }, [system]);
 
-  const sys = system as {
-    hostname?: string;
-    cpus?: number;
-    cpu_model?: string;
-    memory?: { total: string; used: string; free: string; percent: string };
-    disk?: { total: string; used: string; available: string; percent: string };
-    uptime_hours?: string;
-    docker?: string;
-  } | null;
+  const sys = system;
 
   // Parse containers into structured data
   const infraContainers = containers

@@ -46,6 +46,15 @@ interface ServerConfig {
   token: string;
 }
 
+interface UnifiedConfig {
+  ship?: { url?: string; apiKey?: string };
+  env?: {
+    doppler?: { project?: string; config?: string };
+    file?: string;
+  };
+  [key: string]: unknown;
+}
+
 // ── Configuration ────────────────────────────────────────────────────
 
 function findConfigFile(): { path: string; unified: boolean } | null {
@@ -1516,12 +1525,12 @@ function ensureTsxDependency(): void {
 
     // tsx is missing — add it to devDependencies and install
     console.log("📦 Adding tsx to devDependencies (required for ship CLI)...");
-    
+
     // Add to package.json
     if (!pkg.devDependencies) pkg.devDependencies = {};
     pkg.devDependencies.tsx = "^4.21.0";
     writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + "\n", "utf-8");
-    
+
     // Detect package manager and install
     try {
       if (existsSync("pnpm-lock.yaml") || existsSync("pnpm-workspace.yaml")) {
@@ -1598,7 +1607,7 @@ async function checkIntegrity(cliPath: string = "cli/ship.ts"): Promise<boolean>
   console.log("🔍 Checking project integrity...");
 
   // ── 1. Load / Initialize Config ──
-  let config: Record<string, any> = {};
+  let config: UnifiedConfig = {};
   if (existsSync(unifiedPath)) {
     try {
       config = JSON.parse(readFileSync(unifiedPath, "utf-8"));
@@ -1670,10 +1679,10 @@ async function checkIntegrity(cliPath: string = "cli/ship.ts"): Promise<boolean>
     envFile: config.env?.file || detectEnvFile(),
   };
 
-  const isShipOk = current.shipUrl && 
-                   current.shipKey && 
-                   !isPlaceholderUrl(current.shipUrl) && 
-                   !isPlaceholderKey(current.shipKey);
+  const isShipOk = current.shipUrl &&
+    current.shipKey &&
+    !isPlaceholderUrl(current.shipUrl) &&
+    !isPlaceholderKey(current.shipKey);
   const isEnvOk = !!(config.env && config.env.doppler && config.env.file);
 
   if (!isShipOk) {
@@ -1691,9 +1700,9 @@ async function checkIntegrity(cliPath: string = "cli/ship.ts"): Promise<boolean>
     console.log("   Or manually enter your existing instance details:");
     console.log("   (Full URL required, e.g., https://ship-project.dev.codematrx.com)");
     console.log("");
-    
+
     const urlInput = await promptUser("Ship URL (or press Enter to skip)", "");
-    
+
     // If user skipped, don't save invalid config
     if (!urlInput || urlInput.trim() === "") {
       console.log("");
@@ -1702,7 +1711,7 @@ async function checkIntegrity(cliPath: string = "cli/ship.ts"): Promise<boolean>
       console.log("");
       return false;
     }
-    
+
     // Validate URL format
     if (isPlaceholderUrl(urlInput) || !urlInput.startsWith("http")) {
       console.log("");
@@ -1714,10 +1723,10 @@ async function checkIntegrity(cliPath: string = "cli/ship.ts"): Promise<boolean>
       console.log("");
       return false;
     }
-    
+
     current.shipUrl = urlInput;
     current.shipKey = await promptUser("Ship API Key", "");
-    
+
     // Validate the key too
     if (!current.shipKey || isPlaceholderKey(current.shipKey)) {
       console.log("");
@@ -1726,7 +1735,7 @@ async function checkIntegrity(cliPath: string = "cli/ship.ts"): Promise<boolean>
       console.log("");
       return false;
     }
-    
+
     needsSave = true;
   }
 
@@ -1753,9 +1762,9 @@ async function checkIntegrity(cliPath: string = "cli/ship.ts"): Promise<boolean>
 
   if (needsSave) {
     // Only save ship config if we have valid values
-    if (current.shipUrl && current.shipKey && 
-        !isPlaceholderUrl(current.shipUrl) && 
-        !isPlaceholderKey(current.shipKey)) {
+    if (current.shipUrl && current.shipKey &&
+      !isPlaceholderUrl(current.shipUrl) &&
+      !isPlaceholderKey(current.shipKey)) {
       config.ship = { url: current.shipUrl, apiKey: current.shipKey };
     }
     // env already updated
