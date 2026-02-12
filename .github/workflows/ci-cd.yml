@@ -39,7 +39,12 @@ jobs:
         run: pnpm tsc --noEmit
 
       - name: Run linter
-        run: pnpm lint || echo "Linter not configured, skipping"
+        run: |
+          if [ -f ".eslintrc.json" ] || [ -f "eslint.config.js" ] || [ -f ".eslintrc.js" ]; then
+            pnpm lint
+          else
+            echo "⚠️  No ESLint config found, skipping linter"
+          fi
 
   # ── Build & Test ─────────────────────────────────────────────────────
   build:
