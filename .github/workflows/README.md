@@ -17,6 +17,8 @@ This directory contains CI/CD workflows for automated building, testing, and dep
 4. **Deploy Production** - Deploys to production (main branch only)
 5. **Deploy Staging** - Deploys to staging (develop branch only)
 
+**Note:** The workflow automatically uses the pnpm version specified in `package.json` (`packageManager` field).
+
 **Deployment Flow:**
 ```
 Push to main → Lint → Build → Docker Build → Deploy to Production
