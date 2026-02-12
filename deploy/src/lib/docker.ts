@@ -1,4 +1,4 @@
-import { execSync } from "node:child_process";
+import { execSync, spawn } from "node:child_process";
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { randomBytes } from "node:crypto";
@@ -226,7 +226,7 @@ export function rebuildInstances(opts: { name?: string; skip_build?: boolean; tr
   let imageId: string | null = null;
   if (!opts.skip_build) {
     exec("docker tag matrx-ship:latest matrx-ship:rollback 2>/dev/null");
-    const buildResult = exec(`docker build -t matrx-ship:latest -t matrx-ship:${buildTag} ${src}`, { timeout: 300000 });
+    const buildResult = exec(`docker buildx build --load -t matrx-ship:latest -t matrx-ship:${buildTag} ${src}`, { timeout: 600000 });
     results.build = buildResult;
     if (!buildResult.success) {
       recordBuild({
@@ -349,6 +349,153 @@ export function getInstances() {
   return Object.entries(config.instances).map(([name, info]) => {
     const status = exec(`docker inspect ${name} --format '{{.State.Status}}' 2>/dev/null`);
     return { name, display_name: info.display_name, url: info.url, status: status.output || "not found" };
+  });
+}
+
+// ── Streaming Rebuild (for SSE endpoints) ──────────────────────────────────
+
+export function streamingRebuild(
+  opts: { name?: string; skip_build?: boolean; triggered_by?: string },
+  send: (event: string, data: Record<string, unknown>) => void,
+): Promise<void> {
+  return new Promise((resolve) => {
+    const config = loadDeployments();
+    const src = join(HOST_SRV, "projects/matrx-ship");
+    const buildTag = generateBuildTag();
+    const started_at = new Date().toISOString();
+
+    const gitCommit = exec(`git -C ${src} rev-parse --short HEAD`);
+    const gitLog = exec(`git -C ${src} log -1 --pretty=format:"%s"`);
+
+    send("log", { message: `Build started at ${started_at}` });
+    send("log", { message: `Source: ${src}` });
+    send("log", { message: `Git: ${gitCommit.output || "?"} — ${gitLog.output || "?"}` });
+    send("log", { message: `Build tag: ${buildTag}` });
+
+    if (!opts.skip_build) {
+      exec("docker tag matrx-ship:latest matrx-ship:rollback 2>/dev/null");
+      send("log", { message: "Tagged current :latest as :rollback" });
+      send("phase", { phase: "build", message: "Building Docker image..." });
+
+      const proc = spawn("docker", ["buildx", "build", "--load", "--progress=plain", "-t", "matrx-ship:latest", "-t", `matrx-ship:${buildTag}`, src], {
+        env: { ...process.env, PATH: process.env.PATH, DOCKER_BUILDKIT: "1" },
+      });
+
+      proc.stdout.on("data", (chunk: Buffer) => {
+        for (const line of chunk.toString().split("\n").filter(Boolean)) {
+          send("log", { message: line });
+        }
+      });
+
+      proc.stderr.on("data", (chunk: Buffer) => {
+        for (const line of chunk.toString().split("\n").filter(Boolean)) {
+          send("log", { message: line });
+        }
+      });
+
+      proc.on("close", (code: number | null) => {
+        if (code !== 0) {
+          const duration_ms = Date.now() - new Date(started_at).getTime();
+          recordBuild({
+            id: `bld_${randomHex(6)}`, tag: buildTag, timestamp: started_at,
+            git_commit: gitCommit.output || "unknown", git_message: gitLog.output || "unknown",
+            image_id: null, success: false, error: `Build exited with code ${code}`,
+            duration_ms, triggered_by: opts.triggered_by || "deploy-app", instances_restarted: [],
+          });
+          send("error", { success: false, error: `Build failed with exit code ${code}`, duration_ms });
+          resolve();
+          return;
+        }
+
+        send("phase", { phase: "build-done", message: "Docker image built successfully" });
+        const imgInspect = exec("docker inspect matrx-ship:latest --format '{{.Id}}'");
+        const imageId = imgInspect.output?.replace("sha256:", "").substring(0, 12) || null;
+        send("log", { message: `Image ID: ${imageId}` });
+
+        const targets = opts.name ? [opts.name] : Object.keys(config.instances);
+        send("phase", { phase: "restart", message: `Restarting ${targets.length} instance(s)...` });
+
+        for (const t of targets) {
+          if (!config.instances[t]) continue;
+          send("log", { message: `Restarting ${t}...` });
+          const r = exec("docker compose up -d --force-recreate app", { cwd: join(APPS_DIR, t), timeout: 60000 });
+          send("log", { message: `${t}: ${r.success ? "restarted" : r.error}` });
+        }
+
+        const finished_at = new Date().toISOString();
+        const duration_ms = Date.now() - new Date(started_at).getTime();
+
+        recordBuild({
+          id: `bld_${randomHex(6)}`, tag: buildTag, timestamp: started_at,
+          git_commit: gitCommit.output || "unknown", git_message: gitLog.output || "unknown",
+          image_id: imageId, success: true, error: null, duration_ms,
+          triggered_by: opts.triggered_by || "deploy-app", instances_restarted: targets,
+        });
+
+        try { cleanupBuilds(); } catch { /* non-fatal */ }
+        send("done", { success: true, build_tag: buildTag, image_id: imageId, instances_restarted: targets, duration_ms, started_at, finished_at });
+        resolve();
+      });
+
+      proc.on("error", (err: Error) => {
+        send("error", { success: false, error: err.message });
+        resolve();
+      });
+    } else {
+      const targets = opts.name ? [opts.name] : Object.keys(config.instances);
+      send("phase", { phase: "restart", message: `Restarting ${targets.length} instance(s) (no rebuild)...` });
+      for (const t of targets) {
+        if (!config.instances[t]) continue;
+        send("log", { message: `Restarting ${t}...` });
+        const r = exec("docker compose up -d --force-recreate app", { cwd: join(APPS_DIR, t), timeout: 60000 });
+        send("log", { message: `${t}: ${r.success ? "restarted" : r.error}` });
+      }
+      send("done", { success: true, instances_restarted: targets, image_rebuilt: false });
+      resolve();
+    }
+  });
+}
+
+export function streamingSelfRebuild(
+  send: (event: string, data: Record<string, unknown>) => void,
+): Promise<void> {
+  return new Promise((resolve) => {
+    const mcpDir = join(HOST_SRV, "mcp-servers");
+
+    send("phase", { phase: "build", message: "Rebuilding server manager..." });
+    send("log", { message: "Running: docker compose up -d --build server-manager" });
+    send("log", { message: `Working directory: ${mcpDir}` });
+
+    const proc = spawn("docker", ["compose", "up", "-d", "--build", "server-manager"], {
+      cwd: mcpDir,
+      env: { ...process.env, PATH: process.env.PATH },
+    });
+
+    proc.stdout.on("data", (chunk: Buffer) => {
+      for (const line of chunk.toString().split("\n").filter(Boolean)) {
+        send("log", { message: line });
+      }
+    });
+
+    proc.stderr.on("data", (chunk: Buffer) => {
+      for (const line of chunk.toString().split("\n").filter(Boolean)) {
+        send("log", { message: line });
+      }
+    });
+
+    proc.on("close", (code: number | null) => {
+      if (code === 0) {
+        send("done", { success: true, message: "Server manager rebuilt. Container will restart — connection may drop momentarily." });
+      } else {
+        send("error", { success: false, error: `docker compose exited with code ${code}` });
+      }
+      resolve();
+    });
+
+    proc.on("error", (err: Error) => {
+      send("error", { success: false, error: err.message });
+      resolve();
+    });
   });
 }
 

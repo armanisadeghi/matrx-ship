@@ -1,7 +1,7 @@
 FROM node:22-alpine AS base
 
-# Install Docker CLI, git, and AWS CLI
-RUN apk add --no-cache docker-cli docker-compose git curl aws-cli
+# Install Docker CLI (with buildx), git, and AWS CLI
+RUN apk add --no-cache docker-cli docker-cli-buildx docker-cli-compose git curl aws-cli
 
 # Install pnpm
 RUN corepack enable && corepack prepare pnpm@10.28.2 --activate

@@ -139,6 +139,8 @@ export default function DeployPage() {
   const [deployingMgr, setDeployingMgr] = useState(false);
   const [rollingBack, setRollingBack] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<"deploy" | "history" | "system" | "services">("deploy");
+  const [buildLogs, setBuildLogs] = useState<string[]>([]);
+  const [buildPhase, setBuildPhase] = useState<string | null>(null);
 
   const loadData = useCallback(async () => {
     try {
@@ -175,17 +177,59 @@ export default function DeployPage() {
 
   async function handleDeploy(name?: string) {
     setDeploying(true);
-    const toastId = toast.loading(name ? `Building & deploying ${name}...` : "Building & deploying all instances...", { duration: 300000 });
+    setBuildLogs([]);
+    setBuildPhase("starting");
+
+    const token = typeof window !== "undefined" ? localStorage.getItem("deploy_token") || "" : "";
+
     try {
-      const result = await api("/api/rebuild", { method: "POST", body: JSON.stringify(name ? { name } : {}) });
-      if (result.success) {
-        toast.success(`Deploy complete — ${result.instances_restarted?.length || 0} instance(s) restarted`, { id: toastId, duration: 5000 });
-      } else {
-        toast.error(`Deploy failed: ${result.error || "Unknown error"}`, { id: toastId, duration: 10000 });
+      const response = await fetch("/api/rebuild/stream", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify(name ? { name } : {}),
+      });
+
+      const reader = response.body?.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      if (!reader) throw new Error("No response stream");
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+
+        let eventType = "";
+        for (const line of lines) {
+          if (line.startsWith("event: ")) {
+            eventType = line.slice(7);
+          } else if (line.startsWith("data: ")) {
+            try {
+              const data = JSON.parse(line.slice(6));
+              if (eventType === "log") {
+                setBuildLogs((prev) => [...prev, data.message]);
+              } else if (eventType === "phase") {
+                setBuildPhase(data.phase);
+                setBuildLogs((prev) => [...prev, `── ${data.message} ──`]);
+              } else if (eventType === "done") {
+                toast.success(`Deploy complete — ${data.instances_restarted?.length || 0} instance(s) restarted in ${Math.round((data.duration_ms || 0) / 1000)}s`);
+                setBuildPhase("done");
+              } else if (eventType === "error") {
+                toast.error(`Deploy failed: ${data.error}`);
+                setBuildPhase("error");
+              }
+            } catch { /* skip malformed JSON */ }
+          }
+        }
       }
       loadData();
     } catch (e) {
-      toast.error(`Deploy failed: ${(e as Error).message}`, { id: toastId });
+      toast.error(`Deploy failed: ${(e as Error).message}`);
+      setBuildPhase("error");
     } finally {
       setDeploying(false);
     }
@@ -211,12 +255,57 @@ export default function DeployPage() {
 
   async function handleRebuildManager() {
     setDeployingMgr(true);
-    const toastId = toast.loading("Rebuilding Server Manager... this may take a minute");
+    setBuildLogs([]);
+    setBuildPhase("self-rebuild");
+
+    const token = typeof window !== "undefined" ? localStorage.getItem("deploy_token") || "" : "";
+
     try {
-      await api("/api/self-rebuild", { method: "POST" });
-      toast.success("Server Manager rebuild triggered. It will restart shortly.", { id: toastId });
+      const response = await fetch("/api/self-rebuild/stream", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      });
+
+      const reader = response.body?.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      if (!reader) throw new Error("No response stream");
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+
+        let eventType = "";
+        for (const line of lines) {
+          if (line.startsWith("event: ")) {
+            eventType = line.slice(7);
+          } else if (line.startsWith("data: ")) {
+            try {
+              const data = JSON.parse(line.slice(6));
+              if (eventType === "log") {
+                setBuildLogs((prev) => [...prev, data.message]);
+              } else if (eventType === "phase") {
+                setBuildPhase(data.phase);
+                setBuildLogs((prev) => [...prev, `── ${data.message} ──`]);
+              } else if (eventType === "done") {
+                toast.success("Server Manager rebuild complete. Container will restart momentarily.");
+                setBuildPhase("done");
+              } else if (eventType === "error") {
+                toast.error(`Rebuild failed: ${data.error}`);
+                setBuildPhase("error");
+              }
+            } catch { /* skip malformed JSON */ }
+          }
+        }
+      }
     } catch {
-      toast.info("Server Manager is rebuilding. Connection will restore shortly.", { id: toastId });
+      toast.info("Server Manager is rebuilding. Connection may drop as it restarts.");
+      setBuildPhase("done");
     } finally {
       setDeployingMgr(false);
     }
@@ -377,6 +466,50 @@ export default function DeployPage() {
                 </div>
               </CardContent>
             </Card>
+
+            {/* Live Build Logs */}
+            {buildLogs.length > 0 && (
+              <Card>
+                <CardHeader className="pb-3">
+                  <div className="flex items-center justify-between">
+                    <CardTitle className="text-base flex items-center gap-2">
+                      <Terminal className="size-4" /> Build Output
+                      {(deploying || deployingMgr) && <Loader2 className="size-4 animate-spin text-primary" />}
+                      {buildPhase === "done" && <CheckCircle2 className="size-4 text-green-500" />}
+                      {buildPhase === "error" && <AlertTriangle className="size-4 text-destructive" />}
+                    </CardTitle>
+                    {!deploying && !deployingMgr && (
+                      <Button variant="ghost" size="sm" onClick={() => { setBuildLogs([]); setBuildPhase(null); }}>
+                        Clear
+                      </Button>
+                    )}
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  <div
+                    ref={(el) => { if (el) el.scrollTop = el.scrollHeight; }}
+                    className="bg-zinc-950 text-zinc-300 rounded-lg p-4 font-mono text-xs max-h-96 overflow-y-auto space-y-0.5"
+                  >
+                    {buildLogs.map((line, i) => (
+                      <div
+                        key={i}
+                        className={
+                          line.startsWith("──") ? "text-blue-400 font-semibold py-1" :
+                          line.includes("error") || line.includes("ERROR") || line.includes("FAILED") ? "text-red-400" :
+                          line.includes("restarted") || line.includes("success") ? "text-green-400" :
+                          "text-zinc-400"
+                        }
+                      >
+                        {line}
+                      </div>
+                    ))}
+                    {(deploying || deployingMgr) && (
+                      <div className="text-zinc-500 animate-pulse">waiting for output...</div>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            )}
 
             {/* Available Image Tags / Rollback */}
             {buildInfo.available_tags.length > 1 && (
