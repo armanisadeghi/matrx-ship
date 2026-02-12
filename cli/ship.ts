@@ -22,7 +22,7 @@
  */
 
 import { execSync } from "child_process";
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, unlinkSync } from "fs";
 import * as path from "path";
 import { homedir } from "os";
 
@@ -105,6 +105,54 @@ function shipCmd(sub?: string): string {
     return `make ship-${sub}`;
   }
   return sub ? `bash scripts/matrx/ship.sh ${sub}` : 'bash scripts/matrx/ship.sh "..."';
+}
+
+/** Returns the correct env-sync command prefix */
+function envCmd(sub: string): string {
+  const cwd = process.cwd();
+  const hasPackageJson = existsSync(path.join(cwd, "package.json"));
+  if (hasPackageJson) {
+    return `pnpm env:${sub}`;
+  }
+  const hasMakefile = existsSync(path.join(cwd, "Makefile"));
+  if (hasMakefile) {
+    return `make env-${sub}`;
+  }
+  return `bash scripts/matrx/env-sync.sh ${sub}`;
+}
+
+/** Prompt the user with a question and optional default */
+async function promptUser(question: string, defaultVal?: string): Promise<string> {
+  const { createInterface } = await import("readline");
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  const suffix = defaultVal ? ` [${defaultVal}]` : "";
+  const answer = await new Promise<string>((resolve) => {
+    rl.question(`   ${question}${suffix}: `, resolve);
+  });
+  rl.close();
+  return answer.trim() || defaultVal || "";
+}
+
+/** Detect a default project name from directory */
+function detectProjectName(): string {
+  try {
+    const dir = execSync("git rev-parse --show-toplevel", { encoding: "utf-8" }).trim();
+    return path.basename(dir).toLowerCase().replace(/[^a-z0-9-]/g, "-");
+  } catch {
+    return path.basename(process.cwd()).toLowerCase().replace(/[^a-z0-9-]/g, "-");
+  }
+}
+
+/** Detect default env file */
+function detectEnvFile(): string {
+  const cwd = process.cwd();
+  for (const candidate of [".env.local", ".env", ".env.development"]) {
+    if (existsSync(path.join(cwd, candidate))) return candidate;
+  }
+  if (existsSync(path.join(cwd, "next.config.ts")) || existsSync(path.join(cwd, "next.config.js"))) {
+    return ".env.local";
+  }
+  return ".env";
 }
 
 function loadConfig(): ShipConfig {
@@ -787,6 +835,9 @@ async function handleInit(args: string[]): Promise<void> {
   console.log(`   🔧 Admin:     ${instanceUrl}/admin`);
   console.log(`   🔑 API Key:   ${apiKey}`);
   console.log(`   📄 Config:    ${configPath}`);
+  console.log("");
+  console.log("");
+  await checkIntegrity();
   console.log("");
   console.log("   You're ready to ship:");
   console.log(`     ${shipCmd()} "your first commit message"`);
@@ -1503,96 +1554,177 @@ async function downloadFile(url: string, dest: string, label: string): Promise<b
  *
  * Returns true if config is healthy, false if the user needs to take action.
  */
-function ensureConfig(): boolean {
+/**
+ * Centralized integrity check:
+ * 1. Migrates legacy configs (.matrx-ship.json, .matrx-tools.conf) → .matrx.json
+ * 2. Prompts to delete legacy files after migration
+ * 3. Validates unified config (Ship + Env)
+ * 4. Interactively prompts for missing values (Doppler config, Env file, etc.)
+ * 5. Cleans up package.json (removes old scripts)
+ * 6. Ensures .gitignore rules
+ */
+async function checkIntegrity(cliPath: string = "cli/ship.ts"): Promise<boolean> {
   const cwd = process.cwd();
   const unifiedPath = path.join(cwd, ".matrx.json");
   const legacyShipPath = path.join(cwd, ".matrx-ship.json");
   const legacyConfPath = path.join(cwd, ".matrx-tools.conf");
 
-  // ── Case 1: .matrx.json already exists ──
+  console.log("🔍 Checking project integrity...");
+
+  // ── 1. Load / Initialize Config ──
+  let config: Record<string, any> = {};
   if (existsSync(unifiedPath)) {
     try {
-      const raw = JSON.parse(readFileSync(unifiedPath, "utf-8"));
-      const issues: string[] = [];
-
-      if (!raw.ship?.url || !raw.ship?.apiKey) {
-        issues.push("Missing ship.url or ship.apiKey");
-      } else {
-        if (isPlaceholderUrl(raw.ship.url)) issues.push("ship.url is still a placeholder");
-        if (isPlaceholderKey(raw.ship.apiKey)) issues.push("ship.apiKey is still a placeholder");
-      }
-
-      if (issues.length === 0) {
-        console.log("   ✓  Config (.matrx.json) is valid");
-        return true;
-      }
-
-      console.log("   ⚠️  Config (.matrx.json) has issues:");
-      for (const issue of issues) {
-        console.log(`      - ${issue}`);
-      }
-      console.log(`      Fix: edit .matrx.json or run: ${shipCmd("init")} my-project "My Project"`);
-      return false;
+      config = JSON.parse(readFileSync(unifiedPath, "utf-8"));
     } catch {
-      console.log("   ⚠️  .matrx.json exists but contains invalid JSON");
-      console.log("      Delete it and re-run the installer, or fix the JSON manually.");
-      return false;
+      console.log("   ⚠️  .matrx.json exists but is invalid — treating as empty");
+      config = {};
     }
   }
 
-  // ── Case 2: legacy .matrx-ship.json exists → auto-migrate ──
+  // ── 2. Migration Logic ──
+  let migrated = false;
+
+  // Migrate .matrx-ship.json
   if (existsSync(legacyShipPath)) {
     try {
       const legacy = JSON.parse(readFileSync(legacyShipPath, "utf-8"));
-      const url = legacy.url || "";
-      const apiKey = legacy.apiKey || "";
-
-      if (url && apiKey) {
-        // Build unified config
-        const unified: Record<string, unknown> = {
-          ship: { url, apiKey },
-        };
-
-        // Also migrate .matrx-tools.conf env settings if present
-        if (existsSync(legacyConfPath)) {
-          try {
-            const confContent = readFileSync(legacyConfPath, "utf-8");
-            const getVal = (key: string) => {
-              const m = confContent.match(new RegExp(`^${key}="?([^"\\n]*)"?`, "m"));
-              return m ? m[1] : "";
-            };
-            const dp = getVal("DOPPLER_PROJECT");
-            const dc = getVal("DOPPLER_CONFIG");
-            const ef = getVal("ENV_FILE");
-            if (dp) {
-              unified.env = {
-                doppler: { project: dp, config: dc || "dev" },
-                file: ef || ".env",
-              };
-            }
-          } catch {
-            // Non-fatal — skip env config migration
-          }
-        }
-
-        writeFileSync(unifiedPath, JSON.stringify(unified, null, 2) + "\n", "utf-8");
-        console.log("   ✅ Migrated .matrx-ship.json → .matrx.json");
-        return true;
+      if (legacy.url && legacy.apiKey && (!config.ship || !config.ship.url)) {
+        config.ship = { url: legacy.url, apiKey: legacy.apiKey };
+        migrated = true;
+        console.log("   ✅ Migrated ship config from .matrx-ship.json");
       }
-    } catch {
-      // Fall through to "no config" case
+
+      // Prompt to delete
+      const ans = await promptUser("Delete legacy .matrx-ship.json? (y/n)", "y");
+      if (ans.toLowerCase().startsWith("y")) {
+        try { unlinkSync(legacyShipPath); console.log("   🗑️  Deleted .matrx-ship.json"); } catch { }
+      }
+    } catch { }
+  }
+
+  // Migrate .matrx-tools.conf
+  if (existsSync(legacyConfPath)) {
+    try {
+      const confContent = readFileSync(legacyConfPath, "utf-8");
+      const getVal = (key: string) => {
+        const m = confContent.match(new RegExp(`^${key}="?([^"\\n]*)"?`, "m"));
+        return m ? m[1] : "";
+      };
+
+      const dp = getVal("DOPPLER_PROJECT");
+      const dc = getVal("DOPPLER_CONFIG");
+      const ef = getVal("ENV_FILE");
+
+      if (dp && (!config.env || !config.env.doppler)) {
+        config.env = {
+          doppler: { project: dp, config: dc || "dev" },
+          file: ef || ".env",
+        };
+        migrated = true;
+        console.log("   ✅ Migrated env config from .matrx-tools.conf");
+      }
+
+      const ans = await promptUser("Delete legacy .matrx-tools.conf? (y/n)", "y");
+      if (ans.toLowerCase().startsWith("y")) {
+        try { unlinkSync(legacyConfPath); console.log("   🗑️  Deleted .matrx-tools.conf"); } catch { }
+      }
+    } catch { }
+  }
+
+  // ── 3. Validation & Interactive Setup ──
+  let needsSave = migrated;
+
+  // Extract defaults from current config or detention
+  const current = {
+    shipUrl: config.ship?.url || "",
+    shipKey: config.ship?.apiKey || "",
+    dopplerProject: config.env?.doppler?.project || detectProjectName(),
+    dopplerConfig: config.env?.doppler?.config || "dev",
+    envFile: config.env?.file || detectEnvFile(),
+  };
+
+  const isShipOk = current.shipUrl && current.shipKey && !isPlaceholderKey(current.shipKey);
+  const isEnvOk = !!(config.env && config.env.doppler && config.env.file);
+
+  if (!isShipOk) {
+    console.log("   ⚠️  Ship configuration missing or incomplete.");
+    current.shipUrl = await promptUser("Ship URL", current.shipUrl);
+    current.shipKey = await promptUser("Ship API Key", current.shipKey);
+    needsSave = true;
+  }
+
+  // If env is missing or incomplete, prompt effectively
+  if (!isEnvOk) {
+    // Check if we should prompt
+    if (!config.env) {
+      console.log("");
+      console.log("   📋 Env-sync setup (syncs local .env with Doppler)");
+      const setupEnv = await promptUser("Configure env-sync? (y/n)", "y");
+      if (setupEnv.toLowerCase().startsWith("y")) {
+        current.dopplerProject = await promptUser("Doppler Project", current.dopplerProject);
+        current.dopplerConfig = await promptUser("Doppler Config", current.dopplerConfig);
+        current.envFile = await promptUser("Env File", current.envFile);
+
+        config.env = {
+          doppler: { project: current.dopplerProject, config: current.dopplerConfig },
+          file: current.envFile
+        };
+        needsSave = true;
+      }
     }
   }
 
-  // ── Case 3: no config at all ──
-  console.log("   ⚠️  No config file found (.matrx.json)");
+  if (needsSave) {
+    config.ship = { url: current.shipUrl, apiKey: current.shipKey };
+    // env already updated
+    writeFileSync(unifiedPath, JSON.stringify(config, null, 2) + "\n");
+    console.log("   ✅ Updated .matrx.json");
+  } else {
+    console.log("   ✓  Config (.matrx.json) is valid");
+  }
+
+  // ── 4. Package.json Cleanup ──
+  const pkgPath = path.join(cwd, "package.json");
+  if (existsSync(pkgPath)) {
+    try {
+      const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
+      if (pkg.scripts) {
+        const obsolete = ["deploy", "release", "ship-old"];
+        let pkgChanged = false;
+        for (const s of obsolete) {
+          if (pkg.scripts[s]) {
+            delete pkg.scripts[s];
+            console.log(`   🗑️  Removed deprecated script: ${s}`);
+            pkgChanged = true;
+          }
+        }
+        if (pkgChanged) {
+          writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + "\n");
+          console.log("   ✅ Cleaned up package.json (removed obsolete scripts)");
+        }
+      }
+    } catch { }
+  }
+
+  // ── 5. Gitignore Cleanup ──
+  const gitignorePath = path.join(cwd, ".gitignore");
+  if (existsSync(gitignorePath)) {
+    try {
+      let content = readFileSync(gitignorePath, "utf-8");
+      const required = [".matrx.json", ".matrx-ship.json", ".matrx-tools.conf", ".env-backups/"];
+      const missing = required.filter(r => !content.includes(r));
+      if (missing.length > 0) {
+        content = content.trimEnd() + "\n\n# Matrx Config\n" + missing.join("\n") + "\n";
+        writeFileSync(gitignorePath, content);
+        console.log("   ✅ Updated .gitignore");
+      }
+    } catch { }
+  }
+
+  console.log("   ✨ Project integrity verified");
   console.log("");
-  console.log("   To set up this project, run the installer:");
-  console.log(`     curl -sL ${REPO_RAW}/cli/install.sh | bash`);
-  console.log("");
-  console.log("   Or configure manually:");
-  console.log(`     ${shipCmd("init")} my-project "My Project Name"`);
-  return false;
+  return true;
 }
 
 async function handleUpdate(): Promise<void> {
@@ -1726,8 +1858,8 @@ async function handleUpdate(): Promise<void> {
   console.log("");
 
   // ── Step 4: Validate config ──
-  console.log("🔧 Step 4/5: Validating configuration...");
-  const configOk = ensureConfig();
+  console.log("🔧 Step 4/5: Integrity Check & Cleanup...");
+  const configOk = await checkIntegrity();
   console.log("");
 
   // ── Step 5: Gitignore ──
@@ -1773,48 +1905,51 @@ async function main() {
   } else if (command === "help" || command === "--help" || command === "-h") {
     // Use shipCmd() for all command examples — auto-detects pnpm vs make vs bash
     const cmd = shipCmd;
+    const env = envCmd;
     const ship = cmd();
     const minor = cmd("minor");
     const major = cmd("major");
 
     console.log(`
-Matrx Ship CLI - Universal Deployment Tool
+Matrx CLI - Ship + Env-Sync + Tools
+════════════════════════════════════════
 
-Usage:
+🚀 Ship (version tracking + deploy):
   ${ship} "commit message"                  Patch version bump + deploy
   ${minor} "commit message"                 Minor version bump + deploy
   ${major} "commit message"                 Major version bump + deploy
+  ${ship} status                            Show current version from server
 
-Setup Commands:
+🔐 Env-Sync (Doppler secret management):
+  ${env("status")}                          Quick summary of sync state
+  ${env("diff")}                            Show differences (local vs Doppler)
+  ${env("pull")}                            Safe merge from Doppler → local
+  ${env("push")}                            Safe merge from local → Doppler
+  ${env("sync")}                            Interactive per-key conflict resolution
+  ${env("pull:force")}                      Full replace local from Doppler
+  ${env("push:force")}                      Full replace Doppler from local
+
+⚙️  Setup:
   ${cmd("setup")} --token TOKEN             Save server credentials (one-time per machine)
-  ${cmd("init")} PROJECT "Display Name"     Auto-provision an instance on the server
+  ${cmd("init")} PROJECT "Display Name"     Auto-provision a Ship instance
   ${cmd("init")} --url URL --key KEY        Manual config (provide your own URL + key)
 
-History:
+📚 History:
   ${cmd("history")}                         Import full git history into ship
   ${cmd("history")} --dry                   Preview what would be imported
   ${cmd("history")} --clear                 Clear existing versions and reimport
   ${cmd("history")} --since 2024-01-01      Only import commits after a date
-  ${cmd("history")} --branch main           Import from a specific branch
 
-Maintenance:
-  ${cmd("update")}                          Update CLI to the latest version
-  ${ship} status                            Show current version from server
+🔧 Maintenance:
+  ${cmd("update")}                          Update CLI + integrity check + cleanup
   ${cmd("force-remove")} INSTANCE           Forcefully remove a broken instance
   ${ship} help                              Show this help
 
-Environment Variables:
+📋 Environment Variables:
   MATRX_SHIP_SERVER_TOKEN   Server token for provisioning (or use ${cmd("setup")})
   MATRX_SHIP_SERVER         MCP server URL (default: ${DEFAULT_MCP_SERVER})
   MATRX_SHIP_URL            Instance URL (overrides config)
   MATRX_SHIP_API_KEY        Instance API key (overrides config)
-
-Quick Start:
-  1. One-time: ${cmd("setup")} --token YOUR_SERVER_TOKEN
-  2. Per project: ${cmd("init")} my-project "My Project"
-  3. Import history: ${cmd("history")}
-  4. Ship: ${ship} "your commit message"
-  5. Update CLI: ${cmd("update")}
 `);
   } else {
     await handleShip(args);

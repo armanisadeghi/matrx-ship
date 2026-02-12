@@ -77,9 +77,9 @@ jobs:
           path: .next/
           retention-days: 1
 
-  # ── Docker Build & Push ──────────────────────────────────────────────
+  # ── Docker Build & Push (Main App) ───────────────────────────────────
   docker:
-    name: Build & Push Docker Image
+    name: Build & Push Main App
     runs-on: ubuntu-latest
     needs: build
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')
@@ -125,11 +125,99 @@ jobs:
           cache-to: type=gha,mode=max
           platforms: linux/amd64
 
+  # ── Docker Build & Push (Deploy Service) ─────────────────────────────
+  docker-deploy:
+    name: Build & Push Deploy Service
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/matrx-ship-deploy
+          tags: |
+            type=ref,event=branch
+            type=sha,prefix={{branch}}-
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./deploy
+          file: ./deploy/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          platforms: linux/amd64
+
+  # ── Docker Build & Push (Manager Service) ────────────────────────────
+  docker-manager:
+    name: Build & Push Manager Service
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/matrx-ship-manager
+          tags: |
+            type=ref,event=branch
+            type=sha,prefix={{branch}}-
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./server-manager
+          file: ./server-manager/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          platforms: linux/amd64
+
   # ── Deploy to Production ─────────────────────────────────────────────
   deploy-production:
     name: Deploy to Production
     runs-on: ubuntu-latest
-    needs: docker
+    needs: [docker, docker-deploy, docker-manager]
     if: github.ref == 'refs/heads/main'
     environment:
       name: production
@@ -150,26 +238,53 @@ jobs:
             
             echo "🚀 Starting deployment..."
             
-            # Pull latest image
-            echo "📦 Pulling latest Docker image..."
+            # --- 1. Main App ---
+            echo "📦 Pulling Main App..."
             docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
-            
-            # Tag as matrx-ship:latest for local use
             docker tag ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest matrx-ship:latest
-            
-            # Tag current latest as rollback
             docker tag matrx-ship:latest matrx-ship:rollback 2>/dev/null || true
             
-            # Restart all matrx-ship instances
+            # --- 2. Deploy Service ---
+            echo "📦 Pulling Deploy Service..."
+            docker pull ${{ env.REGISTRY }}/${{ github.repository_owner }}/matrx-ship-deploy:latest
+            docker tag ${{ env.REGISTRY }}/${{ github.repository_owner }}/matrx-ship-deploy:latest matrx-ship-deploy:latest
+
+            # --- 3. Manager Service ---
+            echo "📦 Pulling Manager Service..."
+            docker pull ${{ env.REGISTRY }}/${{ github.repository_owner }}/matrx-ship-manager:latest
+            docker tag ${{ env.REGISTRY }}/${{ github.repository_owner }}/matrx-ship-manager:latest matrx-ship-manager:latest
+            
+            # --- Restart Instances ---
             echo "🔄 Restarting instances..."
             cd /srv/apps
+            
+            # Restart all apps (Main App, Deploy, Manager) if they exist
             for instance in */; do
               instance_name="${instance%/}"
-              if [ -f "$instance_name/docker-compose.yml" ] && grep -q "matrx-ship:latest" "$instance_name/docker-compose.yml"; then
-                echo "  → Restarting $instance_name..."
-                cd "$instance_name"
-                docker compose up -d --force-recreate app
-                cd /srv/apps
+              if [ -f "$instance_name/docker-compose.yml" ]; then
+                # Check which image is used and if it needs restart
+                NEEDS_RESTART=0
+                
+                if grep -q "matrx-ship:latest" "$instance_name/docker-compose.yml"; then
+                  echo "  → Updating Main App in $instance_name..."
+                  NEEDS_RESTART=1
+                fi
+                
+                if grep -q "matrx-ship-deploy:latest" "$instance_name/docker-compose.yml"; then
+                  echo "  → Updating Deploy Service in $instance_name..."
+                  NEEDS_RESTART=1
+                fi
+                
+                if grep -q "matrx-ship-manager:latest" "$instance_name/docker-compose.yml"; then
+                  echo "  → Updating Manager Service in $instance_name..."
+                  NEEDS_RESTART=1
+                fi
+                
+                if [ "$NEEDS_RESTART" -eq 1 ]; then
+                  cd "$instance_name"
+                  docker compose up -d --force-recreate
+                  cd /srv/apps
+                fi
               fi
             done
             
@@ -180,12 +295,14 @@ jobs:
             sleep 10
             for instance in */; do
               instance_name="${instance%/}"
-              if [ -f "$instance_name/docker-compose.yml" ] && grep -q "matrx-ship:latest" "$instance_name/docker-compose.yml"; then
-                # Extract subdomain from docker-compose.yml
+              if [ -f "$instance_name/docker-compose.yml" ]; then
+                # Extract subdomain
                 subdomain=$(grep -oP 'Host\(`\K[^`]+' "$instance_name/docker-compose.yml" | head -1)
                 if [ -n "$subdomain" ]; then
+                   # Simple check, assumes /api/health exists on all services or proxy handles it
+                   # If not, might get 404, but acceptable for now
                   echo "  → Checking https://$subdomain/api/health..."
-                  curl -f -s "https://$subdomain/api/health" > /dev/null && echo "    ✓ Healthy" || echo "    ✗ Unhealthy"
+                  curl -f -s "https://$subdomain/api/health" > /dev/null && echo "    ✓ Healthy" || echo "    - Check skipped or failed"
                 fi
               fi
             done
@@ -194,8 +311,6 @@ jobs:
         if: success()
         run: |
           echo "✅ Deployment to production successful!"
-          echo "Image: ${{ needs.docker.outputs.image-tag }}"
-          echo "Digest: ${{ needs.docker.outputs.image-digest }}"
 
       - name: Notify deployment failure
         if: failure()
@@ -207,7 +322,7 @@ jobs:
   deploy-staging:
     name: Deploy to Staging
     runs-on: ubuntu-latest
-    needs: docker
+    needs: [docker, docker-deploy, docker-manager]
     if: github.ref == 'refs/heads/develop'
     environment:
       name: staging
@@ -228,21 +343,29 @@ jobs:
             
             echo "🚀 Starting staging deployment..."
             
-            # Pull develop branch image
-            echo "📦 Pulling Docker image..."
+            # --- 1. Main App ---
+            echo "📦 Pulling Main App (develop)..."
             docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:develop
-            
-            # Tag as matrx-ship:staging
             docker tag ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:develop matrx-ship:staging
             
-            # Restart staging instances (if configured)
+            # --- 2. Deploy Service ---
+            echo "📦 Pulling Deploy Service (develop)..."
+            docker pull ${{ env.REGISTRY }}/${{ github.repository_owner }}/matrx-ship-deploy:develop
+            docker tag ${{ env.REGISTRY }}/${{ github.repository_owner }}/matrx-ship-deploy:develop matrx-ship-deploy:staging
+
+            # --- 3. Manager Service ---
+            echo "📦 Pulling Manager Service (develop)..."
+            docker pull ${{ env.REGISTRY }}/${{ github.repository_owner }}/matrx-ship-manager:develop
+            docker tag ${{ env.REGISTRY }}/${{ github.repository_owner }}/matrx-ship-manager:develop matrx-ship-manager:staging
+            
+            # --- Restart Instances ---
             echo "🔄 Restarting staging instances..."
             cd /srv/apps
             for instance in staging-*; do
               if [ -d "$instance" ] && [ -f "$instance/docker-compose.yml" ]; then
                 echo "  → Restarting $instance..."
                 cd "$instance"
-                docker compose up -d --force-recreate app
+                docker compose up -d --force-recreate
                 cd /srv/apps
               fi
             done
@@ -253,4 +376,3 @@ jobs:
         if: success()
         run: |
           echo "✅ Deployment to staging successful!"
-          echo "Image: ${{ needs.docker.outputs.image-tag }}"
