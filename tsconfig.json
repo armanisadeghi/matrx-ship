@@ -39,6 +39,7 @@
     "node_modules",
     "cli",
     "deploy",
-    "packages"
+    "packages",
+    "server-manager"
   ]
 }

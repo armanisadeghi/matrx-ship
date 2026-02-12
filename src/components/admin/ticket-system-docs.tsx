@@ -10,14 +10,14 @@ import {
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
-import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
+// import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
+// import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 
 function CodeBlock({ language, code }: { language: string; code: string }) {
-    // Basic code block if syntax highlighter is not available or desired to be simple
+    // Basic code block as fallback
     return (
         <pre className="p-4 rounded-lg bg-zinc-950 border border-zinc-800 overflow-x-auto text-sm font-mono text-zinc-50 my-4">
-            <code>{code}</code>
+            <code className={`language-${language}`}>{code}</code>
         </pre>
     )
 }
