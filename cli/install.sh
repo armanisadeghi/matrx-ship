@@ -452,13 +452,13 @@ else
         if [[ "$SETUP_SHIP" == true ]]; then
             cat << 'SHIP_MAKE'
 ship:
-	@bash scripts/matrx/ship.sh $(ARGS)
+	@bash scripts/matrx/ship.sh "$(MSG)"
 
 ship-minor:
-	@bash scripts/matrx/ship.sh --minor $(ARGS)
+	@bash scripts/matrx/ship.sh --minor "$(MSG)"
 
 ship-major:
-	@bash scripts/matrx/ship.sh --major $(ARGS)
+	@bash scripts/matrx/ship.sh --major "$(MSG)"
 
 ship-status:
 	@bash scripts/matrx/ship.sh status
@@ -990,9 +990,9 @@ if [[ "$SETUP_SHIP" == true ]]; then
         echo -e "    ${CYAN}pnpm ship:update${NC}                Update CLI"
         echo -e "    ${CYAN}pnpm ship help${NC}                  All options"
     else
-        echo -e "    ${CYAN}make ship ARGS=\"commit message\"${NC}       Ship a patch version"
-        echo -e "    ${CYAN}make ship-minor ARGS=\"message\"${NC}       Minor bump"
-        echo -e "    ${CYAN}make ship-major ARGS=\"message\"${NC}       Major bump"
+        echo -e "    ${CYAN}make ship MSG=\"commit message\"${NC}       Ship a patch version"
+        echo -e "    ${CYAN}make ship-minor MSG=\"message\"${NC}        Minor bump"
+        echo -e "    ${CYAN}make ship-major MSG=\"message\"${NC}        Major bump"
         echo -e "    ${CYAN}make ship-status${NC}                      Current version"
         echo -e "    ${CYAN}make ship-history${NC}                     Import git history"
         echo -e "    ${CYAN}make ship-update${NC}                      Update CLI"

@@ -90,13 +90,21 @@ function isPlaceholderKey(key: string): boolean {
   );
 }
 
-/** Returns the correct command prefix based on whether the project has package.json */
+/** Returns the correct command prefix based on whether the project has package.json or Makefile */
 function shipCmd(sub?: string): string {
-  const hasPackageJson = existsSync(path.join(process.cwd(), "package.json"));
+  const cwd = process.cwd();
+  const hasPackageJson = existsSync(path.join(cwd, "package.json"));
   if (hasPackageJson) {
     return sub ? `pnpm ship:${sub}` : "pnpm ship";
   }
-  return sub ? `bash scripts/matrx/ship.sh ${sub}` : "bash scripts/matrx/ship.sh";
+  const hasMakefile = existsSync(path.join(cwd, "Makefile"));
+  if (hasMakefile) {
+    if (!sub) return 'make ship MSG="..."';
+    if (sub === "minor") return 'make ship-minor MSG="..."';
+    if (sub === "major") return 'make ship-major MSG="..."';
+    return `make ship-${sub}`;
+  }
+  return sub ? `bash scripts/matrx/ship.sh ${sub}` : 'bash scripts/matrx/ship.sh "..."';
 }
 
 function loadConfig(): ShipConfig {
@@ -295,7 +303,7 @@ async function callMcpTool(
     if (response.status === 401) {
       throw new Error(
         "Authentication failed. Your server token is invalid.\n" +
-          "   Run: pnpm ship:setup --token YOUR_TOKEN",
+          `   Run: ${shipCmd("setup")} --token YOUR_TOKEN`,
       );
     }
 
@@ -384,8 +392,8 @@ async function safeJsonResponse(
       if (response.status === 401 || response.status === 403) {
         throw new Error(
           `Authentication failed (${response.status}) for ${url}\n` +
-            "   The API key in .matrx-ship.json may be invalid or expired.\n" +
-            "   Run: pnpm ship:init  to reconfigure.",
+            "   The API key in your config may be invalid or expired.\n" +
+            `   Run: ${shipCmd("init")}  to reconfigure.`,
         );
       }
       throw new Error(
@@ -559,12 +567,7 @@ async function handleSetup(args: string[]): Promise<void> {
   console.log(`💾 Server credentials saved to ${GLOBAL_CONFIG_FILE}`);
   console.log("");
   console.log("   You can now provision instances in any project:");
-  const hasPackageJson = existsSync(path.join(process.cwd(), "package.json"));
-  if (hasPackageJson) {
-    console.log('     pnpm ship:init my-project "My Project Name"');
-  } else {
-    console.log('     bash scripts/matrx/ship.sh init my-project "My Project Name"');
-  }
+  console.log(`     ${shipCmd("init")} my-project "My Project Name"`);
   console.log("");
 }
 
@@ -786,7 +789,7 @@ async function handleInit(args: string[]): Promise<void> {
   console.log(`   📄 Config:    ${configPath}`);
   console.log("");
   console.log("   You're ready to ship:");
-  console.log('     pnpm ship "your first commit message"');
+  console.log(`     ${shipCmd()} "your first commit message"`);
   console.log("");
 }
 
@@ -805,7 +808,7 @@ async function handleLegacyInit(args: string[]): Promise<void> {
   }
 
   if (!url || !key) {
-    console.error("❌ Usage: pnpm ship:init --url URL --key API_KEY");
+    console.error(`❌ Usage: ${shipCmd("init")} --url URL --key API_KEY`);
     process.exit(1);
   }
 
@@ -839,7 +842,7 @@ async function handleLegacyInit(args: string[]): Promise<void> {
   const configPath = path.join(process.cwd(), ".matrx-ship.json");
   writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n");
   console.log(`📄 Config saved to ${configPath}`);
-  console.log('\n   You can now run: pnpm ship "your commit message"');
+  console.log(`\n   You can now run: ${shipCmd()} "your commit message"`);
   console.log();
 }
 
@@ -849,10 +852,13 @@ async function handleShip(args: string[]): Promise<void> {
   const commitMessage = args.find((arg) => !arg.startsWith("--"));
 
   if (!commitMessage) {
+    const ship = shipCmd();
+    const minor = shipCmd("minor");
+    const major = shipCmd("major");
     console.error("❌ Error: Commit message is required");
-    console.error('\n   Usage: pnpm ship "Your commit message"');
-    console.error('          pnpm ship:minor "Your commit message"');
-    console.error('          pnpm ship:major "Your commit message"');
+    console.error(`\n   Usage: ${ship} "Your commit message"`);
+    console.error(`          ${minor} "Your commit message"`);
+    console.error(`          ${major} "Your commit message"`);
     return void process.exit(1);
   }
 
@@ -1264,7 +1270,7 @@ async function handleHistory(args: string[]): Promise<void> {
     }
     console.log("");
     console.log("   This is a dry run. To actually import, run without --dry:");
-    console.log("     pnpm ship:history" + (isClear ? " --clear" : "") + (since ? ` --since ${since}` : ""));
+    console.log("     " + shipCmd("history") + (isClear ? " --clear" : "") + (since ? ` --since ${since}` : ""));
     console.log("");
     return;
   }
@@ -1344,7 +1350,7 @@ async function handleHistory(args: string[]): Promise<void> {
   console.log(`   Range:     ${versioned[0].version} → ${versioned[versioned.length - 1].version}`);
   console.log(`   Builds:    #1 → #${versioned.length}`);
   console.log("");
-  console.log("   The next 'pnpm ship' will continue from where this left off.");
+  console.log(`   The next '${shipCmd()}' will continue from where this left off.`);
   console.log(`   View history at: ${config.url}/admin/versions`);
   console.log("");
 }
@@ -1534,12 +1540,7 @@ async function handleUpdate(): Promise<void> {
 
   console.log("");
   console.log("   ✅ Matrx Ship CLI is up to date!");
-  if (hasPackageJson) {
-    console.log("   Run 'pnpm ship help' to see all commands.");
-  } else {
-    const wrapperRel = path.relative(cwd, path.join(scriptDir, "ship.sh"));
-    console.log(`   Run 'bash ${wrapperRel} help' to see all commands.`);
-  }
+  console.log(`   Run '${shipCmd("help")}' to see all commands.`);
   console.log("");
 }
 
@@ -1563,14 +1564,11 @@ async function main() {
     const config = loadConfig();
     await getStatus(config);
   } else if (command === "help" || command === "--help" || command === "-h") {
-    const hasPackageJson = existsSync(path.join(process.cwd(), "package.json"));
-
-    // Build command examples that match the invocation style
-    const cmd = (sub: string) =>
-      hasPackageJson ? `pnpm ship:${sub}` : `bash scripts/matrx/ship.sh ${sub}`;
-    const ship = hasPackageJson ? "pnpm ship" : "bash scripts/matrx/ship.sh";
-    const minor = hasPackageJson ? "pnpm ship:minor" : `${ship} --minor`;
-    const major = hasPackageJson ? "pnpm ship:major" : `${ship} --major`;
+    // Use shipCmd() for all command examples — auto-detects pnpm vs make vs bash
+    const cmd = shipCmd;
+    const ship = cmd();
+    const minor = cmd("minor");
+    const major = cmd("major");
 
     console.log(`
 Matrx Ship CLI - Universal Deployment Tool
@@ -1601,8 +1599,8 @@ Maintenance:
 Environment Variables:
   MATRX_SHIP_SERVER_TOKEN   Server token for provisioning (or use ${cmd("setup")})
   MATRX_SHIP_SERVER         MCP server URL (default: ${DEFAULT_MCP_SERVER})
-  MATRX_SHIP_URL            Instance URL (overrides .matrx-ship.json)
-  MATRX_SHIP_API_KEY        Instance API key (overrides .matrx-ship.json)
+  MATRX_SHIP_URL            Instance URL (overrides config)
+  MATRX_SHIP_API_KEY        Instance API key (overrides config)
 
 Quick Start:
   1. One-time: ${cmd("setup")} --token YOUR_SERVER_TOKEN
