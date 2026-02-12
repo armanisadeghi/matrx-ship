@@ -1,0 +1,14 @@
+{
+  "name": "matrx-dev-tools",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Matrx development tooling: ship, env-sync, install scripts",
+  "scripts": {
+    "ship": "tsx scripts/matrx/ship.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.9.0"
+  }
+}

@@ -1,0 +1,13 @@
+.DS_Store
+*.swp
+*.swo
+*~
+.env
+.env.local
+.env-backups/
+
+# Dependencies
+node_modules/
+
+# Matrx Ship config (contains API key)
+.matrx-ship.json
