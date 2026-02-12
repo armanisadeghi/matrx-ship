@@ -9,7 +9,7 @@ The server needs:
 - Git
 - A domain or subdomain per instance (e.g., `ship-realsingles.yourdomain.com`)
 - A reverse proxy (Nginx, Caddy, or Coolify's built-in Traefik) for HTTPS and routing
-
+ 
 ## Step 1: Clone the Repo
 
 ```bash
