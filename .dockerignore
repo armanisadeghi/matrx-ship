@@ -11,5 +11,5 @@ node_modules
 .matrx-ship.json
 .matrx-tools.conf
 
-# The deploy app is a separate project with its own Dockerfile
+# The deploy app is a separate project with its own Dockerfile 
 deploy/
