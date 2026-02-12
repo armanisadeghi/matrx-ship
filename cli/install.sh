@@ -426,7 +426,8 @@ if (added > 0) console.log('Updated ' + added + ' script(s)');
             fi
         fi
     fi
-elif [[ "$IS_PYTHON" == true ]] && [[ "$SETUP_ENV" == true ]]; then
+else
+    # Python or "other" project — register Makefile targets
     echo -e "${CYAN}Registering Makefile targets...${NC}"
 
     MARKER="# --- matrx-cli"
@@ -443,9 +444,39 @@ elif [[ "$IS_PYTHON" == true ]] && [[ "$SETUP_ENV" == true ]]; then
         info "Created new Makefile"
     fi
 
-    cat >> Makefile << 'MAKEFILE_SNIPPET'
+    # Build the Makefile snippet based on what's being set up
+    {
+        echo ""
+        echo "# --- matrx-cli ─────────────────────────────────────"
 
-# --- matrx-cli ─────────────────────────────────────
+        if [[ "$SETUP_SHIP" == true ]]; then
+            cat << 'SHIP_MAKE'
+ship:
+	@bash scripts/matrx/ship.sh $(ARGS)
+
+ship-minor:
+	@bash scripts/matrx/ship.sh --minor $(ARGS)
+
+ship-major:
+	@bash scripts/matrx/ship.sh --major $(ARGS)
+
+ship-status:
+	@bash scripts/matrx/ship.sh status
+
+ship-history:
+	@bash scripts/matrx/ship.sh history
+
+ship-update:
+	@bash scripts/matrx/ship.sh update
+
+ship-help:
+	@bash scripts/matrx/ship.sh help
+
+SHIP_MAKE
+        fi
+
+        if [[ "$SETUP_ENV" == true ]]; then
+            cat << 'ENV_MAKE'
 env-pull:
 	@bash scripts/matrx/env-sync.sh pull
 
@@ -467,8 +498,19 @@ env-pull-force:
 env-push-force:
 	@bash scripts/matrx/env-sync.sh push --force
 
-.PHONY: env-pull env-push env-diff env-status env-sync env-pull-force env-push-force
-MAKEFILE_SNIPPET
+ENV_MAKE
+        fi
+
+        # .PHONY line
+        PHONY_TARGETS=""
+        if [[ "$SETUP_SHIP" == true ]]; then
+            PHONY_TARGETS="ship ship-minor ship-major ship-status ship-history ship-update ship-help"
+        fi
+        if [[ "$SETUP_ENV" == true ]]; then
+            PHONY_TARGETS="$PHONY_TARGETS env-pull env-push env-diff env-status env-sync env-pull-force env-push-force"
+        fi
+        echo ".PHONY: $PHONY_TARGETS"
+    } >> Makefile
 
     ok "Makefile targets registered"
 fi
@@ -948,8 +990,13 @@ if [[ "$SETUP_SHIP" == true ]]; then
         echo -e "    ${CYAN}pnpm ship:update${NC}                Update CLI"
         echo -e "    ${CYAN}pnpm ship help${NC}                  All options"
     else
-        echo -e "    ${CYAN}bash scripts/matrx/ship.sh \"commit message\"${NC}"
-        echo -e "    ${CYAN}bash scripts/matrx/ship.sh help${NC}"
+        echo -e "    ${CYAN}make ship ARGS=\"commit message\"${NC}       Ship a patch version"
+        echo -e "    ${CYAN}make ship-minor ARGS=\"message\"${NC}       Minor bump"
+        echo -e "    ${CYAN}make ship-major ARGS=\"message\"${NC}       Major bump"
+        echo -e "    ${CYAN}make ship-status${NC}                      Current version"
+        echo -e "    ${CYAN}make ship-history${NC}                     Import git history"
+        echo -e "    ${CYAN}make ship-update${NC}                      Update CLI"
+        echo -e "    ${CYAN}make ship-help${NC}                        All options"
     fi
     echo ""
 fi
@@ -962,18 +1009,12 @@ if [[ "$SETUP_ENV" == true ]]; then
         echo -e "    ${CYAN}pnpm env:pull${NC}        Safe merge from Doppler"
         echo -e "    ${CYAN}pnpm env:push${NC}        Safe merge to Doppler"
         echo -e "    ${CYAN}pnpm env:sync${NC}        Interactive conflict resolution"
-    elif [[ "$IS_PYTHON" == true ]]; then
+    else
         echo -e "    ${CYAN}make env-status${NC}      Quick sync summary"
         echo -e "    ${CYAN}make env-diff${NC}        Show differences"
         echo -e "    ${CYAN}make env-pull${NC}        Safe merge from Doppler"
         echo -e "    ${CYAN}make env-push${NC}        Safe merge to Doppler"
         echo -e "    ${CYAN}make env-sync${NC}        Interactive conflict resolution"
-    else
-        echo -e "    ${CYAN}bash scripts/matrx/env-sync.sh status${NC}      Quick sync summary"
-        echo -e "    ${CYAN}bash scripts/matrx/env-sync.sh diff${NC}        Show differences"
-        echo -e "    ${CYAN}bash scripts/matrx/env-sync.sh pull${NC}        Safe merge from Doppler"
-        echo -e "    ${CYAN}bash scripts/matrx/env-sync.sh push${NC}        Safe merge to Doppler"
-        echo -e "    ${CYAN}bash scripts/matrx/env-sync.sh sync${NC}        Interactive conflict resolution"
     fi
     echo ""
 fi
