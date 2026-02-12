@@ -1,0 +1,73 @@
+# Agent Environment Base Image
+# Runs with Sysbox runtime — feels like a full Linux VM
+# Includes Docker-in-Docker, Node.js, Python, Git, and build tools
+
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# ── Base system ──────────────────────────────────────────────────────────────
+RUN apt-get update && apt-get install -y \
+    # Core utilities
+    curl wget git jq unzip htop vim nano less tree \
+    # Build tools
+    build-essential pkg-config cmake \
+    # Networking
+    net-tools iputils-ping dnsutils openssh-server \
+    # Python
+    python3 python3-pip python3-venv \
+    # System
+    sudo systemd systemd-sysv dbus \
+    # SSL
+    ca-certificates gnupg lsb-release \
+    && rm -rf /var/lib/apt/lists/*
+
+# ── Docker CE (will run inside the container via Sysbox) ─────────────────────
+RUN curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg && \
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" > /etc/apt/sources.list.d/docker.list && \
+    apt-get update && \
+    apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin && \
+    # Replace runc with 1.1.15 — runc 1.2+ has procfs checks incompatible with Sysbox's FUSE /proc
+    curl -fsSL https://github.com/opencontainers/runc/releases/download/v1.1.15/runc.amd64 -o /usr/bin/runc && \
+    chmod +x /usr/bin/runc && \
+    rm -rf /var/lib/apt/lists/*
+
+# ── Node.js 22 LTS ──────────────────────────────────────────────────────────
+RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
+    apt-get install -y nodejs && \
+    npm install -g pnpm && \
+    rm -rf /var/lib/apt/lists/*
+
+# ── Agent user ───────────────────────────────────────────────────────────────
+RUN useradd -m -s /bin/bash -G sudo,docker agent && \
+    echo "agent ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/agent && \
+    chmod 0440 /etc/sudoers.d/agent
+
+# ── SSH server config ────────────────────────────────────────────────────────
+RUN mkdir -p /run/sshd && \
+    sed -i 's/#PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config && \
+    sed -i 's/#PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
+
+# ── Working directory ────────────────────────────────────────────────────────
+RUN mkdir -p /home/agent/workspace && chown agent:agent /home/agent/workspace
+
+# ── Systemd as PID 1 (Sysbox enables this) ──────────────────────────────────
+# Clean up systemd services we don't need
+RUN (cd /lib/systemd/system/sysinit.target.wants/ && \
+    for i in *; do [ "$i" = "systemd-tmpfiles-setup.service" ] || rm -f "$i"; done) && \
+    rm -f /lib/systemd/system/multi-user.target.wants/* && \
+    rm -f /etc/systemd/system/*.wants/* && \
+    rm -f /lib/systemd/system/local-fs.target.wants/* && \
+    rm -f /lib/systemd/system/sockets.target.wants/*udev* && \
+    rm -f /lib/systemd/system/sockets.target.wants/*initctl* && \
+    rm -f /lib/systemd/system/basic.target.wants/*
+
+# Enable Docker and SSH
+RUN systemctl enable docker && \
+    systemctl enable ssh
+
+WORKDIR /home/agent/workspace
+
+# Systemd is PID 1 when running with Sysbox
+STOPSIGNAL SIGRTMIN+3
+CMD ["/sbin/init"]

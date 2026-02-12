@@ -70,7 +70,7 @@ Ship tracks versions, commits, and pushes in one command.
 | Variable | Description |
 |----------|-------------|
 | `MATRX_SHIP_SERVER_TOKEN` | Server token for provisioning |
-| `MATRX_SHIP_SERVER` | MCP server URL (default: `https://mcp.dev.codematrx.com`) |
+| `MATRX_SHIP_SERVER` | Manager server URL (default: `https://manager.dev.codematrx.com`) |
 | `MATRX_SHIP_URL` | Instance URL (overrides config file) |
 | `MATRX_SHIP_API_KEY` | Instance API key (overrides config file) |
 

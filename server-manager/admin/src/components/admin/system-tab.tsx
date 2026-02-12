@@ -112,7 +112,7 @@ export function SystemTab({
         </CardHeader>
         <CardContent>
           <p className="text-sm text-muted-foreground">
-            This rebuilds <code className="bg-muted px-1 py-0.5 rounded text-xs">/srv/mcp-servers/</code> and restarts the server manager container. The admin UI will briefly disconnect.
+            This rebuilds <code className="bg-muted px-1 py-0.5 rounded text-xs">/srv/apps/server-manager/</code> and restarts the server manager container. The admin UI will briefly disconnect.
           </p>
           <div className="mt-3">
             <a

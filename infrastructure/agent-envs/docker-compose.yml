@@ -1,0 +1,70 @@
+services:
+  # Template for spinning up agent environments
+  # Usage: docker compose --profile agent1 up -d
+  # Or:    docker compose up -d agent-1
+  agent-1:
+    build:
+      context: ./images
+      dockerfile: Dockerfile.agent
+    container_name: agent-1
+    hostname: agent-1
+    runtime: sysbox-runc
+    restart: unless-stopped
+    profiles:
+      - agent1
+      - all
+    volumes:
+      - agent-1-home:/home/agent
+    networks:
+      - proxy
+      - agent-net
+    deploy:
+      resources:
+        limits:
+          cpus: "4"
+          memory: 8G
+    labels:
+      - "traefik.enable=true"
+      # Web terminal via ttyd (if installed)
+      - "traefik.http.routers.agent-1.rule=Host(`agent-1.dev.codematrx.com`)"
+      - "traefik.http.routers.agent-1.entrypoints=websecure"
+      - "traefik.http.routers.agent-1.tls.certresolver=letsencrypt"
+      - "traefik.http.services.agent-1.loadbalancer.server.port=7681"
+
+  agent-2:
+    build:
+      context: ./images
+      dockerfile: Dockerfile.agent
+    container_name: agent-2
+    hostname: agent-2
+    runtime: sysbox-runc
+    restart: unless-stopped
+    profiles:
+      - agent2
+      - all
+    volumes:
+      - agent-2-home:/home/agent
+    networks:
+      - proxy
+      - agent-net
+    deploy:
+      resources:
+        limits:
+          cpus: "4"
+          memory: 8G
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.agent-2.rule=Host(`agent-2.dev.codematrx.com`)"
+      - "traefik.http.routers.agent-2.entrypoints=websecure"
+      - "traefik.http.routers.agent-2.tls.certresolver=letsencrypt"
+      - "traefik.http.services.agent-2.loadbalancer.server.port=7681"
+
+volumes:
+  agent-1-home:
+  agent-2-home:
+
+networks:
+  proxy:
+    external: true
+  agent-net:
+    driver: bridge

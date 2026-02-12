@@ -12,6 +12,8 @@ import {
   LogOut,
   Menu,
   ShieldCheck,
+  Database,
+  FileText,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -25,7 +27,10 @@ export type AdminView =
   | "sandboxes"
   | "tokens"
   | "builds"
-  | "system";
+  | "system"
+  | "db-health"
+  | "infrastructure"
+  | "docs";
 
 interface NavItem {
   id: AdminView;
@@ -57,6 +62,14 @@ const navGroups: NavGroup[] = [
     label: "Monitoring",
     items: [
       { id: "system", label: "System", icon: Monitor },
+      { id: "db-health", label: "DB Health", icon: Database },
+      { id: "infrastructure", label: "Infrastructure", icon: Server },
+    ],
+  },
+  {
+    label: "Reference",
+    items: [
+      { id: "docs", label: "Documentation", icon: FileText },
     ],
   },
 ];

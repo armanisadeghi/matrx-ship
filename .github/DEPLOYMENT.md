@@ -53,8 +53,8 @@ Complete guide for deploying matrx-ship using GitHub Actions CI/CD.
 
 | Environment | Branch | URL | Auto-Deploy |
 |-------------|--------|-----|-------------|
-| Production | `main` | `https://mcp.dev.codematrx.com` | ✅ Yes |
-| Staging | `develop` | `https://staging-mcp.dev.codematrx.com` | ✅ Yes |
+| Production | `main` | `https://manager.dev.codematrx.com` | ✅ Yes |
+| Staging | `develop` | `https://staging-manager.dev.codematrx.com` | ✅ Yes |
 
 ## Initial Setup
 

@@ -155,15 +155,15 @@ docker logs matrx-deploy --tail 50 -f
 # URL: https://deploy.dev.codematrx.com
 ```
 
-#### 3B. Server Manager (MCP server)
+#### 3B. Server Manager
 
 ```bash
 cd /srv/apps/server-manager && docker compose build --no-cache server-manager && docker compose up -d --force-recreate server-manager
 
 # Check health
-docker logs mcp-server-manager --tail 50 -f
+docker logs matrx-manager --tail 50 -f
 
-# URL: https://mcp.dev.codematrx.com
+# URL: https://manager.dev.codematrx.com
 ```
 
 **Note:** Both of these build from `/srv/projects/matrx-ship/deploy` and `/srv/projects/matrx-ship/server-manager` respectively. If you updated the matrx-ship source code, you need to rebuild these too.

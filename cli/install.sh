@@ -29,7 +29,7 @@ set -uo pipefail
 
 REPO_RAW="https://raw.githubusercontent.com/armanisadeghi/matrx-ship/main"
 INSTALL_DIR="scripts/matrx"
-DEFAULT_SERVER="https://mcp.dev.codematrx.com"
+DEFAULT_SERVER="https://manager.dev.codematrx.com"
 SERVER_CONFIG_FILE="$HOME/.config/matrx-ship/server.json"
 
 # ─── Colors ──────────────────────────────────────────────────────────────────
@@ -85,6 +85,60 @@ prompt_user() {
 }
 
 # ─── Detection helpers ───────────────────────────────────────────────────────
+
+# Unified function to ensure tsx is in devDependencies for npm projects
+ensure_tsx_dependency() {
+    if [[ ! -f "package.json" ]]; then
+        return 0  # Not a Node project, skip
+    fi
+
+    TSX_INSTALLED=false
+    
+    # Check if tsx is already installed
+    if [[ "$HAS_JQ" == true ]]; then
+        if jq -e '.devDependencies.tsx // .dependencies.tsx' package.json &>/dev/null; then
+            TSX_INSTALLED=true
+        fi
+    else
+        if grep -q '"tsx"' package.json 2>/dev/null; then
+            TSX_INSTALLED=true
+        fi
+    fi
+
+    if [[ "$TSX_INSTALLED" == true ]]; then
+        return 0  # Already installed
+    fi
+
+    # tsx is missing — add it to devDependencies
+    echo -e "  ${YELLOW}↓${NC} Installing tsx (required for ship CLI)..."
+    
+    # Detect package manager and install
+    if [[ -f "pnpm-lock.yaml" ]] || [[ -f "pnpm-workspace.yaml" ]]; then
+        if pnpm add -D tsx 2>/dev/null; then
+            ok "tsx installed via pnpm"
+        else
+            warn "Failed to install tsx. Run: pnpm add -D tsx"
+        fi
+    elif [[ -f "yarn.lock" ]]; then
+        if yarn add -D tsx 2>/dev/null; then
+            ok "tsx installed via yarn"
+        else
+            warn "Failed to install tsx. Run: yarn add -D tsx"
+        fi
+    elif [[ -f "bun.lockb" ]] || [[ -f "bun.lock" ]]; then
+        if bun add -D tsx 2>/dev/null; then
+            ok "tsx installed via bun"
+        else
+            warn "Failed to install tsx. Run: bun add -D tsx"
+        fi
+    else
+        if npm install -D tsx 2>/dev/null; then
+            ok "tsx installed via npm"
+        else
+            warn "Failed to install tsx. Run: npm install -D tsx"
+        fi
+    fi
+}
 
 detect_project_type() {
     if [[ -f "package.json" ]]; then
@@ -419,27 +473,7 @@ if (added > 0) console.log("Updated " + added + " script(s)");
 
     # Ensure tsx is installed for ship
     if [[ "$SETUP_SHIP" == true ]]; then
-        TSX_INSTALLED=false
-        if [[ "$HAS_JQ" == true ]]; then
-            if jq -e '.devDependencies.tsx // .dependencies.tsx' package.json &>/dev/null; then
-                TSX_INSTALLED=true
-            fi
-        else
-            if grep -q '"tsx"' package.json 2>/dev/null; then TSX_INSTALLED=true; fi
-        fi
-
-        if [[ "$TSX_INSTALLED" == false ]]; then
-            echo -e "  ${YELLOW}↓${NC} Installing tsx (required for ship CLI)..."
-            if [[ -f "pnpm-lock.yaml" ]] || [[ -f "pnpm-workspace.yaml" ]]; then
-                pnpm add -D tsx 2>/dev/null && ok "tsx installed via pnpm" || warn "Run: pnpm add -D tsx"
-            elif [[ -f "yarn.lock" ]]; then
-                yarn add -D tsx 2>/dev/null && ok "tsx installed via yarn" || warn "Run: yarn add -D tsx"
-            elif [[ -f "bun.lockb" ]] || [[ -f "bun.lock" ]]; then
-                bun add -D tsx 2>/dev/null && ok "tsx installed via bun" || warn "Run: bun add -D tsx"
-            else
-                npm install -D tsx 2>/dev/null && ok "tsx installed via npm" || warn "Run: npm install -D tsx"
-            fi
-        fi
+        ensure_tsx_dependency
     fi
 else
     # Python or "other" project — register Makefile targets

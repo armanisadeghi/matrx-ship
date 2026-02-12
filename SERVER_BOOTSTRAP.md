@@ -41,9 +41,9 @@ These are NOT in git. You must have them to set up a server:
 
 | Secret | Where it goes | How to get it |
 |--------|--------------|---------------|
-| `MCP_BEARER_TOKEN` | `/srv/mcp-servers/.env` | Generate: `openssl rand -hex 32` |
-| `AWS_ACCESS_KEY_ID` | `/srv/mcp-servers/.env`, `/srv/apps/deploy/.env` | AWS IAM user `matrx-server-backup` |
-| `AWS_SECRET_ACCESS_KEY` | `/srv/mcp-servers/.env`, `/srv/apps/deploy/.env` | Same IAM user |
+| `MANAGER_BEARER_TOKEN` | `/srv/apps/server-manager/.env` | Generate: `openssl rand -hex 32` |
+| `AWS_ACCESS_KEY_ID` | `/srv/apps/server-manager/.env`, `/srv/apps/deploy/.env` | AWS IAM user `matrx-server-backup` |
+| `AWS_SECRET_ACCESS_KEY` | `/srv/apps/server-manager/.env`, `/srv/apps/deploy/.env` | Same IAM user |
 | `TRAEFIK_DASHBOARD_AUTH` | `/srv/traefik/.env` | Generate: `htpasswd -nb admin <password>` |
 | `POSTGRES_PASSWORD` (global) | `/srv/postgres/.env` | Generate any strong password |
 | `PGADMIN_PASSWORD` | `/srv/postgres/.env` | Generate any strong password |
@@ -192,8 +192,8 @@ For now, recreate it:
 ```bash
 mkdir -p /srv/mcp-servers/servers/server-manager
 
-cat > /srv/mcp-servers/.env << 'EOF'
-MCP_BEARER_TOKEN=GENERATE_WITH_openssl_rand_hex_32
+cat > /srv/apps/server-manager/.env << 'EOF'
+MANAGER_BEARER_TOKEN=GENERATE_WITH_openssl_rand_hex_32
 
 # AWS S3
 AWS_ACCESS_KEY_ID=YOUR_KEY
@@ -258,7 +258,7 @@ cd /srv/apps/deploy && docker compose up -d --build
 
 ### 8. Create ship instances
 
-Use the server manager UI at `https://mcp.dev.codematrx.com/admin/` or MCP tools to
+Use the server manager UI at `https://manager.dev.codematrx.com/admin/` or MCP tools to
 create instances. Each instance gets auto-generated credentials.
 
 ---
@@ -270,7 +270,7 @@ React admin UI, MCP tools) lives at `/srv/mcp-servers/` which has NO remote git 
 
 **Options to fix:**
 1. Create a `github.com/armanisadeghi/mcp-servers` repo and push it
-2. Move the server manager code into `/srv/projects/matrx-ship/mcp-server-manager/`
+2. Move the server manager code into `/srv/projects/matrx-ship/server-manager/`
 
 Until this is resolved, the server manager code will be lost on server teardown.
 

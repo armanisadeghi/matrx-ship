@@ -221,7 +221,7 @@ jobs:
     if: github.ref == 'refs/heads/main'
     environment:
       name: production
-      url: https://mcp.dev.codematrx.com
+      url: https://manager.dev.codematrx.com
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -326,7 +326,7 @@ jobs:
     if: github.ref == 'refs/heads/develop'
     environment:
       name: staging
-      url: https://staging-mcp.dev.codematrx.com
+      url: https://staging-manager.dev.codematrx.com
     steps:
       - name: Checkout code
         uses: actions/checkout@v4

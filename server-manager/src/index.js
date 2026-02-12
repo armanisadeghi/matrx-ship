@@ -8,6 +8,18 @@ import { join, resolve, dirname } from "node:path";
 import { cpus, totalmem, freemem, uptime as osUptime, hostname } from "node:os";
 import { randomBytes, createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
+import {
+  isSupabaseConfigured,
+  ensureServerRegistered,
+  syncInstance,
+  syncAllInstances,
+  removeInstanceFromSupabase,
+  recordBuildInSupabase,
+  recordBackupInSupabase,
+  auditLog,
+  fullSync,
+  fullRestore,
+} from "./supabase.js";
 
 const PORT = process.env.PORT || 3000;
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -58,11 +70,12 @@ function verifyToken(bearerToken) {
   return entry;
 }
 
-// Auto-migrate: import MCP_BEARER_TOKEN as admin token on first boot
+// Auto-migrate: import MANAGER_BEARER_TOKEN as admin token on first boot
 function initTokenStore() {
-  const envToken = process.env.MCP_BEARER_TOKEN;
+  // Support both new and legacy env var names for backward compatibility
+  const envToken = process.env.MANAGER_BEARER_TOKEN || process.env.MCP_BEARER_TOKEN;
   if (!envToken) {
-    console.log("WARNING: No MCP_BEARER_TOKEN set — auth is disabled");
+    console.log("WARNING: No MANAGER_BEARER_TOKEN set — auth is disabled");
     return;
   }
 
@@ -79,13 +92,13 @@ function initTokenStore() {
   store.tokens.push({
     id: `tok_${randomBytes(6).toString("hex")}`,
     token_hash: envHash,
-    label: "Admin (auto-imported from MCP_BEARER_TOKEN)",
+    label: "Admin (auto-imported from MANAGER_BEARER_TOKEN)",
     role: "admin",
     created_at: new Date().toISOString(),
     last_used_at: null,
   });
   saveTokens(store);
-  console.log(`Token store: imported MCP_BEARER_TOKEN as admin, ${store.tokens.length} token(s) total`);
+  console.log(`Token store: imported MANAGER_BEARER_TOKEN as admin, ${store.tokens.length} token(s) total`);
 }
 
 // ╔════════════════════════════════════════════════════════════════════════════╗
@@ -93,7 +106,7 @@ function initTokenStore() {
 // ╚════════════════════════════════════════════════════════════════════════════╝
 
 function authMiddleware(req, res, next) {
-  const envToken = process.env.MCP_BEARER_TOKEN;
+  const envToken = process.env.MANAGER_BEARER_TOKEN || process.env.MCP_BEARER_TOKEN;
   if (!envToken) return next(); // No token configured = open
 
   const auth = req.headers.authorization;
@@ -177,7 +190,7 @@ function randomHex(bytes) {
 }
 
 // ╔════════════════════════════════════════════════════════════════════════════╗
-// ║  DEPLOYMENT HELPERS (shared by MCP tools + REST API)                      ║
+// ║  DEPLOYMENT HELPERS (shared by tools + REST API)                           ║
 // ╚════════════════════════════════════════════════════════════════════════════╝
 
 function loadDeployments() {
@@ -190,12 +203,14 @@ function loadDeployments() {
 
 function saveDeployments(config) {
   writeFileSync(DEPLOYMENTS_FILE, JSON.stringify(config, null, 2) + "\n", "utf-8");
+  // Dual-write to Supabase (fire and forget)
+  syncAllInstances(config).catch(() => {});
 }
 
 function generateCompose(name, config) {
   const pgImage = config.defaults?.postgres_image || "postgres:17-alpine";
   return `# Auto-generated for ship instance: ${name}
-# Do not edit manually — managed by MCP server-manager
+# Do not edit manually — managed by matrx-manager
 services:
   app:
     image: matrx-ship:latest
@@ -321,6 +336,9 @@ function createInstance(name, display_name, api_key, postgres_image) {
     saveDeployments(config);
   }
 
+  // Audit log
+  auditLog("api", "instance_create", name, { display_name, success: startResult.success });
+
   return {
     success: startResult.success,
     instance: name,
@@ -396,7 +414,11 @@ function removeInstance(name, delete_data, force = false) {
   // Remove from config
   delete config.instances[name];
   saveDeployments(config);
-  
+  removeInstanceFromSupabase(name).catch(() => {});
+
+  // Audit log
+  auditLog("api", "instance_remove", name, { delete_data, force });
+
   const success = results.compose_down?.success || results.force_cleanup || results.direct_removal;
   return { 
     success: !!success, 
@@ -428,6 +450,8 @@ function recordBuild(entry) {
   const history = loadBuildHistory();
   history.builds.unshift(entry); // newest first
   saveBuildHistory(history);
+  // Dual-write to Supabase (fire and forget)
+  recordBuildInSupabase(entry).catch(() => {});
 }
 
 function generateBuildTag() {
@@ -437,7 +461,7 @@ function generateBuildTag() {
 }
 
 // ╔════════════════════════════════════════════════════════════════════════════╗
-// ║  REBUILD HELPERS (shared by MCP tools + REST API)                         ║
+// ║  REBUILD HELPERS (shared by tools + REST API)                              ║
 // ╚════════════════════════════════════════════════════════════════════════════╝
 
 function rebuildInstances({ name, skip_build, triggered_by } = {}) {
@@ -805,7 +829,7 @@ function getSystemInfo() {
 }
 
 // ╔════════════════════════════════════════════════════════════════════════════╗
-// ║  MCP SERVER (tools + resources)                                           ║
+// ║  MCP PROTOCOL SERVER (tools + resources)                                   ║
 // ╚════════════════════════════════════════════════════════════════════════════╝
 
 function createServer() {
@@ -1038,7 +1062,7 @@ function createServer() {
 
   server.tool("app_rebuild", "Rebuild the matrx-ship Docker image and restart instances. Omit name to restart all.",
     { name: z.string().optional(), skip_build: z.boolean().optional() },
-    async ({ name, skip_build }) => textResult(rebuildInstances({ name, skip_build, triggered_by: "mcp" }))
+    async ({ name, skip_build }) => textResult(rebuildInstances({ name, skip_build, triggered_by: "manager-mcp" }))
   );
 
   server.tool("self_rebuild", "Rebuild and restart the server manager itself. Warning: connection will drop briefly.",
@@ -1388,7 +1412,7 @@ app.put("/api/instances/:name/env", authMiddleware, requireRole("admin", "deploy
 
 // ── Rebuild / Deploy ────────────────────────────────────────────────────────
 
-// Non-streaming rebuild (for MCP tools and simple API calls)
+// Non-streaming rebuild (for tools and simple API calls)
 app.post("/api/rebuild", authMiddleware, requireRole("admin", "deployer"), async (req, res) => {
   const name = req.query.name || req.body?.name || undefined;
   const skip_build = req.query.skip_build === "true" || req.body?.skip_build === true;
@@ -1604,7 +1628,7 @@ app.post("/api/self-rebuild/stream", authMiddleware, requireRole("admin"), async
   }
 });
 
-// Non-streaming self-rebuild (for MCP tools)
+// Non-streaming self-rebuild (for tools)
 app.post("/api/self-rebuild", authMiddleware, requireRole("admin"), async (_req, res) => {
   const result = selfRebuild();
   res.status(result.success ? 200 : 500).json(result);
@@ -1667,6 +1691,247 @@ app.get("/api/instances/:name/logs", authMiddleware, async (req, res) => {
   if (svc === "app" || svc === "both") r.app = exec(`docker logs ${name} --tail ${n} 2>&1`);
   if (svc === "db" || svc === "both") r.db = exec(`docker logs db-${name} --tail ${n} 2>&1`);
   res.json(r);
+});
+
+// ── Per-Instance Database Controls ──────────────────────────────────────────
+
+app.get("/api/instances/:name/db/status", authMiddleware, async (req, res) => {
+  const name = req.params.name;
+  const dbContainer = `db-${name}`;
+  
+  const inspect = exec(`docker inspect ${dbContainer} --format '{{json .State}}' 2>/dev/null`);
+  if (!inspect.success) return res.status(404).json({ error: `Database container ${dbContainer} not found` });
+
+  let state = null;
+  try { state = JSON.parse(inspect.output); } catch {}
+
+  const stats = exec(`docker stats ${dbContainer} --no-stream --format '{"cpu":"{{.CPUPerc}}","mem":"{{.MemUsage}}","mem_pct":"{{.MemPerc}}"}' 2>/dev/null`);
+  let statsData = null;
+  try { if (stats.success) statsData = JSON.parse(stats.output); } catch {}
+
+  const version = exec(`docker exec ${dbContainer} psql -U ship -d ship -tc "SELECT version()" 2>/dev/null`);
+  const size = exec(`docker exec ${dbContainer} psql -U ship -d ship -tc "SELECT pg_size_pretty(pg_database_size('ship'))" 2>/dev/null`);
+  const connections = exec(`docker exec ${dbContainer} psql -U ship -d ship -tc "SELECT count(*) FROM pg_stat_activity" 2>/dev/null`);
+
+  res.json({
+    container: dbContainer,
+    status: state?.Status || "unknown",
+    running: state?.Running || false,
+    health: state?.Health?.Status || null,
+    stats: statsData,
+    version: version.output?.trim() || "unknown",
+    size: size.output?.trim() || "unknown",
+    connections: parseInt(connections.output?.trim() || "0") || 0,
+  });
+});
+
+app.get("/api/instances/:name/db/tables", authMiddleware, async (req, res) => {
+  const name = req.params.name;
+  const dbContainer = `db-${name}`;
+
+  const result = exec(`docker exec ${dbContainer} psql -U ship -d ship -tc "SELECT tablename, pg_size_pretty(pg_total_relation_size(schemaname||'.'||tablename)) as size, n_live_tup as rows FROM pg_stat_user_tables JOIN pg_tables USING (tablename, schemaname) ORDER BY pg_total_relation_size(schemaname||'.'||tablename) DESC" 2>/dev/null`);
+
+  if (!result.success) return res.status(500).json({ error: result.error || "Failed to query tables" });
+
+  const tables = result.output
+    .split("\n")
+    .filter((l) => l.trim())
+    .map((line) => {
+      const parts = line.split("|").map((p) => p.trim());
+      return { name: parts[0], size: parts[1], rows: parseInt(parts[2]) || 0 };
+    })
+    .filter((t) => t.name);
+
+  res.json({ tables, count: tables.length });
+});
+
+app.post("/api/instances/:name/db/query", authMiddleware, requireRole("admin"), async (req, res) => {
+  const name = req.params.name;
+  const dbContainer = `db-${name}`;
+  const { query } = req.body;
+
+  if (!query) return res.status(400).json({ error: "query is required" });
+
+  // Only allow read-only queries
+  const trimmed = query.trim().toUpperCase();
+  if (!["SELECT", "SHOW", "EXPLAIN", "\\D"].some((p) => trimmed.startsWith(p))) {
+    return res.status(400).json({ error: "Only read-only queries allowed (SELECT, SHOW, EXPLAIN)" });
+  }
+
+  const result = exec(`docker exec ${dbContainer} psql -U ship -d ship -c '${query.replace(/'/g, "'\\''")}'`, { timeout: 15000 });
+  res.json({ success: result.success, output: result.output || result.error });
+});
+
+app.post("/api/instances/:name/db/restore", authMiddleware, requireRole("admin"), async (req, res) => {
+  const name = req.params.name;
+  const dbContainer = `db-${name}`;
+  const { backup_file } = req.body;
+
+  if (!backup_file) return res.status(400).json({ error: "backup_file is required" });
+
+  const backupPath = join(BACKUPS_DIR, name, backup_file);
+  if (!existsSync(backupPath)) return res.status(404).json({ error: `Backup file not found: ${backup_file}` });
+
+  // Restore the backup
+  const result = exec(`cat ${backupPath} | docker exec -i ${dbContainer} psql -U ship -d ship`, { timeout: 120000 });
+
+  auditLog(req.tokenEntry?.label || "api", "db_restore", name, { backup_file, success: result.success });
+
+  res.json({ success: result.success, output: result.output || result.error });
+});
+
+// ── Streaming Logs (SSE) ────────────────────────────────────────────────────
+
+app.get("/api/instances/:name/logs/stream", authMiddleware, async (req, res) => {
+  const name = req.params.name;
+  const service = req.query.service || "app";
+  const container = service === "db" ? `db-${name}` : name;
+
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache",
+    Connection: "keep-alive",
+    "X-Accel-Buffering": "no",
+  });
+
+  const proc = spawn("docker", ["logs", container, "--follow", "--tail", "50", "--timestamps"], {
+    env: { ...process.env, PATH: process.env.PATH },
+  });
+
+  proc.stdout.on("data", (chunk) => {
+    for (const line of chunk.toString().split("\n").filter(Boolean)) {
+      res.write(`data: ${JSON.stringify({ message: line })}\n\n`);
+    }
+  });
+
+  proc.stderr.on("data", (chunk) => {
+    for (const line of chunk.toString().split("\n").filter(Boolean)) {
+      res.write(`data: ${JSON.stringify({ message: line })}\n\n`);
+    }
+  });
+
+  proc.on("close", () => {
+    res.write(`event: close\ndata: {}\n\n`);
+    res.end();
+  });
+
+  req.on("close", () => {
+    proc.kill("SIGTERM");
+  });
+});
+
+// ── Instance Exec (for terminal) ────────────────────────────────────────────
+
+app.post("/api/instances/:name/exec", authMiddleware, requireRole("admin", "deployer"), async (req, res) => {
+  const name = req.params.name;
+  const { command, service } = req.body;
+
+  if (!command) return res.status(400).json({ error: "command is required" });
+
+  const container = service === "db" ? `db-${name}` : name;
+  const result = exec(`docker exec ${container} sh -c '${command.replace(/'/g, "'\\''")}'`, { timeout: 30000 });
+
+  res.json({ success: result.success, output: result.output || result.error });
+});
+
+// ── Database Health Audit ────────────────────────────────────────────────────
+
+app.get("/api/db-health", authMiddleware, async (_req, res) => {
+  const config = loadDeployments();
+  const results = [];
+
+  for (const [name, info] of Object.entries(config.instances)) {
+    const appStatus = exec(`docker inspect ${name} --format '{{.State.Status}}' 2>/dev/null`);
+    const dbStatus = exec(`docker inspect db-${name} --format '{{.State.Status}}' 2>/dev/null`);
+    const dbHealth = exec(`docker inspect db-${name} --format '{{.State.Health.Status}}' 2>/dev/null`);
+
+    let connected = false;
+    if (dbStatus.success && dbStatus.output === "running") {
+      const ping = exec(`docker exec db-${name} pg_isready -U ship 2>/dev/null`);
+      connected = ping.success;
+    }
+
+    results.push({
+      instance: name,
+      display_name: info.display_name,
+      app_status: appStatus.output || "not found",
+      db_container: `db-${name}`,
+      db_status: dbStatus.output || "not found",
+      db_health: dbHealth.output || "none",
+      db_connected: connected,
+      postgres_image: info.postgres_image || "unknown",
+    });
+  }
+
+  const healthy = results.filter((r) => r.db_connected).length;
+  const unhealthy = results.filter((r) => !r.db_connected).length;
+
+  res.json({ instances: results, healthy, unhealthy, total: results.length });
+});
+
+// ── Outdated Image Detection ────────────────────────────────────────────────
+
+app.get("/api/instances/outdated", authMiddleware, async (_req, res) => {
+  const config = loadDeployments();
+  const latestImageId = exec("docker inspect matrx-ship:latest --format '{{.Id}}' 2>/dev/null");
+
+  if (!latestImageId.success) {
+    return res.json({ error: "Could not inspect matrx-ship:latest", instances: [] });
+  }
+
+  const results = [];
+  for (const [name] of Object.entries(config.instances)) {
+    const instanceImageId = exec(`docker inspect ${name} --format '{{.Image}}' 2>/dev/null`);
+    const isOutdated = instanceImageId.success && instanceImageId.output !== latestImageId.output;
+    results.push({
+      instance: name,
+      current_image: instanceImageId.output?.substring(0, 19) || "unknown",
+      latest_image: latestImageId.output?.substring(0, 19) || "unknown",
+      outdated: isOutdated,
+    });
+  }
+
+  const outdatedCount = results.filter((r) => r.outdated).length;
+  res.json({ instances: results, outdated_count: outdatedCount, total: results.length });
+});
+
+// ── Documentation ───────────────────────────────────────────────────────────
+
+app.get("/api/docs", authMiddleware, async (req, res) => {
+  const docsDir = join(HOST_SRV, "projects/matrx-ship/docs/ops");
+  const slug = req.query.slug;
+
+  if (slug) {
+    const docPath = join(docsDir, `${slug}.md`);
+    if (!existsSync(docPath)) return res.status(404).json({ error: "Document not found" });
+    try {
+      const content = readFileSync(docPath, "utf-8");
+      return res.json({ slug, content });
+    } catch {
+      return res.status(500).json({ error: "Failed to read document" });
+    }
+  }
+
+  // List all docs
+  function getDocsTree(dir, prefix = "") {
+    if (!existsSync(dir)) return [];
+    const entries = [];
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const fullPath = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        entries.push(...getDocsTree(fullPath, prefix ? `${prefix}/${entry.name}` : entry.name));
+      } else if (entry.name.endsWith(".md")) {
+        const base = entry.name.replace(".md", "");
+        const slug = prefix ? `${prefix}/${base}` : base;
+        const title = base.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+        entries.push({ slug, title });
+      }
+    }
+    return entries;
+  }
+
+  const docs = getDocsTree(docsDir);
+  res.json({ docs });
 });
 
 // ── Sandboxes ──────────────────────────────────────────────────────────────
@@ -1869,7 +2134,53 @@ app.delete("/api/tokens/:id", authMiddleware, requireRole("admin"), async (req, 
   res.json({ success: true, removed: { id: removed.id, label: removed.label } });
 });
 
-// MCP endpoint
+// ── Supabase Persistence Endpoints ──────────────────────────────────────────
+
+app.get("/api/supabase/status", authMiddleware, async (_req, res) => {
+  res.json({
+    configured: isSupabaseConfigured(),
+    supabase_url: process.env.SUPABASE_URL ? process.env.SUPABASE_URL.replace(/\/\/(.{8}).*@/, "//$1***@") : null,
+  });
+});
+
+app.post("/api/supabase/sync", authMiddleware, requireRole("admin"), async (_req, res) => {
+  try {
+    const deployments = loadDeployments();
+    const tokens = loadTokens();
+    const builds = loadBuildHistory();
+    const result = await fullSync(deployments, tokens, builds);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/supabase/restore", authMiddleware, requireRole("admin"), async (_req, res) => {
+  try {
+    const result = await fullRestore();
+    if (!result.restored) {
+      return res.status(400).json(result);
+    }
+    // Write restored data to local files
+    if (result.instances) {
+      const config = loadDeployments();
+      config.instances = result.instances;
+      writeFileSync(DEPLOYMENTS_FILE, JSON.stringify(config, null, 2) + "\n", "utf-8");
+    }
+    if (result.tokens) {
+      writeFileSync(TOKENS_FILE, JSON.stringify(result.tokens, null, 2) + "\n", "utf-8");
+    }
+    if (result.builds) {
+      const historyFile = BUILD_HISTORY_FILE;
+      writeFileSync(historyFile, JSON.stringify(result.builds, null, 2) + "\n", "utf-8");
+    }
+    res.json({ ...result, local_files_updated: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// MCP protocol endpoint (Model Context Protocol — this is a genuine MCP endpoint)
 app.post("/mcp", authMiddleware, async (req, res) => {
   const server = createServer();
   try {
@@ -1878,7 +2189,7 @@ app.post("/mcp", authMiddleware, async (req, res) => {
     await transport.handleRequest(req, res, req.body);
     res.on("close", () => { transport.close(); server.close(); });
   } catch (error) {
-    console.error("MCP error:", error);
+    console.error("MCP protocol error:", error);
     if (!res.headersSent) res.status(500).json({ jsonrpc: "2.0", error: { code: -32603, message: "Internal server error" }, id: null });
   }
 });
@@ -1890,9 +2201,26 @@ app.delete("/mcp", (_req, res) => res.status(405).json({ jsonrpc: "2.0", error: 
 initTokenStore();
 
 app.listen(PORT, "0.0.0.0", () => {
-  console.log(`Server Manager MCP v2.0 listening on port ${PORT}`);
+  console.log(`Matrx Manager v2.0 listening on port ${PORT}`);
   console.log(`Dashboard: http://0.0.0.0:${PORT}/admin`);
-  console.log(`Auth: ${process.env.MCP_BEARER_TOKEN ? "enabled (token store)" : "DISABLED"}`);
+  console.log(`MCP endpoint: http://0.0.0.0:${PORT}/mcp`);
+  console.log(`Auth: ${(process.env.MANAGER_BEARER_TOKEN || process.env.MCP_BEARER_TOKEN) ? "enabled (token store)" : "DISABLED"}`);
+  console.log(`Supabase: ${isSupabaseConfigured() ? "configured" : "not configured (local-only mode)"}`);
+
+  // Background sync to Supabase on startup
+  if (isSupabaseConfigured()) {
+    (async () => {
+      try {
+        const deployments = loadDeployments();
+        const tokens = loadTokens();
+        const builds = loadBuildHistory();
+        const result = await fullSync(deployments, tokens, builds);
+        console.log(`Supabase startup sync: ${result.synced ? "complete" : result.reason}`);
+      } catch (err) {
+        console.error("Supabase startup sync failed:", err.message);
+      }
+    })();
+  }
 });
 
 process.on("SIGINT", () => process.exit(0));

@@ -271,7 +271,7 @@
             <button class="btn sm" id="self-rebuild-btn" onclick="selfRebuildManager()">Rebuild Server Manager</button>
           </div>
           <div class="panel-body">
-            <p style="color:var(--text2);font-size:0.85rem;margin-bottom:0.5rem">Rebuild and restart the server manager container from source at <code>/srv/mcp-servers/</code>. The admin UI will briefly disconnect during restart.</p>
+            <p style="color:var(--text2);font-size:0.85rem;margin-bottom:0.5rem">Rebuild and restart the server manager container from source at <code>/srv/apps/server-manager/</code>. The admin UI will briefly disconnect during restart.</p>
             <div id="self-rebuild-status" style="display:none" class="log-output" style="max-height:200px"></div>
           </div>
         </div>
@@ -490,7 +490,7 @@
 
 <script>
 const BASE = location.origin;
-let TOKEN = localStorage.getItem("mcp_token") || "";
+let TOKEN = localStorage.getItem("manager_token") || localStorage.getItem("mcp_token") || "";
 let ROLE = "";
 let lastNewToken = "";
 let currentInstance = null;
@@ -518,7 +518,8 @@ async function doLogin() {
   if (!TOKEN) return;
   try {
     await api("/api/system");
-    localStorage.setItem("mcp_token", TOKEN);
+    localStorage.setItem("manager_token", TOKEN);
+    localStorage.removeItem("mcp_token"); // clean up legacy key
     document.getElementById("login-error").style.display = "none";
     document.getElementById("login-overlay").style.display = "none";
     document.getElementById("app").style.display = "block";
@@ -531,7 +532,7 @@ async function doLogin() {
 }
 
 function doLogout() {
-  TOKEN = ""; localStorage.removeItem("mcp_token");
+  TOKEN = ""; localStorage.removeItem("manager_token"); localStorage.removeItem("mcp_token");
   document.getElementById("login-overlay").style.display = "flex";
   document.getElementById("app").style.display = "none";
 }

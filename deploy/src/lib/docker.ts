@@ -3,6 +3,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSy
 import { join, dirname } from "node:path";
 import { randomBytes } from "node:crypto";
 import { cpus, totalmem, freemem, uptime as osUptime, hostname } from "node:os";
+import { recordBuildInSupabase, auditLog } from "./supabase";
 
 // Host paths — the deploy container mounts /srv and Docker socket
 const HOST_SRV = process.env.HOST_SRV_PATH || "/host-srv";
@@ -130,6 +131,8 @@ function recordBuild(entry: BuildRecord) {
   const history = loadBuildHistory();
   history.builds.unshift(entry);
   saveBuildHistory(history);
+  // Dual-write to Supabase (fire and forget)
+  recordBuildInSupabase(entry).catch(() => {});
 }
 
 function generateBuildTag() {
@@ -311,11 +314,11 @@ export function rollbackBuild(tag: string) {
 }
 
 export function rebuildServerManager() {
-  const mcpDir = join(HOST_SRV, "mcp-servers");
-  if (!existsSync(join(mcpDir, "docker-compose.yml"))) {
-    return { success: false, error: "docker-compose.yml not found in /srv/mcp-servers/" };
+  const managerDir = join(HOST_SRV, "apps", "server-manager");
+  if (!existsSync(join(managerDir, "docker-compose.yml"))) {
+    return { success: false, error: "docker-compose.yml not found in /srv/apps/server-manager/" };
   }
-  const result = exec("docker compose up -d --build server-manager", { cwd: mcpDir, timeout: 300000 });
+  const result = exec("docker compose up -d --build server-manager", { cwd: managerDir, timeout: 300000 });
   return { success: result.success, output: result.output || result.error };
 }
 
@@ -460,14 +463,14 @@ export function streamingSelfRebuild(
   send: (event: string, data: Record<string, unknown>) => void,
 ): Promise<void> {
   return new Promise((resolve) => {
-    const mcpDir = join(HOST_SRV, "mcp-servers");
+    const managerDir = join(HOST_SRV, "apps", "server-manager");
 
     send("phase", { phase: "build", message: "Rebuilding server manager..." });
     send("log", { message: "Running: docker compose up -d --build server-manager" });
-    send("log", { message: `Working directory: ${mcpDir}` });
+    send("log", { message: `Working directory: ${managerDir}` });
 
     const proc = spawn("docker", ["compose", "up", "-d", "--build", "server-manager"], {
-      cwd: mcpDir,
+      cwd: managerDir,
       env: { ...process.env, PATH: process.env.PATH },
     });
 

@@ -289,4 +289,4 @@ curl -sL https://raw.githubusercontent.com/armanisadeghi/matrx-ship/main/cli/ins
 
 ### "Already exists" during init
 
-If the instance already exists on the server, Ship will try to retrieve the existing config. If that fails, check the admin UI at `https://mcp.dev.codematrx.com/admin/` for the URL and API key.
+If the instance already exists on the server, Ship will try to retrieve the existing config. If that fails, check the admin UI at `https://manager.dev.codematrx.com/admin/` for the URL and API key.

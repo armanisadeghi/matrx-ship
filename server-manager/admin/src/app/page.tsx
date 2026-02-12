@@ -14,6 +14,9 @@ import { SandboxDetail } from "@/components/admin/sandbox-detail";
 import { TokensTab } from "@/components/admin/tokens-tab";
 import { BuildsTab } from "@/components/admin/builds-tab";
 import { SystemTab } from "@/components/admin/system-tab";
+import { DbHealthTab } from "@/components/admin/db-health-tab";
+import { InfraTab } from "@/components/admin/infra-tab";
+import { DocsTab } from "@/components/admin/docs-tab";
 
 export default function AdminPage() {
   const [authed, setAuthed] = useState(false);
@@ -199,6 +202,15 @@ export default function AdminPage() {
             onClearLogs={clearLogs}
           />
         );
+
+      case "db-health":
+        return <DbHealthTab api={api} />;
+
+      case "infrastructure":
+        return <InfraTab api={api} system={data.systemInfo} />;
+
+      case "docs":
+        return <DocsTab api={api} />;
 
       default:
         return null;

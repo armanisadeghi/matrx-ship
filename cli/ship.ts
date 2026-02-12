@@ -28,7 +28,7 @@ import { homedir } from "os";
 
 // ── Constants ─────────────────────────────────────────────────────────
 
-const DEFAULT_MCP_SERVER = "https://mcp.dev.codematrx.com";
+const DEFAULT_MCP_SERVER = "https://manager.dev.codematrx.com";
 const REPO_RAW = "https://raw.githubusercontent.com/armanisadeghi/matrx-ship/main";
 const GLOBAL_CONFIG_DIR = path.join(homedir(), ".config", "matrx-ship");
 const GLOBAL_CONFIG_FILE = path.join(GLOBAL_CONFIG_DIR, "server.json");
@@ -1496,6 +1496,11 @@ function ensureGitignore(): boolean {
   }
 }
 
+/**
+ * Ensures tsx is in devDependencies for npm projects.
+ * This is critical for ship CLI to work properly.
+ * Checks all dependency locations and adds to devDependencies if missing.
+ */
 function ensureTsxDependency(): void {
   const pkgPath = path.join(process.cwd(), "package.json");
   if (!existsSync(pkgPath)) return;
@@ -1505,17 +1510,38 @@ function ensureTsxDependency(): void {
     const hasTsx =
       pkg.dependencies?.tsx || pkg.devDependencies?.tsx || pkg.optionalDependencies?.tsx;
 
-    if (!hasTsx) {
-      console.log("📦 Installing tsx (required for ship CLI)...");
-      try {
-        execSync("pnpm add -D tsx", { stdio: "inherit" });
-        console.log("✅ tsx installed");
-      } catch {
-        console.log("⚠️  Could not auto-install tsx. Run: pnpm add -D tsx");
-      }
+    if (hasTsx) {
+      return; // Already installed
     }
-  } catch {
-    // Ignore
+
+    // tsx is missing — add it to devDependencies and install
+    console.log("📦 Adding tsx to devDependencies (required for ship CLI)...");
+    
+    // Add to package.json
+    if (!pkg.devDependencies) pkg.devDependencies = {};
+    pkg.devDependencies.tsx = "^4.21.0";
+    writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + "\n", "utf-8");
+    
+    // Detect package manager and install
+    try {
+      if (existsSync("pnpm-lock.yaml") || existsSync("pnpm-workspace.yaml")) {
+        execSync("pnpm install", { stdio: "inherit" });
+        console.log("✅ tsx installed via pnpm");
+      } else if (existsSync("yarn.lock")) {
+        execSync("yarn install", { stdio: "inherit" });
+        console.log("✅ tsx installed via yarn");
+      } else if (existsSync("bun.lockb") || existsSync("bun.lock")) {
+        execSync("bun install", { stdio: "inherit" });
+        console.log("✅ tsx installed via bun");
+      } else {
+        execSync("npm install", { stdio: "inherit" });
+        console.log("✅ tsx installed via npm");
+      }
+    } catch {
+      console.log("⚠️  Could not auto-install tsx. Run your package manager's install command.");
+    }
+  } catch (error) {
+    console.log("⚠️  Could not check/install tsx:", error instanceof Error ? error.message : String(error));
   }
 }
 
@@ -1644,13 +1670,63 @@ async function checkIntegrity(cliPath: string = "cli/ship.ts"): Promise<boolean>
     envFile: config.env?.file || detectEnvFile(),
   };
 
-  const isShipOk = current.shipUrl && current.shipKey && !isPlaceholderKey(current.shipKey);
+  const isShipOk = current.shipUrl && 
+                   current.shipKey && 
+                   !isPlaceholderUrl(current.shipUrl) && 
+                   !isPlaceholderKey(current.shipKey);
   const isEnvOk = !!(config.env && config.env.doppler && config.env.file);
 
   if (!isShipOk) {
     console.log("   ⚠️  Ship configuration missing or incomplete.");
-    current.shipUrl = await promptUser("Ship URL", current.shipUrl);
-    current.shipKey = await promptUser("Ship API Key", current.shipKey);
+    console.log("");
+    console.log("   ╔════════════════════════════════════════════════════════════╗");
+    console.log("   ║  RECOMMENDED: Auto-provision a ship instance              ║");
+    console.log("   ╚════════════════════════════════════════════════════════════╝");
+    console.log("");
+    const projectName = detectProjectName();
+    console.log(`   Exit this update and run:`);
+    console.log(`   ${shipCmd("init")} ${projectName} "${projectName.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')}"`);
+    console.log("");
+    console.log("   ─────────────────────────────────────────────────────────────");
+    console.log("   Or manually enter your existing instance details:");
+    console.log("   (Full URL required, e.g., https://ship-project.dev.codematrx.com)");
+    console.log("");
+    
+    const urlInput = await promptUser("Ship URL (or press Enter to skip)", "");
+    
+    // If user skipped, don't save invalid config
+    if (!urlInput || urlInput.trim() === "") {
+      console.log("");
+      console.log("   ⚠️  Skipped ship configuration.");
+      console.log(`   Run the init command above to set up automatically.`);
+      console.log("");
+      return false;
+    }
+    
+    // Validate URL format
+    if (isPlaceholderUrl(urlInput) || !urlInput.startsWith("http")) {
+      console.log("");
+      console.log(`   ❌ Invalid URL: "${urlInput}"`);
+      console.log("   URL must start with https:// or http://");
+      console.log(`   Example: https://ship-${projectName}.dev.codematrx.com`);
+      console.log("");
+      console.log(`   Run: ${shipCmd("init")} ${projectName} "Project Name"`);
+      console.log("");
+      return false;
+    }
+    
+    current.shipUrl = urlInput;
+    current.shipKey = await promptUser("Ship API Key", "");
+    
+    // Validate the key too
+    if (!current.shipKey || isPlaceholderKey(current.shipKey)) {
+      console.log("");
+      console.log("   ❌ Invalid API key.");
+      console.log(`   Run: ${shipCmd("init")} ${projectName} "Project Name"`);
+      console.log("");
+      return false;
+    }
+    
     needsSave = true;
   }
 
@@ -1676,7 +1752,12 @@ async function checkIntegrity(cliPath: string = "cli/ship.ts"): Promise<boolean>
   }
 
   if (needsSave) {
-    config.ship = { url: current.shipUrl, apiKey: current.shipKey };
+    // Only save ship config if we have valid values
+    if (current.shipUrl && current.shipKey && 
+        !isPlaceholderUrl(current.shipUrl) && 
+        !isPlaceholderKey(current.shipKey)) {
+      config.ship = { url: current.shipUrl, apiKey: current.shipKey };
+    }
     // env already updated
     writeFileSync(unifiedPath, JSON.stringify(config, null, 2) + "\n");
     console.log("   ✅ Updated .matrx.json");
@@ -1720,6 +1801,11 @@ async function checkIntegrity(cliPath: string = "cli/ship.ts"): Promise<boolean>
         console.log("   ✅ Updated .gitignore");
       }
     } catch { }
+  }
+
+  // ── 6. Ensure tsx dependency ──
+  if (existsSync(pkgPath)) {
+    ensureTsxDependency();
   }
 
   console.log("   ✨ Project integrity verified");
@@ -1888,6 +1974,24 @@ async function handleUpdate(): Promise<void> {
 async function main() {
   const args = process.argv.slice(2);
   const command = args[0];
+
+  // Ensure tsx is in devDependencies for npm projects (except for help command)
+  // This is a safety check to ensure the CLI can run properly
+  if (command !== "help" && command !== "--help" && command !== "-h") {
+    const pkgPath = path.join(process.cwd(), "package.json");
+    if (existsSync(pkgPath)) {
+      try {
+        const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
+        const hasTsx = pkg.dependencies?.tsx || pkg.devDependencies?.tsx || pkg.optionalDependencies?.tsx;
+        if (!hasTsx) {
+          // Silently ensure tsx is added - this will only trigger on first run
+          ensureTsxDependency();
+        }
+      } catch {
+        // Ignore errors - ensureTsxDependency will handle it if needed
+      }
+    }
+  }
 
   if (command === "setup") {
     await handleSetup(args.slice(1));

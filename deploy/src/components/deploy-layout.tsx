@@ -1,6 +1,8 @@
 "use client";
 
 import { useState } from "react";
+import { usePathname } from "next/navigation";
+import Link from "next/link";
 import {
   Rocket,
   History,
@@ -10,6 +12,8 @@ import {
   LogOut,
   Menu,
   ShieldCheck,
+  Settings,
+  FileText,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -18,16 +22,22 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { ThemeToggle } from "@/components/theme-toggle";
 
+// Keep legacy type for backward compat
 export type DeployView =
   | "deploy"
   | "history"
   | "system"
-  | "services";
+  | "services"
+  | "manager"
+  | "instances"
+  | "infrastructure"
+  | "docs";
 
 interface NavItem {
-  id: DeployView;
+  href: string;
   label: string;
   icon: React.ComponentType<{ className?: string }>;
+  badge?: string;
 }
 
 interface NavGroup {
@@ -37,36 +47,53 @@ interface NavGroup {
 
 const navGroups: NavGroup[] = [
   {
+    label: "Server Manager",
+    items: [
+      { href: "/manager", label: "Manager Control", icon: Settings, badge: "primary" },
+    ],
+  },
+  {
     label: "Deployment",
     items: [
-      { id: "deploy", label: "Deploy", icon: Rocket },
-      { id: "history", label: "Build History", icon: History },
+      { href: "/deploy", label: "Deploy", icon: Rocket },
+      { href: "/history", label: "Build History", icon: History },
     ],
   },
   {
     label: "Infrastructure",
     items: [
-      { id: "system", label: "System", icon: Server },
-      { id: "services", label: "Services", icon: LayoutDashboard },
+      { href: "/instances", label: "Instances", icon: LayoutDashboard },
+      { href: "/infrastructure", label: "Infrastructure", icon: Server },
+    ],
+  },
+  {
+    label: "Reference",
+    items: [
+      { href: "/docs", label: "Documentation", icon: FileText },
     ],
   },
 ];
 
 interface DeployLayoutProps {
-  activeView: DeployView;
-  onNavigate: (view: DeployView) => void;
-  onRefresh: () => void;
-  onLogout: () => void;
+  onRefresh?: () => void;
+  onLogout?: () => void;
   children: React.ReactNode;
+  // Legacy props — keep for backward compat with existing pages
+  activeView?: DeployView;
+  onNavigate?: (view: DeployView) => void;
 }
 
 function SidebarContent({
-  activeView,
-  onNavigate,
   onRefresh,
   onLogout,
   onClose,
-}: Omit<DeployLayoutProps, "children"> & { onClose?: () => void }) {
+}: {
+  onRefresh?: () => void;
+  onLogout?: () => void;
+  onClose?: () => void;
+}) {
+  const pathname = usePathname();
+
   return (
     <div className="flex h-full flex-col">
       {/* Logo */}
@@ -96,14 +123,14 @@ function SidebarContent({
               </p>
               <div className="space-y-0.5">
                 {group.items.map((item) => {
-                  const isActive = activeView === item.id;
+                  const isActive =
+                    pathname === item.href ||
+                    (item.href !== "/" && pathname.startsWith(item.href));
                   return (
-                    <button
-                      key={item.id}
-                      onClick={() => {
-                        onNavigate(item.id);
-                        onClose?.();
-                      }}
+                    <Link
+                      key={item.href}
+                      href={item.href}
+                      onClick={() => onClose?.()}
                       className={cn(
                         "flex w-full items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors",
                         isActive
@@ -120,7 +147,12 @@ function SidebarContent({
                         )}
                       />
                       <span className="flex-1 text-left">{item.label}</span>
-                    </button>
+                      {item.badge === "primary" && (
+                        <Badge variant="default" className="text-[10px] h-5 px-1.5">
+                          Primary
+                        </Badge>
+                      )}
+                    </Link>
                   );
                 })}
               </div>
@@ -139,36 +171,38 @@ function SidebarContent({
             </Badge>
           </div>
           <div className="flex items-center gap-1">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={onRefresh}
-              className="h-7 w-7 p-0"
-              title="Refresh"
-            >
-              <RefreshCw className="size-3.5" />
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={onLogout}
-              className="h-7 w-7 p-0"
-              title="Logout"
-            >
-              <LogOut className="size-3.5" />
-            </Button>
+            {onRefresh && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={onRefresh}
+                className="h-7 w-7 p-0"
+                title="Refresh"
+              >
+                <RefreshCw className="size-3.5" />
+              </Button>
+            )}
+            {onLogout && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={onLogout}
+                className="h-7 w-7 p-0"
+                title="Logout"
+              >
+                <LogOut className="size-3.5" />
+              </Button>
+            )}
           </div>
         </div>
         <ThemeToggle />
-        <p className="text-xs text-muted-foreground">Matrx Deploy v0.1.0</p>
+        <p className="text-xs text-muted-foreground">Matrx Deploy v0.2.0</p>
       </div>
     </div>
   );
 }
 
 export function DeployLayout({
-  activeView,
-  onNavigate,
   onRefresh,
   onLogout,
   children,
@@ -180,8 +214,6 @@ export function DeployLayout({
       {/* Desktop sidebar */}
       <aside className="hidden md:flex w-64 bg-sidebar border-r border-sidebar-border flex-col shrink-0">
         <SidebarContent
-          activeView={activeView}
-          onNavigate={onNavigate}
           onRefresh={onRefresh}
           onLogout={onLogout}
         />
@@ -215,8 +247,6 @@ export function DeployLayout({
           <SheetContent side="left" className="w-64 p-0" showCloseButton={false}>
             <SheetTitle className="sr-only">Navigation</SheetTitle>
             <SidebarContent
-              activeView={activeView}
-              onNavigate={onNavigate}
               onRefresh={onRefresh}
               onLogout={onLogout}
               onClose={() => setMobileOpen(false)}

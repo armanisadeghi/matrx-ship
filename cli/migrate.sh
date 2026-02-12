@@ -56,6 +56,63 @@ header()  { echo -e "\n${BOLD}${BLUE}$1${NC}"; }
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
 
+# Unified function to ensure tsx is in devDependencies for npm projects
+ensure_tsx_dependency() {
+    if [[ ! -f "package.json" ]]; then
+        return 0  # Not a Node project, skip
+    fi
+
+    local has_tsx
+    has_tsx=$(node -e "const p=require('./package.json'); console.log(p.devDependencies?.tsx || p.dependencies?.tsx || '')" 2>/dev/null || echo "")
+    
+    if [[ -n "$has_tsx" ]]; then
+        return 0  # Already installed
+    fi
+
+    # tsx is missing — add it to package.json and install
+    changed "Adding tsx to devDependencies (required for ship CLI)"
+    
+    # Add to package.json using node
+    if command -v node &>/dev/null; then
+        node -e "
+            const fs = require('fs');
+            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf-8'));
+            if (!pkg.devDependencies) pkg.devDependencies = {};
+            if (!pkg.devDependencies.tsx) {
+                pkg.devDependencies.tsx = '^4.21.0';
+                fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+            }
+        " 2>/dev/null
+    fi
+    
+    # Detect package manager and install
+    if [[ -f "pnpm-lock.yaml" ]] || [[ -f "pnpm-workspace.yaml" ]]; then
+        if pnpm install 2>/dev/null; then
+            changed "tsx installed via pnpm"
+        else
+            warn "Failed to install tsx. Run: pnpm install"
+        fi
+    elif [[ -f "yarn.lock" ]]; then
+        if yarn install 2>/dev/null; then
+            changed "tsx installed via yarn"
+        else
+            warn "Failed to install tsx. Run: yarn install"
+        fi
+    elif [[ -f "bun.lockb" ]] || [[ -f "bun.lock" ]]; then
+        if bun install 2>/dev/null; then
+            changed "tsx installed via bun"
+        else
+            warn "Failed to install tsx. Run: bun install"
+        fi
+    else
+        if npm install 2>/dev/null; then
+            changed "tsx installed via npm"
+        else
+            warn "Failed to install tsx. Run: npm install"
+        fi
+    fi
+}
+
 download_file() {
     local url="$1"
     local dest="$2"
@@ -497,12 +554,9 @@ if [[ "$IS_NODE" == true ]] && [[ "$IS_MATRX_SHIP_REPO" == false ]]; then
     fi
 
     # Ensure tsx is a devDependency
-    has_tsx=$(node -e "const p=require('./package.json'); console.log(p.devDependencies?.tsx || p.dependencies?.tsx || '')" 2>/dev/null || echo "")
-    if [[ -z "$has_tsx" ]] && [[ "$HAS_SHIP" == true ]]; then
-        json_set "package.json" "devDependencies.tsx" "\"^4.21.0\"" && {
-            changed "Added tsx to devDependencies (run pnpm install)"
-            PKG_UPDATED=true
-        }
+    if [[ "$HAS_SHIP" == true ]]; then
+        ensure_tsx_dependency
+        PKG_UPDATED=true
     fi
 
     if [[ "$PKG_UPDATED" == false ]]; then

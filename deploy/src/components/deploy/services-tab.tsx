@@ -66,7 +66,7 @@ export function ServicesTab({ buildInfo }: ServicesTabProps) {
           <div className="space-y-3">
             <ServiceLink
               name="Server Manager"
-              url="https://mcp.dev.codematrx.com/admin/"
+              url="https://manager.dev.codematrx.com/admin/"
               description="Central admin dashboard — instances, sandboxes, builds, tokens, and system health"
               icon={<ShieldCheck className="size-4 text-orange-500" />}
             />

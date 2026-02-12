@@ -316,3 +316,193 @@ export type NewTicketActivity = typeof ticketActivity.$inferInsert;
 export type TicketAttachment = typeof ticketAttachments.$inferSelect;
 export type NewTicketAttachment = typeof ticketAttachments.$inferInsert;
 export type TicketTimelineRow = typeof vwTicketTimeline.$inferSelect;
+
+// ─────────────────────────────────────────────────
+// Infrastructure persistence tables
+// ─────────────────────────────────────────────────
+
+/**
+ * infra_servers — registered VPS server instances.
+ * Each physical/virtual server that runs the Matrx platform gets a row.
+ * Enables multi-server management and disaster recovery.
+ */
+export const infraServers = pgTable("infra_servers", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  hostname: text("hostname").notNull(),
+  ip: text("ip").notNull(),
+  domainSuffix: text("domain_suffix").notNull(), // e.g. "dev.codematrx.com"
+  sshPort: integer("ssh_port").notNull().default(22),
+  status: text("status").notNull().default("active"), // active, inactive, provisioning
+  lastHeartbeat: timestamp("last_heartbeat", { withTimezone: true }),
+  metadata: jsonb("metadata"), // OS info, versions, etc.
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
+
+/**
+ * infra_instances — replaces deployments.json.
+ * Every Ship app instance deployed on a server.
+ * Sensitive values (api_key, db_password) are stored as encrypted text.
+ */
+export const infraInstances = pgTable(
+  "infra_instances",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    serverId: uuid("server_id")
+      .notNull()
+      .references(() => infraServers.id, { onDelete: "cascade" }),
+    name: text("name").notNull(), // e.g. "matrx-ship", "ai-dream"
+    displayName: text("display_name").notNull(),
+    subdomain: text("subdomain").notNull(),
+    image: text("image").notNull().default("matrx-ship:latest"),
+    status: text("status").notNull().default("created"), // created, running, stopped, error
+    apiKey: text("api_key"), // encrypted
+    adminSecret: text("admin_secret"), // encrypted
+    postgresPassword: text("postgres_password"), // encrypted
+    postgresImage: text("postgres_image").default("postgres:17-alpine"),
+    envVars: jsonb("env_vars"), // non-sensitive env vars as JSON
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("idx_infra_instances_server_name").on(
+      table.serverId,
+      table.name,
+    ),
+    index("idx_infra_instances_server").on(table.serverId),
+  ],
+);
+
+/**
+ * infra_tokens — replaces tokens.json.
+ * Auth tokens for the Server Manager and Deploy Server.
+ */
+export const infraTokens = pgTable(
+  "infra_tokens",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    serverId: uuid("server_id")
+      .notNull()
+      .references(() => infraServers.id, { onDelete: "cascade" }),
+    tokenHash: text("token_hash").notNull(),
+    label: text("label").notNull(),
+    role: text("role").notNull().default("viewer"), // admin, deployer, viewer
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
+  },
+  (table) => [
+    index("idx_infra_tokens_server").on(table.serverId),
+    index("idx_infra_tokens_hash").on(table.tokenHash),
+  ],
+);
+
+/**
+ * infra_builds — replaces build-history.json.
+ * Every Docker image build and deployment event.
+ */
+export const infraBuilds = pgTable(
+  "infra_builds",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    serverId: uuid("server_id")
+      .notNull()
+      .references(() => infraServers.id, { onDelete: "cascade" }),
+    tag: text("tag").notNull(),
+    gitCommit: text("git_commit"),
+    gitBranch: text("git_branch"),
+    gitMessage: text("git_message"),
+    imageId: text("image_id"),
+    status: text("status").notNull().default("pending"), // pending, success, failed
+    durationMs: integer("duration_ms"),
+    triggeredBy: text("triggered_by").notNull().default("unknown"),
+    instancesRestarted: jsonb("instances_restarted"), // string[]
+    error: text("error"),
+    startedAt: timestamp("started_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+  },
+  (table) => [
+    index("idx_infra_builds_server").on(table.serverId),
+    index("idx_infra_builds_started").on(table.startedAt),
+    index("idx_infra_builds_tag").on(table.tag),
+  ],
+);
+
+/**
+ * infra_backups — registry of all backups stored in S3.
+ * Tracks database dumps, image archives, and config snapshots.
+ */
+export const infraBackups = pgTable(
+  "infra_backups",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    serverId: uuid("server_id")
+      .notNull()
+      .references(() => infraServers.id, { onDelete: "cascade" }),
+    instanceName: text("instance_name"), // null for server-level backups
+    backupType: text("backup_type").notNull(), // db, config, full, image
+    s3Key: text("s3_key").notNull(),
+    sizeBytes: integer("size_bytes"),
+    metadata: jsonb("metadata"), // additional info (e.g. pg_dump version, image tag)
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    index("idx_infra_backups_server").on(table.serverId),
+    index("idx_infra_backups_instance").on(table.instanceName),
+    index("idx_infra_backups_type").on(table.backupType),
+  ],
+);
+
+/**
+ * infra_audit_log — every action taken on the infrastructure.
+ * Immutable append-only log for compliance and debugging.
+ */
+export const infraAuditLog = pgTable(
+  "infra_audit_log",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    serverId: uuid("server_id")
+      .notNull()
+      .references(() => infraServers.id, { onDelete: "cascade" }),
+    actor: text("actor").notNull(), // token label, "system", "bootstrap"
+    action: text("action").notNull(), // create, delete, restart, rebuild, rollback, backup, env_update, etc.
+    target: text("target"), // instance name, service name, etc.
+    details: jsonb("details"), // action-specific structured data
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    index("idx_infra_audit_server").on(table.serverId),
+    index("idx_infra_audit_action").on(table.action),
+    index("idx_infra_audit_created").on(table.createdAt),
+    index("idx_infra_audit_target").on(table.target),
+  ],
+);
+
+// Type exports for infrastructure tables
+export type InfraServer = typeof infraServers.$inferSelect;
+export type NewInfraServer = typeof infraServers.$inferInsert;
+export type InfraInstance = typeof infraInstances.$inferSelect;
+export type NewInfraInstance = typeof infraInstances.$inferInsert;
+export type InfraToken = typeof infraTokens.$inferSelect;
+export type NewInfraToken = typeof infraTokens.$inferInsert;
+export type InfraBuild = typeof infraBuilds.$inferSelect;
+export type NewInfraBuild = typeof infraBuilds.$inferInsert;
+export type InfraBackup = typeof infraBackups.$inferSelect;
+export type NewInfraBackup = typeof infraBackups.$inferInsert;
+export type InfraAuditLog = typeof infraAuditLog.$inferSelect;
+export type NewInfraAuditLog = typeof infraAuditLog.$inferInsert;
