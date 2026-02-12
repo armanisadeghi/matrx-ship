@@ -6,7 +6,7 @@ Works with **any project** — Node (pnpm), Python, bash, Chrome extensions, any
 
 ## Quick Start
 
-### 1. Install CLI in Your Project
+### 1. Install CLI in Your Project 
 
 ```bash
 # From your project root

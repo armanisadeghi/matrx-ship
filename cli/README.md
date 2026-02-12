@@ -244,6 +244,31 @@ If Doppler CLI isn't installed or you aren't logged in yet, the tool will tell y
 
 ---
 
+## Migrating from Old Installs
+
+If your project was set up with the old `matrx-dev-tools` repo or an earlier version of `matrx-ship`, run the migration tool to bring everything up to date:
+
+```bash
+# Node projects (if tools:migrate is already registered)
+pnpm tools:migrate
+
+# Any project (one-liner)
+curl -sL https://raw.githubusercontent.com/armanisadeghi/matrx-ship/main/cli/migrate.sh | bash
+```
+
+The migration tool will:
+1. Re-download all CLI scripts from the latest source
+2. Migrate `.matrx-ship.json` and `.matrx-tools.conf` into unified `.matrx.json`
+3. Fix `tools:update` URLs that still point to `matrx-dev-tools`
+4. Register any missing `package.json` scripts or Makefile targets
+5. Add `tools:migrate` command for future use
+6. Clean up stale files (e.g. `ship.sh` in Node projects)
+7. Update `.gitignore` with all needed entries
+
+Safe to run multiple times -- it's idempotent and won't touch configs that are already correct.
+
+---
+
 ## Updating the CLI
 
 ```bash

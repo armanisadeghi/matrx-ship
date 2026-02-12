@@ -10,7 +10,7 @@
 #   env-sync.sh status            Quick summary
 #
 # Compatible with bash 3.2+ (macOS default)
-# Config: reads from .matrx-tools.conf in the project root
+# Config: reads from .matrx.json (preferred) or .matrx-tools.conf (legacy fallback)
 # =============================================================================
 
 set -euo pipefail
@@ -81,7 +81,7 @@ validate_config_values() {
     fi
 
     if [[ $has_errors -eq 1 ]]; then
-        echo -e "${DIM}Check your .matrx-tools.conf and ensure all required values are set.${NC}"
+        echo -e "${DIM}Check your .matrx.json (or .matrx-tools.conf) and ensure all required values are set.${NC}"
         return 1
     fi
     return 0
