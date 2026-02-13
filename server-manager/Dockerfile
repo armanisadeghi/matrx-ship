@@ -72,6 +72,8 @@ COPY server-manager/public/ ./public/
 COPY --from=admin-builder /build/server-manager/admin/.next/standalone/ ./admin/
 # Copy static assets into the admin app subdirectory
 COPY --from=admin-builder /build/server-manager/admin/.next/static ./admin/server-manager/admin/.next/static
+# Copy public assets (logo SVG, etc.) into the admin app subdirectory
+COPY --from=admin-builder /build/server-manager/admin/public ./admin/server-manager/admin/public
 
 # Startup script that runs both Express API and Next.js admin
 COPY server-manager/start.sh ./start.sh

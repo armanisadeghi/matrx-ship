@@ -68,14 +68,14 @@ function SidebarContent({
   return (
     <div className="flex h-full flex-col">
       {/* Header — pinned at top */}
-      <div className="px-6 py-5 border-b border-sidebar-border shrink-0">
+      <div className="px-5 py-4 border-b border-sidebar-border shrink-0">
         <div className="flex items-center gap-3">
           <div className="w-9 h-9 rounded-xl flex items-center justify-center overflow-hidden shrink-0">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src={config.logoSrc}
               alt={`${config.appName} logo`}
-              className="w-9 h-9"
+              className="w-9 h-9 object-contain"
             />
           </div>
           <div className="min-w-0">
@@ -146,7 +146,7 @@ function SidebarContent({
       </ScrollArea>
 
       {/* Footer — pinned at bottom, never scrolls */}
-      <div className="px-4 py-4 border-t border-sidebar-border space-y-3 shrink-0">
+      <div className="px-4 py-4 border-t border-sidebar-border space-y-3 shrink-0 mt-auto">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <ShieldCheck className="size-4 text-muted-foreground" />
@@ -211,15 +211,27 @@ export function AdminShell({
   };
 
   return (
-    <div className="h-dvh flex overflow-hidden">
-      {/* Desktop sidebar — fixed height, never scrolls as a whole */}
-      <aside className="hidden md:flex w-64 h-dvh flex-col shrink-0 bg-sidebar border-r border-sidebar-border">
+    <div className="flex h-dvh w-full overflow-hidden bg-background">
+      {/* ── Desktop sidebar ── */}
+      <aside className="hidden md:flex w-64 shrink-0 flex-col bg-sidebar border-r border-sidebar-border">
         <SidebarContent {...sidebarProps} />
       </aside>
 
-      {/* Mobile top bar + sheet */}
-      <div className="flex flex-1 flex-col md:hidden">
-        <header className="flex items-center justify-between border-b bg-sidebar px-4 py-3 shrink-0">
+      {/* ── Mobile sheet sidebar ── */}
+      <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
+        <SheetContent side="left" className="w-64 p-0 bg-sidebar" showCloseButton={false}>
+          <SheetTitle className="sr-only">Navigation</SheetTitle>
+          <SidebarContent
+            {...sidebarProps}
+            onClose={() => setMobileOpen(false)}
+          />
+        </SheetContent>
+      </Sheet>
+
+      {/* ── Right column: mobile header + main content ── */}
+      <div className="flex flex-1 flex-col min-w-0">
+        {/* Mobile top bar — only visible below md */}
+        <header className="flex md:hidden items-center justify-between border-b border-border bg-sidebar px-4 py-3 shrink-0">
           <div className="flex items-center gap-3">
             <Button
               variant="ghost"
@@ -235,7 +247,7 @@ export function AdminShell({
                 <img
                   src={config.logoSrc}
                   alt={`${config.appName} logo`}
-                  className="w-7 h-7"
+                  className="w-7 h-7 object-contain"
                 />
               </div>
               <span className="font-semibold text-sm">{config.appName}</span>
@@ -246,26 +258,11 @@ export function AdminShell({
           </Badge>
         </header>
 
-        <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
-          <SheetContent side="left" className="w-64 p-0" showCloseButton={false}>
-            <SheetTitle className="sr-only">Navigation</SheetTitle>
-            <SidebarContent
-              {...sidebarProps}
-              onClose={() => setMobileOpen(false)}
-            />
-          </SheetContent>
-        </Sheet>
-
-        {/* Mobile main content */}
-        <main className="flex-1 overflow-auto bg-background">
-          <div className="mx-auto max-w-7xl px-4 py-6">{children}</div>
+        {/* Main content — scrolls independently */}
+        <main className="flex-1 overflow-auto">
+          <div className="mx-auto w-full max-w-7xl px-4 py-6 md:px-8 md:py-8">{children}</div>
         </main>
       </div>
-
-      {/* Desktop main content */}
-      <main className="hidden md:flex flex-1 flex-col overflow-auto bg-background">
-        <div className="mx-auto w-full max-w-7xl px-6 py-8 flex-1">{children}</div>
-      </main>
     </div>
   );
 }
