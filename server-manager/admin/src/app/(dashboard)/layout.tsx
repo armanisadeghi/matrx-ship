@@ -23,29 +23,29 @@ const navGroups: NavGroup[] = [
   {
     label: "Main",
     items: [
-      { id: "instances", href: "/admin/instances", label: "Instances", icon: Layers },
-      { id: "sandboxes", href: "/admin/sandboxes", label: "Sandboxes", icon: Terminal },
+      { id: "instances", href: "/instances", label: "Instances", icon: Layers },
+      { id: "sandboxes", href: "/sandboxes", label: "Sandboxes", icon: Terminal },
     ],
   },
   {
     label: "Operations",
     items: [
-      { id: "builds", href: "/admin/builds", label: "Builds", icon: History },
-      { id: "tokens", href: "/admin/tokens", label: "Tokens", icon: Key },
+      { id: "builds", href: "/builds", label: "Builds", icon: History },
+      { id: "tokens", href: "/tokens", label: "Tokens", icon: Key },
     ],
   },
   {
     label: "Monitoring",
     items: [
-      { id: "system", href: "/admin/system", label: "System", icon: Monitor },
-      { id: "db-health", href: "/admin/db-health", label: "DB Health", icon: Database },
-      { id: "infrastructure", href: "/admin/infrastructure", label: "Infrastructure", icon: Server },
+      { id: "system", href: "/system", label: "System", icon: Monitor },
+      { id: "db-health", href: "/db-health", label: "DB Health", icon: Database },
+      { id: "infrastructure", href: "/infrastructure", label: "Infrastructure", icon: Server },
     ],
   },
   {
     label: "Reference",
     items: [
-      { id: "docs", href: "/admin/docs", label: "Documentation", icon: FileText },
+      { id: "docs", href: "/docs", label: "Documentation", icon: FileText },
     ],
   },
 ];

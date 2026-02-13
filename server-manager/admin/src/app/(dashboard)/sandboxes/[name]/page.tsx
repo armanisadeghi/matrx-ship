@@ -39,7 +39,7 @@ export default function SandboxDetailPage() {
       sandbox={sandbox}
       sandboxDetail={actions.sandboxDetail}
       sandboxLogs={actions.sandboxLogs}
-      onBack={() => router.push("/admin/sandboxes")}
+      onBack={() => router.push("/sandboxes")}
       onAction={actions.handleSandboxAction}
       onLoadLogs={actions.handleLoadSandboxLogs}
     />

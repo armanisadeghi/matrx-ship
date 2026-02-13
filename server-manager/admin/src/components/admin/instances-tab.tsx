@@ -113,7 +113,7 @@ export function InstancesTab({
               </TableHeader>
               <TableBody>
                 {instances.map((inst) => (
-                  <TableRow key={inst.name} className="cursor-pointer" onClick={() => router.push(`/admin/instances/${inst.name}`)}>
+                  <TableRow key={inst.name} className="cursor-pointer" onClick={() => router.push(`/instances/${inst.name}`)}>
                     <TableCell>
                       <div className="font-medium">{inst.display_name}</div>
                       <div className="text-xs text-muted-foreground font-mono">{inst.name}</div>

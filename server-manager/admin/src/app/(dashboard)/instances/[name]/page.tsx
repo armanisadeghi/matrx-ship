@@ -44,7 +44,7 @@ export default function InstanceDetailPage() {
       instanceCompose={actions.instanceCompose}
       instanceBackups={actions.instanceBackups}
       deploying={actions.deploying}
-      onBack={() => router.push("/admin/instances")}
+      onBack={() => router.push("/instances")}
       onDeploy={(n) => actions.handleDeploy(n)}
       onAction={actions.handleInstanceAction}
       onRemove={actions.handleRemoveInstance}

@@ -43,7 +43,7 @@ export function SandboxesTab({ sandboxes, onSandboxAction }: SandboxesTabProps) 
                   <TableRow
                     key={sbx.name}
                     className="cursor-pointer"
-                    onClick={() => router.push(`/admin/sandboxes/${sbx.name}`)}
+                    onClick={() => router.push(`/sandboxes/${sbx.name}`)}
                   >
                     <TableCell className="font-medium">{sbx.name}</TableCell>
                     <TableCell>
