@@ -1,3 +1,7 @@
+# ── Server Manager Dockerfile ─────────────────────────────────────────
+# Build context: monorepo root (.)
+# Usage: docker build -f server-manager/Dockerfile .
+
 FROM node:22-slim AS base
 
 # Install system tools + prerequisites for Docker CLI + git
@@ -29,27 +33,30 @@ RUN curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "/t
     && /tmp/aws/install \
     && rm -rf /tmp/awscliv2.zip /tmp/aws /var/lib/apt/lists/*
 
-# ── Stage 1: Build the Next.js admin UI (standalone mode) ─────────────────
+# ── Stage 1: Build the Next.js admin UI (standalone mode) ─────────────
 FROM base AS admin-builder
 RUN corepack enable && corepack prepare pnpm@10.28.2 --activate
 WORKDIR /build
 
-# Copy workspace config for pnpm workspace resolution
-COPY pnpm-workspace.yaml ./
+# Copy workspace config and lockfile
+COPY pnpm-workspace.yaml pnpm-lock.yaml ./
+
+# Copy all workspace package.json files needed
 COPY packages/admin-ui/package.json ./packages/admin-ui/
+COPY server-manager/admin/package.json ./server-manager/admin/
 
-# Install shared package deps
-WORKDIR /build/packages/admin-ui
-COPY packages/admin-ui/ ./
+# Install all workspace deps for the admin app
+RUN pnpm install --frozen-lockfile --filter matrx-admin... 2>/dev/null || pnpm install --filter matrx-admin...
 
-# Install admin deps
-WORKDIR /build/admin
-COPY server-manager/admin/package.json server-manager/admin/pnpm-lock.yaml* ./
-RUN pnpm install --frozen-lockfile 2>/dev/null || pnpm install
-COPY server-manager/admin/ ./
+# Copy shared package source
+COPY packages/admin-ui/ ./packages/admin-ui/
+
+# Copy admin app source and build
+COPY server-manager/admin/ ./server-manager/admin/
+WORKDIR /build/server-manager/admin
 RUN pnpm build
 
-# ── Stage 2: Final server image ──────────────────────────────────────────────
+# ── Stage 2: Final server image ──────────────────────────────────────
 FROM base AS runner
 WORKDIR /app
 
@@ -61,10 +68,10 @@ COPY server-manager/src/ ./src/
 # Copy legacy public dir (favicons, manifest, etc.)
 COPY server-manager/public/ ./public/
 
-# Copy Next.js standalone build
-COPY --from=admin-builder /build/admin/.next/standalone/admin/ ./admin/
-COPY --from=admin-builder /build/admin/.next/static ./admin/.next/static
-COPY --from=admin-builder /build/admin/public ./admin/public
+# Copy the full Next.js standalone output (preserves pnpm node_modules structure)
+COPY --from=admin-builder /build/server-manager/admin/.next/standalone/ ./admin/
+# Copy static assets into the admin app subdirectory
+COPY --from=admin-builder /build/server-manager/admin/.next/static ./admin/server-manager/admin/.next/static
 
 # Startup script that runs both Express API and Next.js admin
 COPY server-manager/start.sh ./start.sh

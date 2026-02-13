@@ -1,0 +1,31 @@
+# Deploy service .dockerignore
+# Build context is the monorepo root
+
+# Ignore all node_modules (will be installed in Docker)
+**/node_modules
+**/.next
+.git
+
+# Root project files not needed for deploy build
+src/
+cli/
+scripts/
+.env
+.env.*
+.env-backups
+.vscode
+.cursor
+.matrx-ship.json
+.matrx-tools.conf
+drizzle/
+drizzle.config.ts
+next.config.ts
+postcss.config.mjs
+tsconfig.json
+components.json
+
+# Other services not needed
+server-manager/
+
+# Markdown files
+*.md

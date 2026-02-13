@@ -6,7 +6,8 @@ node src/index.js &
 API_PID=$!
 
 # Start the Next.js admin server (port 3001)
-cd /app/admin
+# The standalone build preserves the workspace path structure
+cd /app/admin/server-manager/admin
 PORT=3001 HOSTNAME=0.0.0.0 node server.js &
 ADMIN_PID=$!
 

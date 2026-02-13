@@ -160,7 +160,7 @@ jobs:
       - name: Build and push Docker image
         uses: docker/build-push-action@v6
         with:
-          context: ./deploy
+          context: .
           file: ./deploy/Dockerfile
           push: true
           tags: ${{ steps.meta.outputs.tags }}
@@ -204,7 +204,7 @@ jobs:
       - name: Build and push Docker image
         uses: docker/build-push-action@v6
         with:
-          context: ./server-manager
+          context: .
           file: ./server-manager/Dockerfile
           push: true
           tags: ${{ steps.meta.outputs.tags }}
