@@ -12,6 +12,9 @@ const DEPLOYMENTS_FILE = join(APPS_DIR, "deployments.json");
 const BUILD_HISTORY_FILE = join(APPS_DIR, "build-history.json");
 const TOKENS_FILE = join(APPS_DIR, "tokens.json");
 
+// For local development, check for tokens.local.json in the project root
+const LOCAL_TOKENS_FILE = join(process.cwd(), "tokens.local.json");
+
 function exec(cmd: string, opts: { timeout?: number; cwd?: string } = {}) {
   try {
     const result = execSync(cmd, {
@@ -57,6 +60,16 @@ interface TokenEntry {
 }
 
 function loadTokens(): { tokens: TokenEntry[] } {
+  // Try local tokens file first (for development)
+  if (existsSync(LOCAL_TOKENS_FILE)) {
+    try {
+      return JSON.parse(readFileSync(LOCAL_TOKENS_FILE, "utf-8"));
+    } catch {
+      // Fall through to production tokens file
+    }
+  }
+  
+  // Try production tokens file
   try {
     return JSON.parse(readFileSync(TOKENS_FILE, "utf-8"));
   } catch {
@@ -66,6 +79,21 @@ function loadTokens(): { tokens: TokenEntry[] } {
 
 export function verifyToken(bearerToken: string): TokenEntry | null {
   if (!bearerToken) return null;
+  
+  // Check environment variable tokens first (for dev and production)
+  const envTokens = process.env.DEPLOY_TOKENS?.split(',').map(t => t.trim()).filter(Boolean) || [];
+  if (envTokens.includes(bearerToken)) {
+    return {
+      id: 'env_token',
+      token_hash: '',
+      label: 'Environment Token',
+      role: 'admin',
+      created_at: new Date().toISOString(),
+      last_used_at: new Date().toISOString(),
+    };
+  }
+  
+  // Fall back to tokens.json file (for managed tokens)
   const { createHash } = require("node:crypto");
   const hash = createHash("sha256").update(bearerToken).digest("hex");
   const store = loadTokens();

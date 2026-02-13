@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "node server.js"
+    "start": "node server.js",
+    "generate-token": "openssl rand -hex 32",
+    "show-token": "node -e \"console.log('Current token:', process.env.DEPLOY_TOKENS || 'Not set')\""
   },
   "dependencies": {
     "@matrx/admin-ui": "workspace:*",

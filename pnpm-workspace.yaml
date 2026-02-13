@@ -1,9 +1,11 @@
 packages:
-  - "deploy"
-  - "server-manager/admin"
-  - "packages/*"
+  - deploy
+  - server-manager
+  - server-manager/admin
+  - packages/*
 
 onlyBuiltDependencies:
   - esbuild
+  - msw
   - sharp
   - unrs-resolver

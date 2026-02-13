@@ -60,6 +60,21 @@ function saveTokens(store) {
 
 function verifyToken(bearerToken) {
   if (!bearerToken) return null;
+  
+  // Check environment variable tokens first (for dev and production)
+  const envTokens = process.env.MANAGER_TOKENS?.split(',').map(t => t.trim()).filter(Boolean) || [];
+  if (envTokens.includes(bearerToken)) {
+    return {
+      id: 'env_token',
+      token_hash: '',
+      label: 'Environment Token',
+      role: 'admin',
+      created_at: new Date().toISOString(),
+      last_used_at: new Date().toISOString(),
+    };
+  }
+  
+  // Fall back to tokens.json file (for managed tokens)
   const hash = hashToken(bearerToken);
   const store = loadTokens();
   const entry = store.tokens.find((t) => t.token_hash === hash);
@@ -106,8 +121,9 @@ function initTokenStore() {
 // ╚════════════════════════════════════════════════════════════════════════════╝
 
 function authMiddleware(req, res, next) {
-  const envToken = process.env.MANAGER_BEARER_TOKEN || process.env.MCP_BEARER_TOKEN;
-  if (!envToken) return next(); // No token configured = open
+  // Check if any auth is configured (MANAGER_TOKENS, MANAGER_BEARER_TOKEN, or legacy MCP_BEARER_TOKEN)
+  const hasAuth = !!(process.env.MANAGER_TOKENS || process.env.MANAGER_BEARER_TOKEN || process.env.MCP_BEARER_TOKEN);
+  if (!hasAuth) return next(); // No token configured = open
 
   const auth = req.headers.authorization;
   if (!auth || !auth.startsWith("Bearer ")) {
@@ -2202,7 +2218,8 @@ app.listen(PORT, "0.0.0.0", () => {
   console.log(`Matrx Manager v2.0 listening on port ${PORT}`);
   console.log(`Dashboard: http://0.0.0.0:${PORT}/admin`);
   console.log(`MCP endpoint: http://0.0.0.0:${PORT}/mcp`);
-  console.log(`Auth: ${(process.env.MANAGER_BEARER_TOKEN || process.env.MCP_BEARER_TOKEN) ? "enabled (token store)" : "DISABLED"}`);
+  const hasAuth = !!(process.env.MANAGER_TOKENS || process.env.MANAGER_BEARER_TOKEN || process.env.MCP_BEARER_TOKEN);
+  console.log(`Auth: ${hasAuth ? "enabled (token store)" : "DISABLED"}`);
   console.log(`Supabase: ${isSupabaseConfigured() ? "configured" : "not configured (local-only mode)"}`);
 
   // Background sync to Supabase on startup

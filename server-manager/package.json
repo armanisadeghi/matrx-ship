@@ -3,11 +3,17 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "start": "node src/index.js"
+    "start": "node src/index.js",
+    "dev": "dotenv -e .env.local -- node --watch src/index.js",
+    "generate-token": "openssl rand -hex 32",
+    "show-token": "dotenv -e .env.local -- node -e \"console.log('Current token:', process.env.MANAGER_TOKENS || 'Not set')\""
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.1",
     "express": "^5.1.0",
     "zod": "^3.25.67"
+  },
+  "devDependencies": {
+    "dotenv-cli": "^7.4.2"
   }
 }
