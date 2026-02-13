@@ -154,7 +154,7 @@ export function DeployTab({
                           </DropdownMenuItem>
                           <DropdownMenuSeparator />
                           <DropdownMenuItem
-                            onClick={() => window.open(`https://ship-${inst.name}.dev.codematrx.com`, "_blank")}
+                            onClick={() => window.open(`https://${inst.name}.dev.codematrx.com`, "_blank")}
                           >
                             Open Instance
                           </DropdownMenuItem>

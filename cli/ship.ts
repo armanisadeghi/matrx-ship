@@ -326,11 +326,11 @@ function loadConfig(): ShipConfig {
   console.error(`     ${shipCmd("init")} ${projectName} "${projectName.split("-").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ")}"`);
   console.error("");
   console.error("   Option 2 — Add to your .env.local or .env file:");
-  console.error('     MATRX_SHIP_URL="https://ship-' + projectName + '.dev.codematrx.com"');
+  console.error('     MATRX_SHIP_URL="https://' + projectName + '.dev.codematrx.com"');
   console.error('     MATRX_SHIP_API_KEY="sk_ship_your_key_here"');
   console.error("");
   console.error("   Option 3 — Set environment variables:");
-  console.error(`     export MATRX_SHIP_URL=https://ship-${projectName}.dev.codematrx.com`);
+  console.error(`     export MATRX_SHIP_URL=https://${projectName}.dev.codematrx.com`);
   console.error("     export MATRX_SHIP_API_KEY=sk_ship_xxxxx");
   console.error("");
   console.error("   Then run the command again.");
@@ -858,7 +858,7 @@ async function handleInit(args: string[]): Promise<void> {
       console.error(`     ${serverConfig!.server}/admin/`);
       console.error("");
       console.error("   Then configure manually:");
-      console.error(`     ${shipCmd("init")} --url https://ship-${projectName}.dev.codematrx.com --key YOUR_API_KEY`);
+      console.error(`     ${shipCmd("init")} --url https://${projectName}.dev.codematrx.com --key YOUR_API_KEY`);
       process.exit(1);
     }
   } else if (result.error) {
@@ -1815,7 +1815,7 @@ async function checkIntegrity(cliPath: string = "cli/ship.ts"): Promise<boolean>
     console.log("");
     console.log("   ─────────────────────────────────────────────────────────────");
     console.log("   Or manually enter your existing instance details:");
-    console.log("   (Full URL required, e.g., https://ship-project.dev.codematrx.com)");
+    console.log("   (Full URL required, e.g., https://project.dev.codematrx.com)");
     console.log("");
 
     const urlInput = await promptUser("Ship URL (or press Enter to skip)", "");
@@ -1834,7 +1834,7 @@ async function checkIntegrity(cliPath: string = "cli/ship.ts"): Promise<boolean>
       console.log("");
       console.log(`   ❌ Invalid URL: "${urlInput}"`);
       console.log("   URL must start with https:// or http://");
-      console.log(`   Example: https://ship-${projectName}.dev.codematrx.com`);
+      console.log(`   Example: https://${projectName}.dev.codematrx.com`);
       console.log("");
       console.log(`   Run: ${shipCmd("init")} ${projectName} "Project Name"`);
       console.log("");

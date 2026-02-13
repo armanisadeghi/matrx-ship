@@ -63,7 +63,7 @@ pnpm ship:init matrx-dm "Matrx Dm"
 
 ─────────────────────────────────────────────────────────────
 Or manually enter your existing instance details:
-(Full URL required, e.g., https://ship-project.dev.codematrx.com)
+(Full URL required, e.g., https://project.dev.codematrx.com)
 
 Ship URL (or press Enter to skip): 
 ```
@@ -80,7 +80,7 @@ if (isPlaceholderUrl(urlInput) || !urlInput.startsWith("http")) {
   console.log("");
   console.log(`   ❌ Invalid URL: "${urlInput}"`);
   console.log("   URL must start with https:// or http://");
-  console.log(`   Example: https://ship-${projectName}.dev.codematrx.com`);
+  console.log(`   Example: https://${projectName}.dev.codematrx.com`);
   console.log("");
   console.log(`   Run: ${shipCmd("init")} ${projectName} "Project Name"`);
   console.log("");
@@ -137,7 +137,7 @@ To verify the fix works:
    ```bash
    cd test-project
    pnpm ship:update
-   # When prompted, enter "https://ship-test.dev.codematrx.com"
+   # When prompted, enter "https://test.dev.codematrx.com"
    # Should accept and save to config
    ```
 
@@ -161,7 +161,7 @@ When users encounter this during update, they should:
 2. **Alternative:** Provide full URL manually:
    ```bash
    # When prompted during update:
-   Ship URL: https://ship-project.dev.codematrx.com
+   Ship URL: https://project.dev.codematrx.com
    Ship API Key: sk_ship_xxxxx
    ```
 

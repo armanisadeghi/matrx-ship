@@ -803,7 +803,7 @@ if [[ "$SETUP_SHIP" == true ]]; then
             echo -e "  ${DIM}Otherwise press Enter to skip and set up later.${NC}"
             echo ""
 
-            MANUAL_URL=$(prompt_user "Ship URL (e.g. https://ship-myproject.dev.codematrx.com)" "")
+            MANUAL_URL=$(prompt_user "Ship URL (e.g. https://myproject.dev.codematrx.com)" "")
             if [[ -n "$MANUAL_URL" ]]; then
                 MANUAL_KEY=$(prompt_user "Ship API Key (sk_ship_...)" "")
                 if [[ -n "$MANUAL_KEY" ]]; then
@@ -1297,7 +1297,7 @@ if [[ ${#POST_INSTALL_ISSUES[@]} -gt 0 ]]; then
         fi
         echo ""
         echo -e "    ${CYAN}Option 2${NC} — Add to your .env.local or .env file:"
-        echo -e "      ${DIM}MATRX_SHIP_URL=\"https://ship-${DETECTED_NAME}.dev.codematrx.com\"${NC}"
+        echo -e "      ${DIM}MATRX_SHIP_URL=\"https://${DETECTED_NAME}.dev.codematrx.com\"${NC}"
         echo -e "      ${DIM}MATRX_SHIP_API_KEY=\"sk_ship_your_key_here\"${NC}"
         echo ""
         echo -e "    ${CYAN}Option 3${NC} — Re-run the installer after fixing:"

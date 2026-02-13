@@ -119,7 +119,7 @@ export function ServicesTab({ buildInfo }: ServicesTabProps) {
 
   const shipInstances: ServiceRow[] = (buildInfo?.instances || []).map((inst) => ({
     name: inst.display_name,
-    url: `https://ship-${inst.name}.dev.codematrx.com`,
+    url: `https://${inst.name}.dev.codematrx.com`,
     description: "Ship instance admin portal",
     icon: <Server className="size-4 text-violet-500" />,
     status: inst.status === "running" ? "running" as const : "stopped" as const,

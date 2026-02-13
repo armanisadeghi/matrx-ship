@@ -159,7 +159,7 @@ curl -sL https://raw.githubusercontent.com/armanisadeghi/matrx-ship/main/cli/ins
 
 # Configure with your instance URL and API key
 # Edit .matrx-ship.json with:
-#   url: https://ship-realsingles.yourdomain.com
+#   url: https://realsingles.yourdomain.com
 #   apiKey: sk_ship_xxxxxxxxxxxx
 
 # Test the connection

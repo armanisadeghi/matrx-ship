@@ -40,7 +40,7 @@ Single config file for both Ship and Env-Sync:
 ```json
 {
   "ship": {
-    "url": "https://ship-myproject.dev.codematrx.com",
+    "url": "https://myproject.dev.codematrx.com",
     "apiKey": "sk_ship_..."
   },
   "env": {
@@ -267,7 +267,7 @@ Without jq, env-sync falls back to `.matrx-tools.conf` (legacy format).
 Check your config URL and server status:
 
 ```bash
-curl https://ship-myproject.dev.codematrx.com/api/health
+curl https://myproject.dev.codematrx.com/api/health
 ```
 
 ### "tsx not found" or "npx not found"

@@ -2,7 +2,7 @@
 # Copy this file to your project at .github/workflows/update-version.yml
 #
 # Required GitHub Secrets:
-#   MATRX_SHIP_URL   - Your matrx-ship instance URL (e.g., https://ship-myproject.yourdomain.com)
+#   MATRX_SHIP_URL   - Your matrx-ship instance URL (e.g., https://myproject.yourdomain.com)
 #   MATRX_SHIP_API_KEY - API key for the ship instance
 #
 # This workflow auto-creates a patch version on every push to main.
