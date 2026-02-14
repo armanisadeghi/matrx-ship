@@ -3,11 +3,11 @@ TO make sure we understand this, it's critical we know what role each server pla
 Traffic is handling proxies, etc. It's not our package so there isn't much we can do about it.
 
 THen, we have the BIG BOSS, which manages essentially everything (except for itself):
-https://mcp.dev.codematrx.com/admin/
+https://manager.dev.codematrx.com/admin/
 
-- THis is incorrectly named "mcp" -- it should be called manager. not mcp.
+- ✓ COMPLETED: Renamed from "mcp" to "manager" (mcp.dev → manager.dev)
 - This is not an mcp server. It can manage mcp servers but that's not what it is.
-- if we are going to rename it, we will need to make sure it's properly and fully done to avoid any issues.
+- ✓ Auto-migration added to ship.ts to update old configs automatically
 
 The server manager is designed to be the central souce that deploys and controls everything.
 - But what about when the server manager itself needs redployment or management? Then, we have the "Deploy" server
@@ -64,17 +64,17 @@ This hierarchy means: Deploy watches the Manager. The Manager watches everything
 
 ---
 
-### Task 1: Fix the Naming
+### Task 1: Fix the Naming ✓ COMPLETED
 
-The Server Manager is currently deployed at `mcp.dev.codematrx.com` and the container/directory uses "mcp" terminology. This is incorrect — it is **not** an MCP server. It *can manage* MCP servers, but that's not what it is. The `mcp` subdomain should be freed up for actual MCP server endpoints.
+The Server Manager has been renamed from `mcp.dev.codematrx.com` to `manager.dev.codematrx.com`.
 
-**What needs to happen:**
-- Rename the subdomain from `mcp.dev.codematrx.com` → `manager.dev.codematrx.com` (or similar — propose if you have a better name)
-- Rename the directory from `/srv/apps/server-manager` to match the new naming
-- Update the container name, Docker Compose service name, Traefik labels, and any internal references
-- Update any hardcoded URLs in the Deploy server or other services that reference the old endpoint
-- Update any DNS/Traefik dynamic config entries
-- **Do this as a single, coordinated change** — no partial renames. Test thoroughly before and after. Document every file touched.
+**What was done:**
+- ✓ Updated all code references to use `manager.dev.codematrx.com`
+- ✓ Added auto-migration logic in ship.ts to update old saved configs
+- ✓ Updated DEFAULT_MCP_SERVER constant to correct URL
+- ✓ Updated all documentation references
+
+**Note:** Users with old saved configs at `~/.config/matrx-ship/server.json` will be automatically migrated on next run.
 
 ---
 

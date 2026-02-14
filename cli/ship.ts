@@ -353,7 +353,19 @@ function loadServerConfig(): ServerConfig | null {
       const raw = readFileSync(GLOBAL_CONFIG_FILE, "utf-8");
       const config = JSON.parse(raw);
       if (config.token) {
-        return { server: config.server || DEFAULT_MCP_SERVER, token: config.token };
+        let server = config.server || DEFAULT_MCP_SERVER;
+        
+        // Auto-migrate old mcp.dev.codematrx.com URLs to manager.dev.codematrx.com
+        const oldUrl = "mcp.dev.codematrx.com";
+        const newUrl = "manager.dev.codematrx.com";
+        if (server.includes(oldUrl)) {
+          server = server.replace(oldUrl, newUrl);
+          // Save the migrated config
+          saveServerConfig({ server, token: config.token });
+          console.log(`✓ Migrated server URL from ${oldUrl} to ${newUrl}`);
+        }
+        
+        return { server, token: config.token };
       }
     } catch {
       // Ignore corrupt file
