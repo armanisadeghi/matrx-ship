@@ -379,9 +379,19 @@ cd /srv/apps/deploy && docker compose build && docker compose up -d
 log "Deploy Server deployed at https://deploy.${DOMAIN}"
 
 # =============================================================================
-# Step 15: Create credentials file
+# Step 15: Install server utility scripts
 # =============================================================================
-step 15 "Creating credentials file"
+step 15 "Installing utility scripts"
+
+mkdir -p /srv/scripts
+cp "${REPO_DIR}/infrastructure/scripts/"*.sh /srv/scripts/ 2>/dev/null || true
+chmod +x /srv/scripts/*.sh 2>/dev/null || true
+log "Utility scripts installed to /srv/scripts/"
+
+# =============================================================================
+# Step 16: Create credentials file
+# =============================================================================
+step 16 "Creating credentials file"
 
 cat > /srv/.credentials << EOF
 # Matrx Server Credentials
@@ -411,9 +421,9 @@ EOF
 chmod 600 /srv/.credentials
 
 # =============================================================================
-# Step 16: Health checks
+# Step 17: Health checks
 # =============================================================================
-step 16 "Running health checks"
+step 17 "Running health checks"
 
 echo ""
 HEALTHY=0

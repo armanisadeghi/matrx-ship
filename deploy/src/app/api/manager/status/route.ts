@@ -47,7 +47,7 @@ export async function GET() {
   // Health check
   let healthCheck = null;
   try {
-    const hc = exec(`docker exec ${containerName} wget -qO- http://localhost:3000/health 2>/dev/null`);
+    const hc = exec(`docker exec ${containerName} wget -qO- http://127.0.0.1:3000/health 2>/dev/null`);
     if (hc.success) healthCheck = JSON.parse(hc.output);
   } catch { /* ok */ }
 

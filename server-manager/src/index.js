@@ -205,6 +205,103 @@ function randomHex(bytes) {
   return randomBytes(bytes).toString("hex");
 }
 
+/**
+ * Wait for a container to become healthy, then verify Traefik has issued a certificate.
+ *
+ * IMPORTANT: Traefik's Docker provider filters out unhealthy/starting containers.
+ * If a container never becomes healthy, Traefik never creates a router for it,
+ * so no Let's Encrypt certificate will ever be requested. The health of the
+ * container is the prerequisite — not curling the domain.
+ *
+ * Flow: container healthy → Traefik detects it → Traefik creates router →
+ *       Traefik requests ACME cert → cert issued (usually within 30-60s).
+ */
+function waitForCertificate(containerName, domain, { maxWaitSec = 120 } = {}) {
+  console.log(`🔐 Waiting for certificate: ${domain} (container: ${containerName})`);
+
+  // Phase 1: Wait for the container to become healthy (or have no healthcheck)
+  const healthPollInterval = 5; // seconds
+  const healthTimeout = Math.min(maxWaitSec, 90);
+  let containerHealthy = false;
+
+  for (let elapsed = 0; elapsed < healthTimeout; elapsed += healthPollInterval) {
+    const healthResult = exec(`docker inspect ${containerName} --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' 2>/dev/null`);
+    const status = healthResult.output?.trim();
+
+    if (status === "healthy" || status === "none") {
+      containerHealthy = true;
+      console.log(`  ✓ Container is ${status === "none" ? "running (no healthcheck)" : "healthy"} after ${elapsed}s`);
+      break;
+    }
+
+    if (status === "unhealthy") {
+      // Check container logs for crash reason
+      const logs = exec(`docker logs ${containerName} --tail 5 2>&1`);
+      console.log(`  ⚠ Container is unhealthy after ${elapsed}s. Last logs:`);
+      console.log(`    ${(logs.output || "no output").split("\n").slice(-3).join("\n    ")}`);
+    }
+
+    if (elapsed + healthPollInterval < healthTimeout) {
+      execSync(`sleep ${healthPollInterval}`, { stdio: "ignore" });
+    }
+  }
+
+  if (!containerHealthy) {
+    console.log(`  ❌ Container did not become healthy within ${healthTimeout}s`);
+    console.log(`  → Traefik will NOT create a router for unhealthy containers`);
+    console.log(`  → No certificate will be issued until the container is healthy`);
+    return {
+      success: false,
+      error: "Container unhealthy — Traefik skips unhealthy containers, so no cert will be issued",
+      container_status: "unhealthy",
+    };
+  }
+
+  // Phase 2: Wait for Traefik to pick up the container and issue a certificate
+  // Traefik re-evaluates on container state changes, then initiates ACME challenge
+  console.log(`  Waiting for Traefik to issue certificate (ACME HTTP-01 challenge)...`);
+  const certPollInterval = 10; // seconds
+  const certTimeout = Math.max(maxWaitSec - healthTimeout, 60);
+
+  for (let elapsed = 0; elapsed < certTimeout; elapsed += certPollInterval) {
+    try {
+      const issuer = execSync(
+        `echo | openssl s_client -connect "${domain}:443" -servername "${domain}" 2>/dev/null | openssl x509 -noout -issuer 2>/dev/null`,
+        { encoding: "utf-8", timeout: 10000 }
+      ).trim();
+
+      if (issuer.includes("Let's Encrypt")) {
+        console.log(`  ✅ Let's Encrypt certificate issued for ${domain} (${elapsed}s)`);
+        return { success: true, issuer };
+      }
+    } catch {
+      // Certificate check failed, keep waiting
+    }
+
+    if (elapsed + certPollInterval < certTimeout) {
+      execSync(`sleep ${certPollInterval}`, { stdio: "ignore" });
+    }
+  }
+
+  // Certificate not issued yet — check final state
+  try {
+    const issuer = execSync(
+      `echo | openssl s_client -connect "${domain}:443" -servername "${domain}" 2>/dev/null | openssl x509 -noout -issuer 2>/dev/null`,
+      { encoding: "utf-8", timeout: 10000 }
+    ).trim();
+
+    if (issuer.includes("TRAEFIK DEFAULT CERT")) {
+      console.log(`  ⚠ Still using Traefik default cert after waiting. ACME challenge may still be in progress.`);
+      return { success: false, issuer, warning: "Certificate pending — ACME challenge may still be running" };
+    }
+    console.log(`  ❓ Unknown certificate state: ${issuer}`);
+    return { success: false, issuer, warning: "Unknown certificate status" };
+  } catch (error) {
+    console.log(`  ❌ Could not check certificate: ${error.message}`);
+    return { success: false, error: error.message };
+  }
+}
+
 // ╔════════════════════════════════════════════════════════════════════════════╗
 // ║  DEPLOYMENT HELPERS (shared by tools + REST API)                           ║
 // ╚════════════════════════════════════════════════════════════════════════════╝
@@ -246,7 +343,7 @@ services:
       db:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:3000/api/health || exit 1"]
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://127.0.0.1:3000/api/health || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -351,6 +448,11 @@ function createInstance(name, display_name, api_key, postgres_image) {
   if (startResult.success) {
     config.instances[name].status = "running";
     saveDeployments(config);
+    
+    // Wait for container health + Let's Encrypt certificate
+    const certResult = waitForCertificate(name, `${name}.${DOMAIN_SUFFIX}`);
+    config.instances[name].certificate_status = certResult.success ? "issued" : (certResult.container_status === "unhealthy" ? "blocked-unhealthy" : "pending");
+    saveDeployments(config);
   }
 
   // Audit log
@@ -365,7 +467,7 @@ function createInstance(name, display_name, api_key, postgres_image) {
     containers: { app: `${name}`, db: `db-${name}` },
     directory: `/srv/apps/${name}/`,
     compose_output: startResult.output || startResult.error,
-    note: "First boot takes ~30s for migrations and seeding.",
+    note: "First boot takes ~30s for migrations and seeding. Certificate request initiated.",
   };
 }
 
@@ -526,9 +628,15 @@ function rebuildInstances({ name, skip_build, triggered_by } = {}) {
   // Step 2: Restart target instances
   const targets = name ? [name] : Object.keys(config.instances);
   results.restarts = {};
+  results.certificates = {};
   for (const t of targets) {
     if (!config.instances[t]) { results.restarts[t] = { error: "not found" }; continue; }
     results.restarts[t] = exec("docker compose up -d --force-recreate app", { cwd: join(APPS_DIR, t), timeout: 60000 });
+    
+    // Wait for container health + certificate after restart
+    if (results.restarts[t].success) {
+      results.certificates[t] = waitForCertificate(t, `${t}.${DOMAIN_SUFFIX}`, { maxWaitSec: 90 });
+    }
   }
 
   const finished_at = new Date().toISOString();

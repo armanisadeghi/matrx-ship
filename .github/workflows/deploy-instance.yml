@@ -107,33 +107,67 @@ jobs:
             
             echo "✅ Instance restarted"
             
-            # Wait for health check
-            echo "🔍 Waiting for health check..."
-            sleep 10
-            
-            # Extract subdomain
+            # Extract subdomain from docker-compose.yml
             SUBDOMAIN=$(grep -oP 'Host\(`\K[^`]+' docker-compose.yml | head -1)
             
+            # Phase 1: Wait for container to become healthy
+            # IMPORTANT: Traefik v3 skips unhealthy containers entirely.
+            # No healthy container → no router → no certificate.
+            echo "🔍 Waiting for container health..."
+            HEALTHY=false
+            for i in {1..18}; do
+              HEALTH=$(docker inspect "$INSTANCE" --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' 2>/dev/null || echo "unknown")
+              if [ "$HEALTH" = "healthy" ] || [ "$HEALTH" = "none" ]; then
+                echo "  ✓ Container is ${HEALTH} after $((i * 5))s"
+                HEALTHY=true
+                break
+              fi
+              echo "  Attempt $i/18: health=$HEALTH, waiting 5s..."
+              sleep 5
+            done
+            
+            if [ "$HEALTHY" = "false" ]; then
+              echo "  ⚠️ Container did not become healthy within 90s"
+              echo "  Traefik will NOT route to this container or issue a certificate"
+              echo "  Last logs:"
+              docker logs "$INSTANCE" --tail 10 2>&1 || true
+              exit 1
+            fi
+            
+            # Phase 2: Verify the app responds
             if [ -n "$SUBDOMAIN" ]; then
               HEALTH_URL="https://$SUBDOMAIN/api/health"
-              echo "  Checking $HEALTH_URL..."
+              echo "🌐 Verifying app responds at $HEALTH_URL..."
               
               for i in {1..6}; do
-                if curl -f -s "$HEALTH_URL" > /dev/null; then
-                  echo "  ✓ Instance is healthy!"
-                  curl -s "$HEALTH_URL" | jq '.' || true
-                  exit 0
+                if curl -k -f -s "$HEALTH_URL" > /dev/null 2>&1; then
+                  echo "  ✓ App is responding!"
+                  break
                 fi
-                echo "  Attempt $i/6 failed, waiting..."
+                echo "  Attempt $i/6 — waiting 5s..."
                 sleep 5
               done
               
-              echo "  ⚠️ Health check failed after 30 seconds"
-              echo "  Instance may still be starting up"
-              echo "  Check manually: $HEALTH_URL"
+              # Phase 3: Verify certificate (Traefik auto-issues for healthy containers)
+              echo "🔐 Checking Let's Encrypt certificate..."
+              CERT_OK=false
+              for i in {1..6}; do
+                ISSUER=$(echo | openssl s_client -connect "$SUBDOMAIN:443" -servername "$SUBDOMAIN" 2>/dev/null | openssl x509 -noout -issuer 2>/dev/null || echo "")
+                if echo "$ISSUER" | grep -q "Let's Encrypt"; then
+                  echo "  ✅ Let's Encrypt certificate verified!"
+                  CERT_OK=true
+                  break
+                fi
+                echo "  Attempt $i/6 — ACME challenge in progress, waiting 10s..."
+                sleep 10
+              done
+              
+              if [ "$CERT_OK" = "false" ]; then
+                echo "  ⚠️ Certificate not yet issued (may still be in progress)"
+                echo "  This usually resolves within 1-2 minutes"
+              fi
             else
               echo "  ⚠️ Could not extract subdomain from docker-compose.yml"
-              echo "  Check manually"
             fi
 
       - name: Notify deployment success
