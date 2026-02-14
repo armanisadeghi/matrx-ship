@@ -260,6 +260,7 @@ services:
       - "traefik.http.routers.${name}.entrypoints=websecure"
       - "traefik.http.routers.${name}.tls.certresolver=letsencrypt"
       - "traefik.http.services.${name}.loadbalancer.server.port=3000"
+      - "traefik.docker.network=proxy"
 
   db:
     image: ${pgImage}
