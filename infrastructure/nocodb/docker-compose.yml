@@ -1,0 +1,36 @@
+services:
+  nocodb:
+    image: nocodb/nocodb:latest
+    container_name: nocodb
+    restart: unless-stopped
+    environment:
+      NC_DB: "pg://${DB_HOST:-postgres}:${DB_PORT:-5432}?u=${DB_USER}&p=${DB_PASSWORD}&d=${DB_DATABASE}"
+      NC_AUTH_JWT_SECRET: ${NOCODB_JWT_SECRET}
+      NC_ADMIN_EMAIL: ${NOCODB_ADMIN_EMAIL:-admin@matrx.com}
+      NC_ADMIN_PASSWORD: ${NOCODB_ADMIN_PASSWORD}
+      NC_PUBLIC_URL: ${NOCODB_PUBLIC_URL:-http://localhost:8080}
+    volumes:
+      - nocodb-data:/usr/app/data
+    networks:
+      - backend
+      - proxy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/api/v1/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.nocodb.rule=Host(`nocodb.dev.codematrx.com`)"
+      - "traefik.http.routers.nocodb.entrypoints=websecure"
+      - "traefik.http.routers.nocodb.tls.certresolver=letsencrypt"
+      - "traefik.http.services.nocodb.loadbalancer.server.port=8080"
+
+volumes:
+  nocodb-data:
+
+networks:
+  backend:
+  proxy:
+    external: true
