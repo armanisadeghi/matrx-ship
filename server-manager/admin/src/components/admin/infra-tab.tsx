@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Server, CheckCircle2, AlertTriangle, RefreshCw, Loader2, Globe, Database, Monitor } from "lucide-react";
+import { Server, CheckCircle2, AlertTriangle, RefreshCw, Loader2, Globe, Database, Monitor, ExternalLink, TableProperties } from "lucide-react";
 import { Button } from "@matrx/admin-ui/ui/button";
 import { Card, CardHeader, CardTitle, CardContent } from "@matrx/admin-ui/ui/card";
 import { Badge } from "@matrx/admin-ui/ui/badge";
@@ -79,6 +79,42 @@ export function InfraTab({ api, system }: Props) {
           <Card><CardContent className="pt-6"><p className="text-sm text-muted-foreground">Docker</p><p className="text-sm font-bold">{system.docker}</p><p className="text-xs text-muted-foreground">Uptime: {system.uptime_hours}h</p></CardContent></Card>
         </div>
       )}
+
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base flex items-center gap-2"><Database className="size-4" /> Admin Tools</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <a
+              href="https://directus.app.matrxserver.com"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-3 rounded-lg border p-3 hover:bg-accent transition-colors"
+            >
+              <Database className="size-5 text-purple-500 shrink-0" />
+              <div className="flex-1 min-w-0">
+                <p className="font-medium text-sm">Directus CMS</p>
+                <p className="text-xs text-muted-foreground">Headless CMS — REST & GraphQL API</p>
+              </div>
+              <ExternalLink className="size-3.5 text-muted-foreground shrink-0" />
+            </a>
+            <a
+              href="https://nocodb.app.matrxserver.com"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-3 rounded-lg border p-3 hover:bg-accent transition-colors"
+            >
+              <TableProperties className="size-5 text-indigo-500 shrink-0" />
+              <div className="flex-1 min-w-0">
+                <p className="font-medium text-sm">NocoDB</p>
+                <p className="text-xs text-muted-foreground">Spreadsheet-style database browser</p>
+              </div>
+              <ExternalLink className="size-3.5 text-muted-foreground shrink-0" />
+            </a>
+          </div>
+        </CardContent>
+      </Card>
 
       {groups.map((group) =>
         group.items.length > 0 && (

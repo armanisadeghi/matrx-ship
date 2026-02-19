@@ -22,6 +22,7 @@ export interface NavItem {
   label: string;
   icon: React.ComponentType<{ className?: string }>;
   badge?: string;
+  external?: boolean;
 }
 
 export interface NavGroup {

@@ -11,6 +11,9 @@ import {
   FileText,
   Shield,
   Container,
+  Database,
+  TableProperties,
+  ExternalLink,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { AdminShell, type NavGroup, type NavItem } from "@matrx/admin-ui/components/admin-shell";
@@ -42,6 +45,13 @@ const navGroups: NavGroup[] = [
     items: [
       { id: "docker", href: "/docker", label: "Docker Control", icon: Container },
       { id: "emergency", href: "/emergency", label: "Emergency Access", icon: Shield },
+    ],
+  },
+  {
+    label: "Admin Tools",
+    items: [
+      { id: "directus", href: "https://directus.app.matrxserver.com", label: "Directus CMS", icon: Database, external: true },
+      { id: "nocodb", href: "https://nocodb.app.matrxserver.com", label: "NocoDB", icon: TableProperties, external: true },
     ],
   },
   {
@@ -92,34 +102,53 @@ export function DeployLayout({
       role="admin"
       onRefresh={onRefresh}
       onLogout={onLogout}
-      renderNavLink={(item: NavItem, isActive: boolean, onClick: () => void) => (
-        <Link
-          key={item.id}
-          href={item.href}
-          onClick={onClick}
-          className={cn(
-            "flex w-full items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors",
-            isActive
-              ? "bg-sidebar-accent text-sidebar-accent-foreground"
-              : "text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
-          )}
-        >
-          <item.icon
-            className={cn(
-              "w-4.5 h-4.5 shrink-0",
-              isActive
-                ? "text-sidebar-primary"
-                : "text-muted-foreground",
+      renderNavLink={(item: NavItem, isActive: boolean, onClick: () => void) => {
+        const isExternal = item.external;
+        const linkClasses = cn(
+          "flex w-full items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors",
+          isActive
+            ? "bg-sidebar-accent text-sidebar-accent-foreground"
+            : "text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
+        );
+
+        if (isExternal) {
+          return (
+            <a
+              key={item.id}
+              href={item.href}
+              target="_blank"
+              rel="noopener noreferrer"
+              className={linkClasses}
+            >
+              <item.icon className="w-4.5 h-4.5 shrink-0 text-muted-foreground" />
+              <span className="flex-1 text-left">{item.label}</span>
+              <ExternalLink className="w-3 h-3 shrink-0 text-muted-foreground" />
+            </a>
+          );
+        }
+
+        return (
+          <Link
+            key={item.id}
+            href={item.href}
+            onClick={onClick}
+            className={linkClasses}
+          >
+            <item.icon
+              className={cn(
+                "w-4.5 h-4.5 shrink-0",
+                isActive ? "text-sidebar-primary" : "text-muted-foreground",
+              )}
+            />
+            <span className="flex-1 text-left">{item.label}</span>
+            {item.badge && (
+              <Badge variant="default" className="text-[10px] h-5 px-1.5">
+                {item.badge}
+              </Badge>
             )}
-          />
-          <span className="flex-1 text-left">{item.label}</span>
-          {item.badge && (
-            <Badge variant="default" className="text-[10px] h-5 px-1.5">
-              {item.badge}
-            </Badge>
-          )}
-        </Link>
-      )}
+          </Link>
+        );
+      }}
     >
       {children}
     </AdminShell>

@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import {
   Loader2, RefreshCw, CheckCircle2, AlertTriangle, XCircle,
-  Database, Globe, Cpu, ExternalLink, BookOpen, Play,
+  Database, Globe, Cpu, ExternalLink, BookOpen, Play, TableProperties,
 } from "lucide-react";
 import { Card, CardHeader, CardTitle, CardContent, CardDescription } from "@matrx/admin-ui/ui/card";
 import { Button } from "@matrx/admin-ui/ui/button";
@@ -90,6 +90,22 @@ export default function InfrastructurePage() {
       details: "Web-based PostgreSQL administration",
       url: "https://pg.dev.codematrx.com",
       icon: <Database className="size-4 text-blue-400" />,
+    },
+    {
+      name: "Directus",
+      type: "CMS / Admin",
+      status: "running",
+      details: "Headless CMS — REST & GraphQL API for scraper database",
+      url: "https://directus.app.matrxserver.com",
+      icon: <Database className="size-4 text-purple-500" />,
+    },
+    {
+      name: "NocoDB",
+      type: "Database UI",
+      status: "running",
+      details: "Spreadsheet-style database browser and editor",
+      url: "https://nocodb.app.matrxserver.com",
+      icon: <TableProperties className="size-4 text-indigo-500" />,
     },
     ...(infra?.agents || []).map((agent) => ({
       name: agent.name,
