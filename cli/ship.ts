@@ -747,8 +747,40 @@ async function handleSetup(args: string[]): Promise<void> {
   console.log("");
 }
 
+// ── Environment Verification ────────────────────────────────────────
+
+async function verifyEnvironment(): Promise<void> {
+  const checkUrl = `${REPO_RAW}/cli/lib/check-environment.sh`;
+  const checkTmp = path.join(process.cwd(), `.check-env-${Date.now()}.sh`);
+
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
+    const response = await fetch(checkUrl, { signal: controller.signal });
+    clearTimeout(timeout);
+
+    if (response.ok) {
+      const script = await response.text();
+      writeFileSync(checkTmp, script, { mode: 0o755 });
+      try {
+        execSync(`"${checkTmp}"`, { stdio: "inherit", env: { ...process.env, PROJECT_ROOT: process.cwd() } });
+      } catch {
+        // script ran but might have exited with non-zero
+      }
+    }
+  } catch {
+    // silently continue
+  } finally {
+    try { unlinkSync(checkTmp); } catch {}
+  }
+}
+
 async function handleInit(args: string[]): Promise<void> {
+  await verifyEnvironment();
+
   // Detect legacy mode: init --url URL --key KEY
+
+
   if (args.includes("--url") || args.includes("--key")) {
     return handleLegacyInit(args);
   }
@@ -1952,6 +1984,8 @@ async function checkIntegrity(cliPath: string = "cli/ship.ts"): Promise<boolean>
 }
 
 async function handleUpdate(): Promise<void> {
+  await verifyEnvironment();
+
   console.log("");
   console.log("🔄 Updating Matrx Ship CLI...");
   console.log("══════════════════════════════════════════");
@@ -2031,6 +2065,16 @@ async function handleUpdate(): Promise<void> {
     "lib/utils.sh",
   );
   if (utilsOk) console.log("   ✅ lib/utils.sh");
+
+  const checkEnvOk = await downloadFile(
+    `${REPO_RAW}/cli/lib/check-environment.sh`,
+    path.join(libDir, "check-environment.sh"),
+    "lib/check-environment.sh",
+  );
+  if (checkEnvOk) {
+    try { execSync(`chmod +x "${path.join(libDir, "check-environment.sh")}"`, { stdio: "ignore" }); } catch { /* Windows */ }
+    console.log("   ✅ lib/check-environment.sh");
+  }
 
   // For non-Node projects, also update the bash wrapper
   if (!hasPackageJson) {

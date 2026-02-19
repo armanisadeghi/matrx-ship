@@ -114,10 +114,14 @@ ensure_tsx_dependency() {
     
     # Detect package manager and install
     if [[ -f "pnpm-lock.yaml" ]] || [[ -f "pnpm-workspace.yaml" ]]; then
+        # Try normal install first
         if pnpm add -D tsx 2>/dev/null; then
             ok "tsx installed via pnpm"
+        # If that fails (likely workspace root error), try with -w
+        elif pnpm add -D -w tsx 2>/dev/null; then
+            ok "tsx installed via pnpm (workspace root)"
         else
-            warn "Failed to install tsx. Run: pnpm add -D tsx"
+            warn "Failed to install tsx. Run: pnpm add -D -w tsx"
         fi
     elif [[ -f "yarn.lock" ]]; then
         if yarn add -D tsx 2>/dev/null; then
@@ -345,6 +349,20 @@ open_url() {
 # ══════════════════════════════════════════════════════════════════════════════
 
 PROJECT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+export PROJECT_ROOT
+
+# Download and run the environment checker
+CHECK_URL="${REPO_RAW}/cli/lib/check-environment.sh"
+CHECK_TMP=$(mktemp)
+if curl -fsSL "$CHECK_URL" -o "$CHECK_TMP" 2>/dev/null; then
+    chmod +x "$CHECK_TMP"
+    # We run it in a subshell to avoid env pollution, passing PROJECT_ROOT
+    ( PROJECT_ROOT="$PROJECT_ROOT" source "$CHECK_TMP" && check_environment_all )
+    rm -f "$CHECK_TMP"
+else
+    # Fallback if we can't fetch the checker is just to proceed
+    echo -e "  ${YELLOW}!${NC} Could not fetch environment checker. Proceeding with basic installation..."
+fi
 cd "$PROJECT_ROOT"
 
 PROJECT_TYPE=$(detect_project_type)
@@ -393,6 +411,7 @@ mkdir -p "${INSTALL_DIR}/lib"
 # Always download lib files (shared by both tools)
 download_file "${REPO_RAW}/cli/lib/colors.sh" "${INSTALL_DIR}/lib/colors.sh" "lib/colors.sh"
 download_file "${REPO_RAW}/cli/lib/utils.sh" "${INSTALL_DIR}/lib/utils.sh" "lib/utils.sh"
+download_file "${REPO_RAW}/cli/lib/check-environment.sh" "${INSTALL_DIR}/lib/check-environment.sh" "lib/check-environment.sh"
 
 if [[ "$SETUP_SHIP" == true ]]; then
     download_file "${REPO_RAW}/cli/ship.ts" "${INSTALL_DIR}/ship.ts" "ship.ts"

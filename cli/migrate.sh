@@ -199,6 +199,20 @@ echo -e "${BOLD}${CYAN}╰──────────────────
 echo ""
 
 PROJECT_ROOT=$(find_project_root)
+export PROJECT_ROOT
+
+# Download and run the environment checker
+CHECK_URL="${REPO_RAW}/cli/lib/check-environment.sh"
+
+CHECK_TMP=$(mktemp)
+if curl -fsSL "$CHECK_URL" -o "$CHECK_TMP" 2>/dev/null; then
+    chmod +x "$CHECK_TMP"
+    # Run in subshell
+    ( PROJECT_ROOT="$PROJECT_ROOT" source "$CHECK_TMP" && check_environment_all )
+    rm -f "$CHECK_TMP"
+else
+   echo -e "  ${YELLOW}!${NC} Could not fetch environment checker. Proceeding..."
+fi
 cd "$PROJECT_ROOT" || { echo "Failed to cd to project root"; exit 1; }
 echo -e "  Project: ${BOLD}$(basename "$PROJECT_ROOT")${NC} ($PROJECT_ROOT)"
 
@@ -293,7 +307,7 @@ UPDATED_ANY_FILE=false
 
 # Always update lib/ (shared by both ship and env-sync)
 if [[ "$HAS_SHIP" == true ]] || [[ "$HAS_ENV" == true ]]; then
-    for lib_file in lib/colors.sh lib/utils.sh; do
+    for lib_file in lib/colors.sh lib/utils.sh lib/check-environment.sh; do
         if file_differs "${REPO_RAW}/cli/${lib_file}" "${INSTALL_DIR}/${lib_file}"; then
             download_file "${REPO_RAW}/cli/${lib_file}" "${INSTALL_DIR}/${lib_file}" "${lib_file}"
             UPDATED_ANY_FILE=true
