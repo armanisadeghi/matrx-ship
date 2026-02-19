@@ -354,14 +354,16 @@ export PROJECT_ROOT
 # Download and run the environment checker
 CHECK_URL="${REPO_RAW}/cli/lib/check-environment.sh"
 CHECK_TMP=$(mktemp)
+# Download to temp file
 if curl -fsSL "$CHECK_URL" -o "$CHECK_TMP" 2>/dev/null; then
     chmod +x "$CHECK_TMP"
     # We run it in a subshell to avoid env pollution, passing PROJECT_ROOT
-    ( PROJECT_ROOT="$PROJECT_ROOT" source "$CHECK_TMP" && check_environment_all )
+    # FORCE output to stderr so it shows up even during pipe
+    ( PROJECT_ROOT="$PROJECT_ROOT" source "$CHECK_TMP" && check_environment_all ) >&2
     rm -f "$CHECK_TMP"
 else
     # Fallback if we can't fetch the checker is just to proceed
-    echo -e "  ${YELLOW}!${NC} Could not fetch environment checker. Proceeding with basic installation..."
+    echo -e "  ${YELLOW}!${NC} Could not fetch environment checker. Proceeding with basic installation..." >&2
 fi
 cd "$PROJECT_ROOT"
 

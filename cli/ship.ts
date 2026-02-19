@@ -46,6 +46,11 @@ interface ServerConfig {
   token: string;
 }
 
+// Simple fetch wrapper since native fetch is now available in Node 18+
+// but we want to fail gracefully if not.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+declare const fetch: any;
+
 interface UnifiedConfig {
   ship?: { url?: string; apiKey?: string };
   env?: {
@@ -864,15 +869,25 @@ async function handleInit(args: string[]): Promise<void> {
   console.log(`   Server:   ${serverConfig!.server}`);
   console.log("");
 
+  // Simple spinner
+  const spinnerChars = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+  let i = 0;
+  const spinner = setInterval(() => {
+    process.stdout.write(`\r   ${spinnerChars[i++ % spinnerChars.length]} Requesting instance...`);
+  }, 80);
+
   // Call MCP app_create
-  let result!: Record<string, unknown>;
+  let result: any;
   try {
     result = await callMcpTool(serverConfig!, "app_create", {
       name: projectName,
       display_name: displayName,
     });
+    clearInterval(spinner);
+    process.stdout.write("\r   ✅ Instance requested     \n");
   } catch (error) {
-    console.error("❌ Failed to provision instance");
+    clearInterval(spinner);
+    process.stdout.write("\r   ❌ Request failed         \n");
     console.error("   ", error instanceof Error ? error.message : String(error));
     process.exit(1);
   }
