@@ -913,13 +913,23 @@ async function handleInit(args: string[]): Promise<void> {
 
     if (!result.success) {
       console.error(`❌ Instance '${projectName}' already exists on the server but could not retrieve its config.`);
-      console.error("");
-      console.error("   Check the admin UI for the URL and API key:");
-      console.error(`     ${serverConfig!.server}/admin/`);
-      console.error("");
-      console.error("   Then configure manually:");
-      console.error(`     ${shipCmd("init")} --url https://${projectName}.dev.codematrx.com --key YOUR_API_KEY`);
-      process.exit(1);
+      console.log("   (This happens if the server token doesn't have read access to existing apps)");
+      console.log("");
+      
+      const manualUrl = await promptUser(`Enter Ship URL for ${projectName} (or Enter to skip):`, "");
+      if (manualUrl && manualUrl.trim().length > 0) {
+        const manualKey = await promptUser(`Enter Ship API Key for ${projectName}:`, "");
+        if (manualKey && manualKey.trim().length > 0) {
+           result = { success: true, url: manualUrl, api_key: manualKey };
+           console.log("   ✅ Using manually entered configuration");
+        } else {
+           console.error("   ❌ API Key is required.");
+           process.exit(1);
+        }
+      } else {
+        console.error("   ❌ Configuration skipped. Provide --url and --key to configure manually.");
+        process.exit(1);
+      }
     }
   } else if (result.error) {
     console.error(`❌ ${result.error}`);
