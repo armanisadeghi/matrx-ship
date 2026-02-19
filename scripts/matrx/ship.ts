@@ -494,7 +494,7 @@ async function callMcpTool(
 
     // Parse SSE response
     const body = await response.text();
-    const dataLine = body.split("\n").find((l) => l.startsWith("data: "));
+    const dataLine = body.split("\n").find((l: string) => l.startsWith("data: "));
     if (!dataLine) {
       throw new Error("Unexpected response format from MCP server");
     }
@@ -906,8 +906,9 @@ async function handleInit(args: string[]): Promise<void> {
           result = { success: true, url: inst.url, api_key: inst.api_key };
         }
       }
-    } catch {
-      // app_get may not exist — fall through to error
+    } catch (err) {
+      // app_get may not exist or failed
+      console.log(`   ⚠️  Could not retrieve existing info: ${err instanceof Error ? err.message : String(err)}`);
     }
 
     if (!result.success) {
