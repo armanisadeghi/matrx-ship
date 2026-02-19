@@ -272,24 +272,25 @@ dirs.forEach(d => {
             fi
         done
     fi
-
     DETECTED_SUBPROJECTS=("${found[@]}")
 }
 
 # ─── Download helper ─────────────────────────────────────────────────────────
-
+# Helper: Download files with cache busting
 download_file() {
     local url="$1"
     local dest="$2"
     local label="$3"
-
-    if curl -sfL "$url" -o "$dest" 2>/dev/null; then
+    
+    # Add cache buster
+    local cache_bust="?v=$(date +%s)"
+    
+    # Check if download is needed (not implemented effectively here, usually forced)
+    if curl -fsSL "${url}${cache_bust}" -o "$dest" 2>/dev/null; then
         ok "$label"
         return 0
     else
-        fail "Failed to download $label"
-        info "URL: $url"
-        info "You can download manually and place at: $dest"
+        warn "Failed to download $label"
         return 1
     fi
 }
