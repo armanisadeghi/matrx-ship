@@ -1,264 +1,454 @@
-# Supabase UI Library Evaluation for Matrx Ship
+# Supabase Studio Evaluation & Database Management Architecture for Matrx Ship
 
 **Date:** 2026-02-26
-**Status:** Research Complete
-**Decision:** Pending
+**Status:** Research Complete — Architectural Plan Ready
+**Decision:** Hybrid approach — NocoDB or Mathesar for client-facing data UI + custom provisioning in admin dashboard (see Section 7)
 
 ---
 
 ## Executive Summary
 
-This evaluation analyzes whether the Supabase open-source UI library is suitable for providing database management capabilities across the Matrx Ship platform. After thorough research, the conclusion is that **Supabase's offerings are NOT a good fit for Matrx Ship's multi-database management needs**, but there are strong alternatives worth considering.
+This evaluation analyzes whether Supabase Studio (the open-source database dashboard) can serve as the database management UI for Matrx Ship clients — specifically non-technical users who need to create, design, and manage databases through a friendly interface.
+
+**Key finding:** Supabase Studio *can* run as a minimal 3-container setup (Studio + postgres-meta + Postgres), but it has critical limitations for our multi-database, multi-tenant use case. A hybrid approach — using NocoDB as the client-facing data management layer while building lightweight provisioning into the Ship admin dashboard — gives the best UX for non-technical users with the least engineering overhead.
 
 ---
 
-## 1. Understanding the Matrx Ship Database Landscape
-
-Matrx Ship has **at least 4 distinct database contexts** that need management:
-
-| Context | Database | Location | Purpose |
-|---------|----------|----------|---------|
-| **Ship App** (main server) | PostgreSQL 16 via Drizzle ORM | `src/lib/db/` | Tracks deployments, API keys, logs, tickets, infrastructure metadata |
-| **Per-Instance Databases** | PostgreSQL 17 (one per Ship instance) | Docker containers (`ship-{name}-db`) | Each client's Ship instance gets a dedicated DB |
-| **Infrastructure DB** | PostgreSQL 17 + pgvector | `infrastructure/postgres/` | Shared platform-level data store |
-| **Supabase (backup)** | Supabase Cloud (PostgREST) | `server-manager/src/supabase.js` | Dual-write backup for disaster recovery |
-
-### The Key Challenge
-
-As Matrx Ship grows, clients will create **custom databases** alongside their Ship instance DB. With MCP tool creation and more advanced features planned, the number of databases to manage will multiply. The admin dashboard at `/admin/database/` currently only manages the single Ship App database. We need a solution that scales to N databases per client.
-
----
-
-## 2. What Supabase Actually Offers (Open Source)
-
-There are **three separate things** people call "Supabase UI":
-
-### 2a. Supabase UI Library (supabase.com/ui)
-
-**What it is:** A shadcn/ui-compatible component registry you install via CLI.
-
-**Available components:**
-- Password-based Auth (sign-up, sign-in, password reset)
-- Social Auth (OAuth providers)
-- File Upload Dropzone
-- Realtime Cursor Sharing
-- Current User Avatar
-- Realtime Avatar Stack
-- Realtime Chat
-- Infinite Query Hook
-
-**Verdict:** These are **application-level UI components** (auth flows, realtime features). They contain **zero database management UI** — no table editor, no SQL console, no schema browser. Not relevant for our needs.
-
-### 2b. Supabase Embedded Dashboard (supabase/supabase-embedded-dashboard)
-
-**What it is:** A standalone Next.js app with an embeddable `SupabaseManagerDialog` component.
-
-**Features:**
-- Database table browsing, record editing, SQL queries
-- Auth configuration management
-- Storage bucket management
-- User management with analytics
-- Secrets management
-- Logs and analytics
-- Performance suggestions
-- AI-powered SQL generation (optional, via OpenAI)
-
-**Tech stack:** Next.js, TypeScript, shadcn/ui, React Query, MIT licensed.
-
-**Critical limitation:** Works exclusively through the **Supabase Management API**. This means it **only manages Supabase Cloud-hosted projects**. It cannot connect to arbitrary PostgreSQL databases or self-hosted instances without replicating the entire Management API.
-
-### 2c. Supabase Studio (apps/studio in the monorepo)
-
-**What it is:** The full dashboard at supabase.com/dashboard. A complete Next.js application.
-
-**Features:** Everything — Table Editor, SQL Editor (Monaco), Schema Visualization, RLS Policy Manager, API Docs, Auth Config, Storage, Realtime Inspector, Edge Functions, and more.
-
-**Critical limitations:**
-- **Tightly coupled** to the full Supabase stack (PostgREST, GoTrue, Storage API, Realtime, specific Postgres roles like `supabase_admin`)
-- **Does NOT support multiple databases** — self-hosted Studio is hard-wired to a single `postgres` database
-- **Not embeddable** — deep dependencies on internal state management, API routes, authentication, Stripe billing
-- Extracting individual features (Table Editor, SQL Editor) would require massive refactoring
-- Internal packages (`packages/ui`, `packages/ui-patterns`) are not published to npm
-
----
-
-## 3. Why Supabase UI Doesn't Fit Matrx Ship
-
-| Requirement | Supabase UI Library | Embedded Dashboard | Studio |
-|-------------|--------------------|--------------------|--------|
-| Manage multiple PostgreSQL databases | N/A (no DB UI) | Only Supabase Cloud projects | No (single DB only) |
-| Connect to arbitrary Postgres instances | N/A | No (Management API only) | No (requires full Supabase stack) |
-| Embeddable in existing Next.js app | Yes (but irrelevant) | Yes, but wrong API | No |
-| Works with Drizzle ORM | N/A | No | No |
-| Schema management & migrations | N/A | No | Partial |
-| Per-client database isolation | N/A | Via separate Supabase projects | No |
-| MIT/Apache licensed | Yes | MIT | Apache 2.0 |
-
-**The fundamental problem:** Supabase's database management UI is built for Supabase's own platform, not for managing arbitrary PostgreSQL databases. The embedded dashboard requires the Supabase Management API (cloud-only), and Studio requires the full Supabase infrastructure stack. Neither supports the "connect to any Postgres instance by connection string" model that Matrx Ship needs.
-
----
-
-## 4. What Matrx Ship Already Has
-
-The current admin dashboard at `/admin/database/` already provides:
-
-- **Table browser** — Lists all tables with row counts, sizes, column counts (`src/app/admin/database/page.tsx`)
-- **Schema browser** — Columns, types, indexes, foreign keys, constraints (`src/app/admin/database/schema/page.tsx`)
-- **SQL Console** — CodeMirror editor with query execution, results table, history (`src/app/admin/database/query/page.tsx`)
-- **Table data viewer** — Paginated row browsing per table (`src/app/admin/database/[table]/page.tsx`)
-- **Migration history** — Drizzle migration tracking (`src/app/admin/database/migrations/page.tsx`)
-- **Introspection engine** — PostgreSQL catalog queries for metadata (`src/lib/db/introspect.ts`)
-
-**Current limitation:** All of this is hard-wired to the single `DATABASE_URL` connection — the Ship App's own database. There's no way to switch between databases.
-
----
-
-## 5. Recommended Alternatives
-
-### Option A: Extend the Existing Admin UI (Recommended)
-
-**Approach:** Add a "database connection switcher" to the existing admin dashboard. The introspection engine (`src/lib/db/introspect.ts`) and all the UI pages already work with raw PostgreSQL queries — they just need to accept a configurable connection.
-
-**What to build:**
-1. A database registry (table or config) that stores connection strings for all managed databases
-2. A connection switcher dropdown in the admin UI header
-3. A connection pool manager that creates/caches Drizzle clients per database
-4. Extend the existing API routes to accept a `databaseId` parameter
-
-**Pros:**
-- Leverages your existing codebase (no new dependencies)
-- Stays within your tech stack (Next.js, Drizzle, shadcn/ui)
-- Full control over the UX
-- Works with any PostgreSQL instance by connection string
-- Naturally integrates with the instance provisioning system
-
-**Cons:**
-- More features to build (inline editing, schema visualization, RLS management)
-- Maintenance burden
-
-**Effort:** Medium — the foundation is already there.
-
-### Option B: Drizzle Studio Embeddable (Commercial)
-
-**What it is:** A framework-agnostic web component of Drizzle Studio that can be embedded in any UI.
-
-**Pros:**
-- Already integrated with your ORM (Drizzle)
-- Supports multiple databases
-- Customizable theming
-- Actively maintained
-
-**Cons:**
-- **Commercial B2B product** — pricing depends on platform size and whether customer-facing
-- Distributed as a private npm package (requires license)
-- You'd depend on a vendor for a core feature
-
-**Best for:** If you want a polished database UI quickly and are willing to pay for it.
-
-### Option C: NocoDB or Directus (Already Configured)
-
-You already have Docker Compose configs for both NocoDB and Directus in `infrastructure/`. Both are open-source, self-hosted database management UIs.
-
-**NocoDB:**
-- Spreadsheet-like UI for PostgreSQL
-- REST and GraphQL APIs auto-generated
-- Supports connecting to external databases
-- Good for non-technical users
-- Can connect to the same Postgres instances your Ship instances use
-
-**Directus:**
-- Headless CMS with auto-generated APIs
-- Real-time WebSocket support (already configured with Redis)
-- Granular role-based access control
-- Extension system for custom modules
-- More feature-rich but heavier
-
-**Cons for both:**
-- Separate applications (not embedded in your admin dashboard)
-- Each manages one database per instance (would need multiple instances or a proxy layer for multi-DB)
-- Different look and feel from your admin UI
-
-### Option D: PostGUI (Open Source, React)
-
-**What it is:** A React/TypeScript web app that serves as a front-end to any PostgreSQL database using PostgREST.
-
-**Pros:**
-- Built-in **database picker** for multiple PostgreSQL databases from a single instance
-- React-based, could be adapted/embedded
-- Open source
-
-**Cons:**
-- Less mature than the other options
-- Requires PostgREST as a dependency
-- v2 rewrite in progress
-
----
-
-## 6. Recommendation
-
-**Short-term (now):** Go with **Option A** — extend the existing admin database UI. Add a connection registry and database switcher. The existing introspection engine, SQL console, table browser, and schema viewer already work with raw PostgreSQL — they just need a configurable connection target. This gives you immediate multi-database support without new dependencies.
-
-**Medium-term (as client base grows):** Consider **Option B** (Drizzle Studio embeddable) if the cost of building and maintaining advanced features (inline cell editing, schema visualization, drag-and-drop schema builder, RLS policy management) outweighs the licensing cost. Since you're already on Drizzle ORM, the integration would be natural.
-
-**For non-technical client access:** Keep **Option C** (NocoDB/Directus) as a complementary tool. Deploy one instance per client or use the multi-tenant capabilities for clients who want spreadsheet-like database access without writing SQL.
-
----
-
-## 7. Architecture Sketch: Multi-Database Admin UI
+## 1. The User Journey (What We're Solving For)
 
 ```
-Ship Admin Dashboard (/admin/database)
-    │
-    ├── Database Switcher (dropdown)
-    │   ├── Ship App DB (default)
-    │   ├── Client Instance: "aidream" DB
-    │   ├── Client Instance: "myapp" DB
-    │   ├── Custom DB: "analytics"
-    │   └── + Add Connection
-    │
-    ├── Selected Database Context
-    │   ├── Table Browser (existing)
-    │   ├── Schema Browser (existing)
-    │   ├── SQL Console (existing)
-    │   ├── Migration History (existing)
-    │   └── Data Viewer (existing)
-    │
-    └── Connection Manager
-        ├── Store connections in infra_instances or new table
-        ├── Pool manager (create Drizzle client per connection)
-        ├── Health checks per connection
-        └── Permission checks (which user can access which DB)
+                          THE FLASHCARD APP CREATOR
+                          ─────────────────────────
+
+ 1. Discovers AI Matrx → Signs up → Gets AI integrations, workflows
+ 2. Decides to build a full app → AI assistant scaffolds a project
+    (git repo, Next.js template, MCP server, admin dashboard)
+ 3. Deploys with a few clicks → Gets a running full-stack app at
+    https://flashcards.dev.codematrx.com
+ 4. Needs a database → Goes to dashboard → "Create Database"
+    → Schema designed through UI → Tables: users, decks, flashcards
+ 5. Manages data → Views rows, edits records, exports data
+    → All through a spreadsheet-like UI (NO SQL knowledge needed)
 ```
 
-### Key Implementation Details
-
-1. **Connection Registry:** Store in the existing `infra_instances` table — each instance already has `postgres_password` and can derive a `DATABASE_URL`
-2. **Pool Manager:** Create a singleton that lazily initializes and caches `postgres()` clients per connection string
-3. **API Changes:** Add `?db=<instance-name>` query param to all `/api/admin/database/*` routes
-4. **UI Changes:** Add a `<DatabaseSwitcher />` component to the admin layout that sets the active DB in React context
-5. **Security:** Validate that the current admin user has access to the selected database
+**Critical constraint:** These users don't know what PostgreSQL, SQL, Docker, or connection strings are. Everything must feel like clicking buttons in a spreadsheet app.
 
 ---
 
-## 8. Supabase Components Worth Taking
+## 2. Current State: How Ship Instances Work Today
 
-While the full Supabase database UI doesn't fit, individual ideas and patterns are worth borrowing:
+### Provisioning Flow (already works)
 
-- **Monaco Editor for SQL** — Supabase Studio uses Monaco with PostgreSQL syntax highlighting and autocomplete. The current SQL console uses CodeMirror, which is good, but Monaco would be a step up.
-- **AI SQL Generation** — The embedded dashboard's optional OpenAI integration for natural language to SQL is a great UX feature to add later.
-- **shadcn/ui component patterns** — The embedded dashboard's approach of using shadcn/ui for all UI components aligns with your existing component system.
-- **Table Editor UX** — Studio's inline row editing, column type selectors, and constraint managers are good design references.
+```
+CLI: pnpm ship:init my-project "My Project"
+  → Server Manager: createInstance()
+    → Generates docker-compose.yml + .env
+    → Starts 2 containers:
+       ├── {name}      (Next.js app, matrx-ship:latest)
+       └── db-{name}   (postgres:17-alpine)
+    → Drizzle migrations run on first boot
+    → Seeds: v1.0.0 record + API key
+    → Traefik: HTTPS certificate via Let's Encrypt
+    → Live at: https://{name}.dev.codematrx.com
+```
+
+### What each instance gets today
+
+| Component | Container | Details |
+|-----------|-----------|---------|
+| App | `{name}` | Next.js standalone, port 3000, Traefik-routed |
+| Database | `db-{name}` | PostgreSQL 17, user=ship, db=ship, docker volume |
+| Storage | Docker volume `pgdata` | Persistent across restarts |
+| Backups | `/srv/apps/backups/{name}/` | pg_dump SQL files |
+
+### Existing Admin Database UI (`/admin/database/`)
+
+| Page | What it does | File |
+|------|-------------|------|
+| Table Browser | Lists tables with row counts, sizes | `src/app/admin/database/page.tsx` |
+| Schema Browser | Columns, types, indexes, foreign keys | `src/app/admin/database/schema/page.tsx` |
+| SQL Console | CodeMirror editor, execute queries, history | `src/app/admin/database/query/page.tsx` |
+| Table Viewer | Paginated rows, sorting, delete | `src/app/admin/database/[table]/page.tsx` |
+| Migrations | Drizzle migration history | `src/app/admin/database/migrations/page.tsx` |
+
+**Limitation:** Hard-wired to `DATABASE_URL` (the instance's own `ship` database). No multi-database support. No ability to create new databases. Developer-oriented UI (raw SQL).
 
 ---
 
-## References
+## 3. Supabase Studio: Can It Work?
 
-- [Supabase UI Library](https://supabase.com/ui/docs/getting-started/introduction)
-- [Supabase Embedded Dashboard](https://github.com/supabase/supabase-embedded-dashboard) (MIT)
+### What Supabase Studio Is
+
+The full dashboard you see at `supabase.com/dashboard`. Open source (Apache 2.0), part of the `supabase/supabase` monorepo under `apps/studio`.
+
+### Minimal Self-Hosted Setup (3 containers)
+
+Studio can run with just 3 services:
+
+```yaml
+services:
+  db:
+    image: supabase/postgres:15.8.1.085   # or your existing postgres
+  meta:
+    image: supabase/postgres-meta:v0.95.1  # REST API for pg catalog
+    environment:
+      PG_META_DB_HOST: db
+      PG_META_DB_PASSWORD: ...
+  studio:
+    image: supabase/studio:latest
+    environment:
+      STUDIO_PG_META_URL: http://meta:8080
+      POSTGRES_PASSWORD: ...
+```
+
+Studio talks to `postgres-meta` (a lightweight REST API over the PostgreSQL system catalog). postgres-meta talks to Postgres. No Kong, no GoTrue, no PostgREST needed for basic database management.
+
+### What Works Without the Full Stack
+
+- Table Editor (browse, create, edit, delete rows)
+- SQL Editor (Monaco-based, syntax highlighting)
+- Schema management (create tables, columns, constraints)
+- Database roles and permissions viewer
+
+### What Breaks Without the Full Stack
+
+- Auth management (needs GoTrue)
+- Storage management (needs Storage API)
+- API documentation (needs PostgREST)
+- Realtime inspector (needs Realtime service)
+- Edge Functions (needs Edge Runtime)
+- Logs/Analytics (needs Logflare/Vector)
+
+### Critical Limitations
+
+| Issue | Impact |
+|-------|--------|
+| **Single database only** | Studio is hard-wired to one `postgres` database. No switcher. [Discussion #37552](https://github.com/orgs/supabase/discussions/37552) |
+| **No multi-tenant support** | Each Studio instance = one database. For N clients, you'd need N Studio instances. |
+| **Developer-oriented UX** | Studio assumes SQL knowledge. The table editor is powerful but not "spreadsheet-simple." |
+| **Infrastructure overhead** | 2 extra containers per client (Studio + postgres-meta) = significant resource cost at scale |
+| **Stubbed env vars** | Many features show errors/empty states without the full stack. Users see broken UI sections. |
+
+### Verdict on Supabase Studio
+
+Studio is an excellent developer tool but the wrong choice for non-technical users who need spreadsheet-like data management. The single-database limitation, developer-oriented UX, and per-client infrastructure overhead make it impractical for Matrx Ship's multi-tenant model.
+
+---
+
+## 4. Alternatives Evaluated
+
+### Mathesar (Strongest fit for transparent Postgres UI)
+
+**What it is:** Open-source spreadsheet-like UI built specifically as a layer over existing PostgreSQL databases. Maintained by a 501(c)(3) nonprofit.
+
+| Aspect | Details |
+|--------|---------|
+| **UX** | Spreadsheet-like grid — designed for non-technical users |
+| **Connect to existing DB** | First-class supported — this is its primary use case |
+| **Multiple databases** | Yes — single Mathesar instance connects to multiple Postgres DBs |
+| **Schema creation** | Visual table/field creation with types, relations |
+| **Row editing** | Inline editing, filtering, sorting, grouping |
+| **No proprietary schema** | Works with your data as-is — no NocoDB/Baserow metadata tables |
+| **Postgres access control** | Uses native Postgres roles and permissions |
+| **Container** | Single container (~200-300MB RAM) |
+| **License** | GPL (no row limits, no feature gates) |
+| **Import/Export** | CSV/TSV import/export, custom data types (email, URL) |
+
+**Why Mathesar stands out:** Unlike NocoDB/Teable/Baserow which create their own metadata schema in your database, Mathesar uses a separate internal DB for its own metadata and treats your Postgres database as a transparent overlay. Your tables stay exactly as they are.
+
+### NocoDB (Best fit for Airtable-like features)
+
+**What it is:** Open-source Airtable alternative. Spreadsheet UI over any PostgreSQL database.
+
+| Aspect | Details |
+|--------|---------|
+| **UX** | Spreadsheet/Airtable-like — perfect for non-technical users |
+| **Connect to existing DB** | Yes — point it at any Postgres connection string |
+| **Multiple databases** | Yes — can connect to multiple external databases |
+| **Schema creation** | Visual table/field creation with types, relations |
+| **Row editing** | Inline editing, form views, gallery views, kanban |
+| **API auto-generation** | REST + GraphQL APIs generated from schema |
+| **Views** | Grid, Form, Gallery, Kanban, Calendar |
+| **Collaboration** | Role-based access, comments, audit log |
+| **Container** | Single container (~500MB with deps) |
+| **License** | AGPL-3.0 (free tier has 10k row limit per workspace) |
+| **Already configured** | Yes — `infrastructure/nocodb/docker-compose.yml` exists |
+| **Caveat** | Creates its own metadata tables in your database |
+
+### Directus (Alternative for CMS-like needs)
+
+Heavier than NocoDB but more extensible. Good for content-heavy applications. Already configured in `infrastructure/directus/`.
+
+### Supabase Embedded Dashboard
+
+MIT-licensed Next.js app with embeddable dialog. Only works through the Supabase Management API (cloud-hosted projects). Not usable for our self-hosted Postgres instances.
+
+### Drizzle Studio Embeddable (Commercial)
+
+Framework-agnostic web component. Multi-database support. Developer-oriented. Commercial B2B pricing.
+
+### PostGUI (Open Source, React)
+
+React app with built-in database picker. Uses PostgREST. Less mature, v2 in progress.
+
+---
+
+## 5. The Real Problem: Two Audiences, Two Needs
+
+| | Non-Technical Client | Platform Admin (You) |
+|---|---|---|
+| **Goal** | "I want to store my flashcard data" | "I need to see all databases across all instances" |
+| **UX need** | Spreadsheet / Airtable | SQL console, schema browser, connection manager |
+| **SQL knowledge** | None | Expert |
+| **Creates schema by** | Picking field types from dropdown | Writing DDL or Drizzle schema |
+| **Manages data by** | Inline editing, forms, filters | SQL queries, bulk operations |
+| **Existing solution** | Nothing (gap) | `/admin/database/` (partial) |
+
+These are fundamentally different experiences. Trying to serve both with one UI leads to a compromised experience for everyone.
+
+---
+
+## 6. What Needs to Be Built
+
+### For Non-Technical Clients (the flashcard app creator)
+
+#### A. Database Provisioning (in Ship Admin Dashboard)
+
+The Ship admin dashboard needs a "Database" section with:
+
+```
+/admin/databases
+  ├── My Databases (list of client's databases)
+  │   ├── "Flashcard App" (default ship DB)
+  │   └── + Create New Database
+  ├── /admin/databases/new
+  │   ├── Database name
+  │   ├── Template picker (blank, todo app, CRM, e-commerce, etc.)
+  │   └── [Create] button
+  └── /admin/databases/{id}/manage
+      └── Opens NocoDB (embedded or linked)
+```
+
+**What "Create New Database" does behind the scenes:**
+1. Calls server-manager API to create a new Postgres database in the instance's existing `db-{name}` container (same Postgres, new database — no new containers needed)
+2. If a template was selected, runs the template's migration SQL
+3. Creates a NocoDB connection to the new database
+4. Returns the NocoDB URL for the client to manage their data
+
+#### B. Data Management UI Per-Instance (NocoDB or Mathesar)
+
+Deploy one data management container alongside each Ship instance. Two strong options:
+
+**Option B1: Mathesar** (lighter, transparent Postgres overlay)
+
+```yaml
+# Added to each instance's docker-compose.yml
+mathesar:
+  image: mathesar/mathesar:latest
+  container_name: mathesar-{name}
+  restart: unless-stopped
+  environment:
+    MATHESAR_DATABASES: "(ship|postgresql://ship:${POSTGRES_PASSWORD}@db:5432/ship)"
+    SECRET_KEY: ${MATHESAR_SECRET_KEY}
+  depends_on:
+    db:
+      condition: service_healthy
+  networks:
+    - internal
+    - proxy
+  labels:
+    - "traefik.enable=true"
+    - "traefik.http.routers.mathesar-{name}.rule=Host(`{name}.dev.codematrx.com`) && PathPrefix(`/data`)"
+    - "traefik.http.services.mathesar-{name}.loadbalancer.server.port=8000"
+```
+
+**Why Mathesar:**
+- Single container (~200-300MB) — lightest option
+- Transparent overlay — no proprietary tables added to client databases
+- One instance can connect to multiple databases (when client creates new DBs)
+- Uses native Postgres roles for access control
+- GPL license with no row limits
+
+**Option B2: NocoDB** (richer features, Airtable-like)
+
+```yaml
+# Added to each instance's docker-compose.yml
+nocodb:
+  image: nocodb/nocodb:latest
+  container_name: nocodb-{name}
+  restart: unless-stopped
+  environment:
+    NC_DB: "pg://db:5432?u=ship&p=${POSTGRES_PASSWORD}&d=ship"
+  depends_on:
+    db:
+      condition: service_healthy
+  networks:
+    - internal
+    - proxy
+  labels:
+    - "traefik.enable=true"
+    - "traefik.http.routers.nocodb-{name}.rule=Host(`{name}.dev.codematrx.com`) && PathPrefix(`/data`)"
+    - "traefik.http.services.nocodb-{name}.loadbalancer.server.port=8080"
+```
+
+**Why NocoDB:**
+- Richer view types (Grid, Form, Gallery, Kanban, Calendar)
+- Form builder lets clients create data entry forms without code
+- REST + GraphQL API auto-generation
+- Already configured in `infrastructure/nocodb/`
+- AGPL license (but 10k row limit on free tier)
+
+**Why either over Supabase Studio:**
+- Non-technical users see a familiar spreadsheet, not a developer dashboard
+- Both can connect to multiple databases within the same Postgres instance
+- Single container vs. Studio + postgres-meta + Kong (~3.6GB)
+- No broken UI sections from missing Supabase services
+
+#### C. AI-Assisted Schema Design (the "magic" layer)
+
+The Matrx LLM assistant should be able to:
+
+1. **Understand the client's app idea** — "I'm building a flashcard app"
+2. **Propose a schema** — users, decks, flashcards, study_sessions, progress
+3. **Generate the migration SQL** — CREATE TABLE statements
+4. **Execute it** — Create the tables in the client's database
+5. **Configure NocoDB** — Set up views, forms, and relations
+
+This is the biggest differentiator. The user never sees SQL or thinks about data types. They describe what they want, the AI creates it, and they see it in NocoDB's spreadsheet UI.
+
+### For Platform Admins (Internal Team)
+
+#### D. Multi-Database Connection Manager (in existing admin UI)
+
+Extend the current `/admin/database/` with a connection switcher:
+
+1. **Connection Registry** — New `managed_databases` table:
+   ```sql
+   CREATE TABLE managed_databases (
+     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+     instance_name TEXT NOT NULL,
+     database_name TEXT NOT NULL,
+     display_name TEXT NOT NULL,
+     connection_string TEXT NOT NULL,  -- encrypted
+     created_at TIMESTAMPTZ DEFAULT NOW(),
+     template TEXT  -- which template was used
+   );
+   ```
+
+2. **Database Switcher** — Dropdown in admin header selecting which database to inspect
+3. **Pool Manager** — Lazy-create `postgres()` clients per connection string, cache and reuse
+4. **API parameter** — All `/api/admin/database/*` routes accept `?db=<id>`
+
+---
+
+## 7. Recommended Architecture
+
+### Phase 1: Foundation (Immediate)
+
+```
+Per Ship Instance (existing)         New Addition
+─────────────────────────            ───────────────
+┌──────────────┐                     ┌──────────────┐
+│  {name}      │  Next.js app        │  nocodb-     │  Spreadsheet UI
+│  (app)       │  Admin dashboard    │  {name}      │  at /data/*
+│  port 3000   │  + DB provisioning  │  port 8080   │
+└──────┬───────┘                     └──────┬───────┘
+       │                                     │
+       │         ┌───────────────┐           │
+       └────────►│  db-{name}   │◄───────────┘
+                 │  PostgreSQL   │
+                 │  ┌──────────┐│
+                 │  │ ship (db)││  ← default instance DB
+                 │  │ flash (db)││  ← client-created DB
+                 │  │ crm (db) ││  ← client-created DB
+                 │  └──────────┘│
+                 └──────────────┘
+```
+
+**Changes needed:**
+1. **Server Manager:** New API endpoint `POST /api/instances/{name}/databases` — creates a new database in the instance's existing Postgres container
+2. **Ship Admin UI:** New `/admin/databases` page — list databases, create new ones, link to NocoDB
+3. **Docker Compose Generator:** Add NocoDB service to generated compose files
+4. **NocoDB Integration:** Auto-configure NocoDB with new database connections
+
+### Phase 2: AI-Assisted Schema Design
+
+- LLM assistant in the admin dashboard for schema creation
+- Template library for common app types (todo, CRM, e-commerce, flashcards)
+- Visual schema preview before execution
+
+### Phase 3: Advanced Features
+
+- Backup/restore per database (not just per instance)
+- Database cloning and migration tools
+- Usage analytics and quota management
+- Connection sharing between instances (for shared data)
+
+---
+
+## 8. Implementation Checklist
+
+### Server Manager Changes
+
+- [ ] `POST /api/instances/{name}/databases` — Create new database in instance Postgres
+- [ ] `GET /api/instances/{name}/databases` — List all databases in instance Postgres
+- [ ] `DELETE /api/instances/{name}/databases/{db}` — Drop database (with confirmation)
+- [ ] `POST /api/instances/{name}/databases/{db}/query` — Execute SQL against specific database
+- [ ] Update `generateCompose()` to include NocoDB service
+- [ ] Update `createInstance()` to start NocoDB alongside app + db
+
+### Ship Admin UI Changes
+
+- [ ] New `/admin/databases` page — Database listing and creation
+- [ ] New `/admin/databases/new` page — Create database wizard
+- [ ] NocoDB iframe/link integration from database list
+- [ ] Database switcher in existing `/admin/database/*` pages (for power users)
+- [ ] Connection pool manager (`src/lib/db/pool-manager.ts`)
+
+### Schema & Migrations
+
+- [ ] New `managed_databases` table in Drizzle schema
+- [ ] Migration for the new table
+- [ ] Template SQL files for common schemas (`drizzle/templates/`)
+
+### Infrastructure
+
+- [ ] NocoDB Docker image in base build
+- [ ] Traefik routing rules for NocoDB (`/data` path prefix)
+- [ ] NocoDB auth integration (tie to Ship admin session)
+
+---
+
+## 9. Why NOT Full Supabase Studio
+
+| Factor | Supabase Studio | Mathesar | NocoDB | Our Hybrid |
+|--------|----------------|----------|--------|------------|
+| UX for non-technical users | Developer-oriented | Spreadsheet | Airtable-like | Best of both |
+| Multi-database | No (1 DB per instance) | Yes (first-class) | Yes | Yes |
+| Containers per client | +5-6 (min) | +1 | +1 | +1 |
+| Memory per client | ~3.6GB (min with Kong) | ~200-300MB | ~500MB | ~200-500MB |
+| Broken UI sections | Yes (without full stack) | No | No | No |
+| Proprietary schema in DB | Yes (roles, schemas) | No (transparent) | Yes (metadata tables) | Depends on choice |
+| API auto-generation | No (needs PostgREST) | No | Yes (REST + GraphQL) | Depends on choice |
+| Form builder | No | No | Yes | Depends on choice |
+| SQL console | Yes (Monaco) | No (planned) | Basic | Yes (existing) |
+| License | Apache 2.0 | GPL | AGPL (10k row limit) | Mixed |
+| Row limits | None | None | 10k free tier | None |
+
+---
+
+## 10. References
+
 - [Supabase Studio Source](https://github.com/supabase/supabase/tree/master/apps/studio) (Apache 2.0)
+- [Supabase Self-Hosting Docs](https://supabase.com/docs/guides/self-hosting/docker)
+- [postgres-meta](https://github.com/supabase/postgres-meta)
+- [Supabase Embedded Dashboard](https://github.com/supabase/supabase-embedded-dashboard) (MIT)
 - [Multi-DB Discussion](https://github.com/orgs/supabase/discussions/37552)
-- [Multi-Org Discussion](https://github.com/orgs/supabase/discussions/4907)
 - [External DB Discussion](https://github.com/orgs/supabase/discussions/7018)
+- [Mathesar](https://mathesar.org/) — [GitHub](https://github.com/mathesar-foundation/mathesar) (GPL)
+- [NocoDB](https://github.com/nocodb/nocodb) (AGPL-3.0)
+- [Teable](https://github.com/teableio/teable) (AGPL)
+- [Baserow](https://github.com/baserow/baserow) (MIT open-core)
+- [Directus](https://github.com/directus/directus) (BSL-1.1)
+- [Supabase UI Library](https://supabase.com/ui/docs/getting-started/introduction)
 - [Drizzle Studio Embeddable](https://github.com/drizzle-team/drizzle-studio-npm)
-- [PostGUI](https://github.com/priyank-purohit/PostGUI)
-- [Mathesar](https://mathesar.org/)
