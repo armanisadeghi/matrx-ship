@@ -68,7 +68,7 @@ docker exec -it -u agent agent-1 bash
 ### Category 2: Matrx Ship App Instances (8 instances sharing one image)
 
 These all use the `matrx-ship:latest` local Docker image:
-- `ai-dream`
+- `aidream`
 - `ai-matrx-admin`
 - `matrx-dev-tools`
 - `matrx-dm`
@@ -106,7 +106,7 @@ cd /srv/apps/INSTANCE_NAME && docker compose up -d --force-recreate app
 Exact commands for each:
 
 ```bash
-cd /srv/apps/ai-dream && docker compose up -d --force-recreate app
+cd /srv/apps/aidream && docker compose up -d --force-recreate app
 cd /srv/apps/ai-matrx-admin && docker compose up -d --force-recreate app
 cd /srv/apps/matrx-dev-tools && docker compose up -d --force-recreate app
 cd /srv/apps/matrx-dm && docker compose up -d --force-recreate app
@@ -322,7 +322,7 @@ df -h /
 | 2 | PostgreSQL + pgAdmin | Infrastructure | `/srv/postgres` | `cd /srv/postgres && docker compose pull && docker compose up -d` |
 | 3 | Agent-1 | Infrastructure | `/srv/agent-envs` | `cd /srv/agent-envs && docker compose --profile agent1 up -d` |
 | 4 | Agent-2 | Infrastructure | `/srv/agent-envs` | `cd /srv/agent-envs && docker compose --profile agent2 up -d` |
-| 5 | ai-dream | Ship instance | `/srv/apps/ai-dream` | `cd /srv/apps/ai-dream && docker compose up -d --force-recreate app` |
+| 5 | aidream | Ship instance | `/srv/apps/aidream` | `cd /srv/apps/aidream && docker compose up -d --force-recreate app` |
 | 6 | ai-matrx-admin | Ship instance | `/srv/apps/ai-matrx-admin` | `cd /srv/apps/ai-matrx-admin && docker compose up -d --force-recreate app` |
 | 7 | matrx-dev-tools | Ship instance | `/srv/apps/matrx-dev-tools` | `cd /srv/apps/matrx-dev-tools && docker compose up -d --force-recreate app` |
 | 8 | matrx-dm | Ship instance | `/srv/apps/matrx-dm` | `cd /srv/apps/matrx-dm && docker compose up -d --force-recreate app` |

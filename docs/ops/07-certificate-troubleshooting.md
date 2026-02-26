@@ -101,7 +101,7 @@ matrx-engine:      health=healthy  cert=Let's Encrypt ✅
 matrx-mcp-servers: health=healthy  cert=Let's Encrypt ✅
 matrx-ship:        health=no-hc    cert=Let's Encrypt ✅
 ai-matrx-admin:    health=no-hc    cert=Let's Encrypt ✅
-ai-dream:          health=no-hc    cert=Let's Encrypt ✅
+aidream:          health=no-hc    cert=Let's Encrypt ✅
 matrx-sandbox:     health=no-hc    cert=Let's Encrypt ✅
 matrx-dev-tools:   health=no-hc    cert=Let's Encrypt ✅
 matrx-mcp-template:health=no-hc    cert=Let's Encrypt ✅

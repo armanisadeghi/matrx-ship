@@ -355,7 +355,7 @@ export const infraInstances = pgTable(
     serverId: uuid("server_id")
       .notNull()
       .references(() => infraServers.id, { onDelete: "cascade" }),
-    name: text("name").notNull(), // e.g. "matrx-ship", "ai-dream"
+    name: text("name").notNull(), // e.g. "matrx-ship", "aidream"
     displayName: text("display_name").notNull(),
     subdomain: text("subdomain").notNull(),
     image: text("image").notNull().default("matrx-ship:latest"),
