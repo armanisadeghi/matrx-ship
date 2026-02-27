@@ -20,6 +20,7 @@ import {
   Package,
   Columns3,
   History,
+  Wrench,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ThemeToggle } from "@/components/theme-toggle";
@@ -71,6 +72,7 @@ const navGroups: NavGroup[] = [
     label: "Management",
     items: [
       { href: "/admin/api-keys", label: "API Keys", icon: KeyRound },
+      { href: "/admin/mcp-tools", label: "MCP Tools", icon: Wrench },
       { href: "/admin/settings", label: "Settings", icon: Settings },
     ],
   },

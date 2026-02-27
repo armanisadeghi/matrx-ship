@@ -545,3 +545,40 @@ export const managedDatabases = pgTable(
 
 export type ManagedDatabase = typeof managedDatabases.$inferSelect;
 export type NewManagedDatabase = typeof managedDatabases.$inferInsert;
+
+// ─────────────────────────────────────────────────
+// Custom MCP tools — user-defined tools that get
+// dynamically registered in the MCP server
+// ─────────────────────────────────────────────────
+
+/**
+ * custom_mcp_tools — stores user-created MCP tool definitions.
+ * Each tool maps to a SQL query template that runs against a target database.
+ * The MCP server loads these at startup and registers them dynamically.
+ */
+export const customMcpTools = pgTable(
+  "custom_mcp_tools",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    toolName: text("tool_name").notNull(),
+    description: text("description").notNull(),
+    inputSchema: text("input_schema"), // JSON string of zod-compatible schema
+    sqlTemplate: text("sql_template").notNull(), // SQL with {{param}} placeholders
+    targetDatabase: text("target_database").default("ship"), // which database to run against
+    isActive: boolean("is_active").notNull().default(true),
+    createdBy: text("created_by"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("idx_custom_mcp_tools_name").on(table.toolName),
+    index("idx_custom_mcp_tools_active").on(table.isActive),
+  ],
+);
+
+export type CustomMcpTool = typeof customMcpTools.$inferSelect;
+export type NewCustomMcpTool = typeof customMcpTools.$inferInsert;

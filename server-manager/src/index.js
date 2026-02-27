@@ -1047,11 +1047,15 @@ function s3UploadImageTag(tag) {
   return { success: result.success, key: `s3://${bucket}/images/${tag}.tar.gz`, output: result.output || result.error };
 }
 
-function s3UploadBackup(instanceName, backupFile) {
+function s3UploadBackup(instanceName, backupFile, databaseName) {
   if (!isS3Configured()) return { success: false, error: "AWS S3 not configured" };
   const localPath = join(APPS_DIR, "backups", instanceName, backupFile);
   if (!existsSync(localPath)) return { success: false, error: `Backup file not found: ${localPath}` };
-  return s3Upload(localPath, `db-backups/${instanceName}/${backupFile}`);
+  // If a database name is provided, nest under instance/database/; otherwise use legacy path
+  const s3Key = databaseName
+    ? `db-backups/${instanceName}/${databaseName}/${backupFile}`
+    : `db-backups/${instanceName}/${backupFile}`;
+  return s3Upload(localPath, s3Key);
 }
 
 function s3ListBackups() {
@@ -1302,18 +1306,48 @@ function createServer() {
     async ({ name, delete_data, force }) => textResult(removeInstance(name, delete_data, force))
   );
 
-  server.tool("app_backup", "Backup an instance's PostgreSQL database.",
+  server.tool("app_backup", "Backup an instance's PostgreSQL database. Specify database name to backup a specific database, or omit to backup 'ship'.",
+    { name: z.string(), database: z.string().optional().describe("Database name to backup (default: 'ship')") },
+    async ({ name, database }) => {
+      const config = loadDeployments();
+      if (!config.instances[name]) return textResult({ error: `Instance '${name}' not found` });
+      const dbName = database || "ship";
+      mkdirSync(join(BACKUPS_DIR, name), { recursive: true });
+      const ts = new Date().toISOString().replace(/[:.]/g, "-");
+      const file = `${name}_${dbName}_${ts}.sql`;
+      const path = join(BACKUPS_DIR, name, file);
+      const result = exec(`docker exec db-${name} pg_dump -U ship ${dbName} > ${path}`, { timeout: 60000 });
+      if (result.success) return textResult({ success: true, instance: name, database: dbName, backup_file: `/srv/apps/backups/${name}/${file}`, size: formatBytes(statSync(path).size) });
+      return textResult({ success: false, error: result.error });
+    }
+  );
+
+  server.tool("app_backup_all", "Backup ALL databases in an instance's Postgres container. Creates separate dump files for each database.",
     { name: z.string() },
     async ({ name }) => {
       const config = loadDeployments();
       if (!config.instances[name]) return textResult({ error: `Instance '${name}' not found` });
       mkdirSync(join(BACKUPS_DIR, name), { recursive: true });
+      const dbContainer = `db-${name}`;
+      // List all user databases
+      const listResult = exec(`docker exec ${dbContainer} psql -U ship -d ship -tc "SELECT datname FROM pg_database WHERE datistemplate = false AND datname NOT IN ('postgres')" 2>/dev/null`);
+      if (!listResult.success) return textResult({ success: false, error: "Failed to list databases" });
+      const databases = listResult.output.trim().split("\n").map((d) => d.trim()).filter(Boolean);
       const ts = new Date().toISOString().replace(/[:.]/g, "-");
-      const file = `${name}_${ts}.sql`;
-      const path = join(BACKUPS_DIR, name, file);
-      const result = exec(`docker exec db-${name} pg_dump -U ship ship > ${path}`, { timeout: 60000 });
-      if (result.success) return textResult({ success: true, instance: name, backup_file: `/srv/apps/backups/${name}/${file}`, size: formatBytes(statSync(path).size) });
-      return textResult({ success: false, error: result.error });
+      const results = [];
+      for (const dbName of databases) {
+        const file = `${name}_${dbName}_${ts}.sql`;
+        const path = join(BACKUPS_DIR, name, file);
+        const result = exec(`docker exec ${dbContainer} pg_dump -U ship ${dbName} > ${path}`, { timeout: 60000 });
+        results.push({
+          database: dbName,
+          success: result.success,
+          backup_file: result.success ? `/srv/apps/backups/${name}/${file}` : null,
+          size: result.success ? formatBytes(statSync(path).size) : null,
+          error: result.success ? null : result.error,
+        });
+      }
+      return textResult({ success: true, instance: name, backups: results, total: results.length, successful: results.filter((r) => r.success).length });
     }
   );
 
@@ -1361,9 +1395,9 @@ function createServer() {
     async ({ tag }) => textResult(s3UploadImageTag(tag))
   );
 
-  server.tool("s3_upload_backup", "Upload a database backup to S3.",
-    { instance_name: z.string(), backup_file: z.string() },
-    async ({ instance_name, backup_file }) => textResult(s3UploadBackup(instance_name, backup_file))
+  server.tool("s3_upload_backup", "Upload a database backup to S3. Specify database name to organize backups per-database.",
+    { instance_name: z.string(), backup_file: z.string(), database: z.string().optional().describe("Database name for S3 path organization") },
+    async ({ instance_name, backup_file, database }) => textResult(s3UploadBackup(instance_name, backup_file, database))
   );
 
   server.tool("s3_list", "List all files in the S3 backup bucket.",
@@ -1638,13 +1672,52 @@ app.post("/api/instances/:name/backup", authMiddleware, requireRole("admin", "de
   const name = req.params.name;
   const config = loadDeployments();
   if (!config.instances[name]) return res.status(404).json({ error: "Instance not found" });
+  const dbName = req.body?.database || "ship";
   mkdirSync(join(BACKUPS_DIR, name), { recursive: true });
   const ts = new Date().toISOString().replace(/[:.]/g, "-");
-  const file = `${name}_${ts}.sql`;
+  const file = `${name}_${dbName}_${ts}.sql`;
   const path = join(BACKUPS_DIR, name, file);
-  const result = exec(`docker exec db-${name} pg_dump -U ship ship > ${path}`, { timeout: 60000 });
-  if (result.success) res.json({ success: true, backup_file: `/srv/apps/backups/${name}/${file}`, size: formatBytes(statSync(path).size) });
-  else res.status(500).json({ success: false, error: result.error });
+  const result = exec(`docker exec db-${name} pg_dump -U ship ${dbName} > ${path}`, { timeout: 60000 });
+  if (result.success) {
+    const backup = { success: true, database: dbName, backup_file: `/srv/apps/backups/${name}/${file}`, size: formatBytes(statSync(path).size) };
+    // Auto-upload to S3 if configured and requested
+    if (req.body?.upload_to_s3 && isS3Configured()) {
+      backup.s3 = s3UploadBackup(name, file, dbName);
+    }
+    res.json(backup);
+  } else res.status(500).json({ success: false, error: result.error });
+});
+
+app.post("/api/instances/:name/backup-all", authMiddleware, requireRole("admin"), async (req, res) => {
+  const name = req.params.name;
+  const config = loadDeployments();
+  if (!config.instances[name]) return res.status(404).json({ error: "Instance not found" });
+  mkdirSync(join(BACKUPS_DIR, name), { recursive: true });
+  const dbContainer = `db-${name}`;
+  const listResult = exec(`docker exec ${dbContainer} psql -U ship -d ship -tc "SELECT datname FROM pg_database WHERE datistemplate = false AND datname NOT IN ('postgres')" 2>/dev/null`);
+  if (!listResult.success) return res.status(500).json({ error: "Failed to list databases" });
+  const databases = listResult.output.trim().split("\n").map((d) => d.trim()).filter(Boolean);
+  const ts = new Date().toISOString().replace(/[:.]/g, "-");
+  const results = [];
+  for (const dbName of databases) {
+    const file = `${name}_${dbName}_${ts}.sql`;
+    const path = join(BACKUPS_DIR, name, file);
+    const result = exec(`docker exec ${dbContainer} pg_dump -U ship ${dbName} > ${path}`, { timeout: 60000 });
+    const entry = {
+      database: dbName,
+      success: result.success,
+      backup_file: result.success ? `/srv/apps/backups/${name}/${file}` : null,
+      size: result.success ? formatBytes(statSync(path).size) : null,
+      error: result.success ? null : result.error,
+    };
+    // Auto-upload to S3 if configured and requested
+    if (result.success && req.body?.upload_to_s3 && isS3Configured()) {
+      entry.s3 = s3UploadBackup(name, file, dbName);
+    }
+    results.push(entry);
+  }
+  auditLog(req.tokenEntry?.label || "api", "backup_all", name, { databases: databases.length, successful: results.filter((r) => r.success).length });
+  res.json({ success: true, instance: name, backups: results, total: results.length, successful: results.filter((r) => r.success).length });
 });
 
 app.put("/api/instances/:name/env", authMiddleware, requireRole("admin", "deployer"), async (req, res) => {
@@ -1927,9 +2000,9 @@ app.post("/api/s3/upload-image", authMiddleware, requireRole("admin"), async (re
 });
 
 app.post("/api/s3/upload-backup", authMiddleware, requireRole("admin"), async (req, res) => {
-  const { instance_name, backup_file } = req.body || {};
+  const { instance_name, backup_file, database } = req.body || {};
   if (!instance_name || !backup_file) return res.status(400).json({ error: "instance_name and backup_file are required" });
-  const result = s3UploadBackup(instance_name, backup_file);
+  const result = s3UploadBackup(instance_name, backup_file, database);
   res.status(result.success ? 200 : 400).json(result);
 });
 
@@ -2020,19 +2093,20 @@ app.post("/api/instances/:name/db/query", authMiddleware, requireRole("admin"), 
 app.post("/api/instances/:name/db/restore", authMiddleware, requireRole("admin"), async (req, res) => {
   const name = req.params.name;
   const dbContainer = `db-${name}`;
-  const { backup_file } = req.body;
+  const { backup_file, database } = req.body;
+  const dbName = database || "ship";
 
   if (!backup_file) return res.status(400).json({ error: "backup_file is required" });
 
   const backupPath = join(BACKUPS_DIR, name, backup_file);
   if (!existsSync(backupPath)) return res.status(404).json({ error: `Backup file not found: ${backup_file}` });
 
-  // Restore the backup
-  const result = exec(`cat ${backupPath} | docker exec -i ${dbContainer} psql -U ship -d ship`, { timeout: 120000 });
+  // Restore the backup to the specified database
+  const result = exec(`cat ${backupPath} | docker exec -i ${dbContainer} psql -U ship -d ${dbName}`, { timeout: 120000 });
 
-  auditLog(req.tokenEntry?.label || "api", "db_restore", name, { backup_file, success: result.success });
+  auditLog(req.tokenEntry?.label || "api", "db_restore", name, { backup_file, database: dbName, success: result.success });
 
-  res.json({ success: result.success, output: result.output || result.error });
+  res.json({ success: result.success, database: dbName, output: result.output || result.error });
 });
 
 // ── Multi-Database Management ───────────────────────────────────────────────

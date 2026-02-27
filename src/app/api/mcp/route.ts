@@ -16,6 +16,10 @@ import {
   resolveTicket,
   type ActorInfo,
 } from "@/lib/services/tickets";
+import * as multiDb from "@/lib/db/multi-db";
+import { db } from "@/lib/db";
+import { customMcpTools } from "@/lib/db/schema";
+import { eq } from "drizzle-orm";
 import { logger } from "@/lib/logger";
 
 // ─── Auth validation ────────────────────────────
@@ -34,7 +38,7 @@ function validateAuth(request: Request): boolean {
 }
 
 // ─── Create the MCP Server ─────────────────────
-function createMcpServer(): McpServer {
+async function createMcpServer(): Promise<McpServer> {
   const server = new McpServer({
     name: "Matrx Ship Tickets",
     version: "1.0.0",
@@ -274,6 +278,186 @@ function createMcpServer(): McpServer {
     },
   );
 
+  // ─── Database Management Tools ──────────────────
+
+  server.tool(
+    "db_list_databases",
+    "List all databases in this instance",
+    {},
+    async () => {
+      const databases = await multiDb.listDatabases();
+      return { content: [{ type: "text" as const, text: JSON.stringify({ databases, count: databases.length }) }] };
+    },
+  );
+
+  server.tool(
+    "db_list_tables",
+    "List all tables in a database with row counts and sizes",
+    {
+      database: z.string().optional().describe("Database name (default: 'ship')"),
+    },
+    async (params) => {
+      const tables = await multiDb.listTables(params.database ?? "ship");
+      return { content: [{ type: "text" as const, text: JSON.stringify({ tables, count: tables.length }) }] };
+    },
+  );
+
+  server.tool(
+    "db_describe_table",
+    "Get column names, types, and constraints for a table",
+    {
+      table: z.string().describe("Table name"),
+      database: z.string().optional().describe("Database name (default: 'ship')"),
+    },
+    async (params) => {
+      const columns = await multiDb.describeTable(params.database ?? "ship", params.table);
+      return { content: [{ type: "text" as const, text: JSON.stringify({ table: params.table, columns }) }] };
+    },
+  );
+
+  server.tool(
+    "db_read_rows",
+    "Read rows from a table with pagination and sorting",
+    {
+      table: z.string().describe("Table name"),
+      database: z.string().optional().describe("Database name (default: 'ship')"),
+      limit: z.number().optional().describe("Max rows to return (default: 100, max: 500)"),
+      offset: z.number().optional().describe("Skip this many rows"),
+      order_by: z.string().optional().describe("Column to sort by"),
+      order_dir: z.enum(["asc", "desc"]).optional().describe("Sort direction"),
+    },
+    async (params) => {
+      const result = await multiDb.readRows(params.database ?? "ship", params.table, {
+        limit: params.limit,
+        offset: params.offset,
+        orderBy: params.order_by,
+        orderDir: params.order_dir,
+      });
+      return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
+    },
+  );
+
+  server.tool(
+    "db_insert_row",
+    "Insert a new row into a table",
+    {
+      table: z.string().describe("Table name"),
+      data: z.record(z.string(), z.unknown()).describe("Column-value pairs to insert"),
+      database: z.string().optional().describe("Database name (default: 'ship')"),
+    },
+    async (params) => {
+      const row = await multiDb.insertRow(params.database ?? "ship", params.table, params.data);
+      return { content: [{ type: "text" as const, text: JSON.stringify({ success: true, row }) }] };
+    },
+  );
+
+  server.tool(
+    "db_update_row",
+    "Update a row by its primary key",
+    {
+      table: z.string().describe("Table name"),
+      pk_column: z.string().describe("Primary key column name"),
+      pk_value: z.string().describe("Primary key value"),
+      data: z.record(z.string(), z.unknown()).describe("Column-value pairs to update"),
+      database: z.string().optional().describe("Database name (default: 'ship')"),
+    },
+    async (params) => {
+      const row = await multiDb.updateRow(params.database ?? "ship", params.table, params.pk_column, params.pk_value, params.data);
+      if (!row) return { content: [{ type: "text" as const, text: "Row not found." }] };
+      return { content: [{ type: "text" as const, text: JSON.stringify({ success: true, row }) }] };
+    },
+  );
+
+  server.tool(
+    "db_delete_row",
+    "Delete a row by its primary key",
+    {
+      table: z.string().describe("Table name"),
+      pk_column: z.string().describe("Primary key column name"),
+      pk_value: z.string().describe("Primary key value"),
+      database: z.string().optional().describe("Database name (default: 'ship')"),
+    },
+    async (params) => {
+      const deleted = await multiDb.deleteRow(params.database ?? "ship", params.table, params.pk_column, params.pk_value);
+      return { content: [{ type: "text" as const, text: JSON.stringify({ success: deleted }) }] };
+    },
+  );
+
+  server.tool(
+    "db_search",
+    "Search across all text columns in a table",
+    {
+      table: z.string().describe("Table name"),
+      query: z.string().describe("Search term (case-insensitive)"),
+      database: z.string().optional().describe("Database name (default: 'ship')"),
+      limit: z.number().optional().describe("Max results (default: 50)"),
+    },
+    async (params) => {
+      const rows = await multiDb.searchTable(params.database ?? "ship", params.table, params.query, params.limit);
+      return { content: [{ type: "text" as const, text: JSON.stringify({ results: rows, count: rows.length }) }] };
+    },
+  );
+
+  server.tool(
+    "db_execute_sql",
+    "Execute a raw SQL query against a database (use with care)",
+    {
+      sql: z.string().describe("SQL query to execute"),
+      database: z.string().optional().describe("Database name (default: 'ship')"),
+    },
+    async (params) => {
+      const result = await multiDb.executeQuery(params.database ?? "ship", params.sql);
+      return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
+    },
+  );
+
+  // ─── Custom MCP Tools (Dynamic) ───────────────
+
+  // Load custom tools from the database and register them
+  try {
+    const tools = await db
+      .select()
+      .from(customMcpTools)
+      .where(eq(customMcpTools.isActive, true));
+
+    for (const tool of tools) {
+      server.tool(
+        tool.toolName,
+        tool.description,
+        tool.inputSchema ? JSON.parse(tool.inputSchema) : {},
+        async (params: Record<string, unknown>) => {
+          try {
+            // Execute the tool's SQL template with parameter substitution
+            let query = tool.sqlTemplate;
+            for (const [key, value] of Object.entries(params)) {
+              query = query.replace(
+                new RegExp(`\\{\\{${key}\\}\\}`, "g"),
+                typeof value === "string" ? value : JSON.stringify(value),
+              );
+            }
+            const result = await multiDb.executeQuery(
+              tool.targetDatabase ?? "ship",
+              query,
+            );
+            return {
+              content: [
+                { type: "text" as const, text: JSON.stringify(result) },
+              ],
+            };
+          } catch (err) {
+            const message =
+              err instanceof Error ? err.message : "Tool execution failed";
+            return {
+              content: [{ type: "text" as const, text: JSON.stringify({ error: message }) }],
+            };
+          }
+        },
+      );
+    }
+  } catch {
+    // Table might not exist yet on first boot — that's fine
+  }
+
   return server;
 }
 
@@ -288,7 +472,7 @@ export async function POST(request: Request) {
   }
 
   try {
-    const server = createMcpServer();
+    const server = await createMcpServer();
     const transport = new WebStandardStreamableHTTPServerTransport({
       sessionIdGenerator: undefined, // Stateless
       enableJsonResponse: true,
@@ -315,7 +499,7 @@ export async function GET(request: Request) {
   }
 
   try {
-    const server = createMcpServer();
+    const server = await createMcpServer();
     const transport = new WebStandardStreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
       enableJsonResponse: true,
