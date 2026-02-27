@@ -353,7 +353,7 @@ services:
       - proxy
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.${name}.rule=Host(\`${name}.${DOMAIN_SUFFIX}\`)"
+      - "traefik.http.routers.${name}.rule=Host(\`${name}.${DOMAIN_SUFFIX}\`) && !PathPrefix(\`/nocodb\`) && !PathPrefix(\`/mathesar\`) && !PathPrefix(\`/directus\`)"
       - "traefik.http.routers.${name}.entrypoints=websecure"
       - "traefik.http.routers.${name}.tls.certresolver=letsencrypt"
       - "traefik.http.services.${name}.loadbalancer.server.port=3000"
@@ -377,8 +377,123 @@ services:
     networks:
       - internal
 
+  # ── Data Management Tools ──────────────────────────────────────────────────
+  # Three UI options for non-technical database management.
+  # Users choose their preferred view — all connect to the same Postgres.
+
+  nocodb:
+    image: nocodb/nocodb:latest
+    container_name: nocodb-${name}
+    restart: unless-stopped
+    environment:
+      NC_DB: "pg://db:5432?u=ship&p=\${POSTGRES_PASSWORD}&d=ship"
+      NC_AUTH_JWT_SECRET: \${NOCODB_JWT_SECRET}
+      NC_PUBLIC_URL: https://${name}.${DOMAIN_SUFFIX}/nocodb
+      NC_DISABLE_TELE: "true"
+    volumes:
+      - nocodb-data:/usr/app/data
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/api/v1/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    networks:
+      - internal
+      - proxy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.nocodb-${name}.rule=Host(\`${name}.${DOMAIN_SUFFIX}\`) && PathPrefix(\`/nocodb\`)"
+      - "traefik.http.routers.nocodb-${name}.entrypoints=websecure"
+      - "traefik.http.routers.nocodb-${name}.tls.certresolver=letsencrypt"
+      - "traefik.http.middlewares.nocodb-${name}-strip.stripprefix.prefixes=/nocodb"
+      - "traefik.http.routers.nocodb-${name}.middlewares=nocodb-${name}-strip"
+      - "traefik.http.services.nocodb-${name}.loadbalancer.server.port=8080"
+      - "traefik.docker.network=proxy"
+
+  mathesar:
+    image: mathesar/mathesar-prod:latest
+    container_name: mathesar-${name}
+    restart: unless-stopped
+    environment:
+      MATHESAR_DATABASES: "(ship|postgresql://ship:\${POSTGRES_PASSWORD}@db:5432/ship)"
+      SECRET_KEY: \${MATHESAR_SECRET_KEY}
+      ALLOWED_HOSTS: "*"
+      MATHESAR_DOMAIN: ${name}.${DOMAIN_SUFFIX}
+    volumes:
+      - mathesar-media:/code/media
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8000/ || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    networks:
+      - internal
+      - proxy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.mathesar-${name}.rule=Host(\`${name}.${DOMAIN_SUFFIX}\`) && PathPrefix(\`/mathesar\`)"
+      - "traefik.http.routers.mathesar-${name}.entrypoints=websecure"
+      - "traefik.http.routers.mathesar-${name}.tls.certresolver=letsencrypt"
+      - "traefik.http.middlewares.mathesar-${name}-strip.stripprefix.prefixes=/mathesar"
+      - "traefik.http.routers.mathesar-${name}.middlewares=mathesar-${name}-strip"
+      - "traefik.http.services.mathesar-${name}.loadbalancer.server.port=8000"
+      - "traefik.docker.network=proxy"
+
+  directus:
+    image: directus/directus:11
+    container_name: directus-${name}
+    restart: unless-stopped
+    environment:
+      SECRET: \${DIRECTUS_SECRET}
+      ADMIN_EMAIL: \${DIRECTUS_ADMIN_EMAIL:-admin@matrx.com}
+      ADMIN_PASSWORD: \${DIRECTUS_ADMIN_PASSWORD}
+      DB_CLIENT: pg
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_DATABASE: ship
+      DB_USER: ship
+      DB_PASSWORD: \${POSTGRES_PASSWORD}
+      PUBLIC_URL: https://${name}.${DOMAIN_SUFFIX}/directus
+      WEBSOCKETS_ENABLED: "true"
+    volumes:
+      - directus-uploads:/directus/uploads
+      - directus-extensions:/directus/extensions
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8055/server/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    networks:
+      - internal
+      - proxy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.directus-${name}.rule=Host(\`${name}.${DOMAIN_SUFFIX}\`) && PathPrefix(\`/directus\`)"
+      - "traefik.http.routers.directus-${name}.entrypoints=websecure"
+      - "traefik.http.routers.directus-${name}.tls.certresolver=letsencrypt"
+      - "traefik.http.middlewares.directus-${name}-strip.stripprefix.prefixes=/directus"
+      - "traefik.http.routers.directus-${name}.middlewares=directus-${name}-strip"
+      - "traefik.http.services.directus-${name}.loadbalancer.server.port=8055"
+      - "traefik.docker.network=proxy"
+
 volumes:
   pgdata:
+  nocodb-data:
+  mathesar-media:
+  directus-uploads:
+  directus-extensions:
 
 networks:
   internal:
@@ -389,6 +504,11 @@ networks:
 }
 
 function generateEnv(name, displayName, dbPassword, apiKey) {
+  const nocodbJwt = randomHex(32);
+  const mathesarKey = randomHex(32);
+  const directusSecret = randomHex(32);
+  const directusAdminPassword = randomHex(16);
+
   return `# Instance: ${name}
 # Generated: ${new Date().toISOString()}
 
@@ -405,6 +525,18 @@ VERCEL_WEBHOOK_SECRET=
 
 # GitHub integration (optional)
 GITHUB_WEBHOOK_SECRET=
+
+# ── Data Management Tools ──────────────────────────────────────────────────
+# NocoDB (spreadsheet-like Airtable alternative)
+NOCODB_JWT_SECRET=${nocodbJwt}
+
+# Mathesar (transparent Postgres overlay)
+MATHESAR_SECRET_KEY=${mathesarKey}
+
+# Directus (headless CMS)
+DIRECTUS_SECRET=${directusSecret}
+DIRECTUS_ADMIN_EMAIL=admin@matrx.com
+DIRECTUS_ADMIN_PASSWORD=${directusAdminPassword}
 `;
 }
 
@@ -1899,6 +2031,186 @@ app.post("/api/instances/:name/db/restore", authMiddleware, requireRole("admin")
   const result = exec(`cat ${backupPath} | docker exec -i ${dbContainer} psql -U ship -d ship`, { timeout: 120000 });
 
   auditLog(req.tokenEntry?.label || "api", "db_restore", name, { backup_file, success: result.success });
+
+  res.json({ success: result.success, output: result.output || result.error });
+});
+
+// ── Multi-Database Management ───────────────────────────────────────────────
+
+/**
+ * List all databases inside an instance's Postgres container.
+ * Excludes system databases (template0, template1, postgres).
+ */
+app.get("/api/instances/:name/databases", authMiddleware, async (req, res) => {
+  const name = req.params.name;
+  const config = loadDeployments();
+  if (!config.instances[name]) return res.status(404).json({ error: "Instance not found" });
+
+  const dbContainer = `db-${name}`;
+  const result = exec(`docker exec ${dbContainer} psql -U ship -d ship -tc "SELECT json_agg(row_to_json(t)) FROM (SELECT datname AS name, pg_database_size(datname) AS size_bytes, pg_size_pretty(pg_database_size(datname)) AS size, (SELECT count(*) FROM pg_stat_activity WHERE datname = d.datname) AS connections FROM pg_database d WHERE datistemplate = false AND datname NOT IN ('postgres') ORDER BY datname) t" 2>/dev/null`);
+
+  if (!result.success) return res.status(500).json({ error: "Failed to query databases" });
+
+  let databases = [];
+  try {
+    const parsed = JSON.parse(result.output.trim());
+    databases = parsed || [];
+  } catch {
+    databases = [];
+  }
+
+  res.json({ databases, count: databases.length });
+});
+
+/**
+ * Create a new database inside an instance's Postgres container.
+ * Optionally applies a template SQL file.
+ */
+app.post("/api/instances/:name/databases", authMiddleware, requireRole("admin", "deployer"), async (req, res) => {
+  const name = req.params.name;
+  const config = loadDeployments();
+  if (!config.instances[name]) return res.status(404).json({ error: "Instance not found" });
+
+  const { database_name, display_name, template } = req.body;
+  if (!database_name) return res.status(400).json({ error: "database_name is required" });
+
+  // Validate database name (lowercase, alphanumeric + underscores, starts with letter)
+  if (!/^[a-z][a-z0-9_]*$/.test(database_name)) {
+    return res.status(400).json({ error: "Invalid database name. Use lowercase letters, numbers, and underscores. Must start with a letter." });
+  }
+
+  // Prevent reserved names
+  const reserved = ["postgres", "template0", "template1", "ship"];
+  if (reserved.includes(database_name)) {
+    return res.status(400).json({ error: `Database name '${database_name}' is reserved` });
+  }
+
+  const dbContainer = `db-${name}`;
+
+  // Check if database already exists
+  const exists = exec(`docker exec ${dbContainer} psql -U ship -d ship -tc "SELECT 1 FROM pg_database WHERE datname = '${database_name}'" 2>/dev/null`);
+  if (exists.success && exists.output.trim() === "1") {
+    return res.status(409).json({ error: `Database '${database_name}' already exists` });
+  }
+
+  // Create the database
+  const createResult = exec(`docker exec ${dbContainer} psql -U ship -d ship -c "CREATE DATABASE ${database_name} OWNER ship" 2>/dev/null`);
+  if (!createResult.success) {
+    return res.status(500).json({ error: "Failed to create database", details: createResult.error });
+  }
+
+  // Apply template if specified
+  let templateApplied = false;
+  if (template) {
+    // Templates are stored as SQL files in the instance's app container
+    const templateResult = exec(`docker exec ${name} cat /app/drizzle/templates/${template}.sql 2>/dev/null`);
+    if (templateResult.success && templateResult.output.trim()) {
+      const applyResult = exec(`docker exec ${dbContainer} psql -U ship -d ${database_name} -c '${templateResult.output.replace(/'/g, "'\\''")}'`, { timeout: 30000 });
+      templateApplied = applyResult.success;
+    }
+  }
+
+  auditLog(req.tokenEntry?.label || "api", "database_create", name, {
+    database_name, display_name, template, templateApplied,
+  });
+
+  res.status(201).json({
+    success: true,
+    database: database_name,
+    display_name: display_name || database_name,
+    instance: name,
+    template: template || null,
+    template_applied: templateApplied,
+    data_tools: {
+      nocodb: `https://${name}.${DOMAIN_SUFFIX}/nocodb`,
+      mathesar: `https://${name}.${DOMAIN_SUFFIX}/mathesar`,
+      directus: `https://${name}.${DOMAIN_SUFFIX}/directus`,
+    },
+  });
+});
+
+/**
+ * Delete a database from an instance's Postgres container.
+ */
+app.delete("/api/instances/:name/databases/:db", authMiddleware, requireRole("admin"), async (req, res) => {
+  const name = req.params.name;
+  const dbName = req.params.db;
+  const config = loadDeployments();
+  if (!config.instances[name]) return res.status(404).json({ error: "Instance not found" });
+
+  // Prevent deleting the default ship database
+  const protected_dbs = ["ship", "postgres", "template0", "template1"];
+  if (protected_dbs.includes(dbName)) {
+    return res.status(400).json({ error: `Cannot delete protected database '${dbName}'` });
+  }
+
+  const dbContainer = `db-${name}`;
+
+  // Terminate active connections
+  exec(`docker exec ${dbContainer} psql -U ship -d ship -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '${dbName}' AND pid <> pg_backend_pid()" 2>/dev/null`);
+
+  // Drop the database
+  const result = exec(`docker exec ${dbContainer} psql -U ship -d ship -c "DROP DATABASE IF EXISTS ${dbName}" 2>/dev/null`);
+
+  auditLog(req.tokenEntry?.label || "api", "database_delete", name, { database_name: dbName, success: result.success });
+
+  if (!result.success) {
+    return res.status(500).json({ error: "Failed to delete database", details: result.error });
+  }
+
+  res.json({ success: true, deleted: dbName });
+});
+
+/**
+ * Get detailed info about a specific database inside an instance.
+ */
+app.get("/api/instances/:name/databases/:db/info", authMiddleware, async (req, res) => {
+  const name = req.params.name;
+  const dbName = req.params.db;
+  const config = loadDeployments();
+  if (!config.instances[name]) return res.status(404).json({ error: "Instance not found" });
+
+  const dbContainer = `db-${name}`;
+
+  // Get tables in the database
+  const tablesResult = exec(`docker exec ${dbContainer} psql -U ship -d ${dbName} -tc "SELECT json_agg(row_to_json(t)) FROM (SELECT tablename AS name, schemaname AS schema, pg_size_pretty(pg_total_relation_size(schemaname||'.'||tablename)) AS size, COALESCE(n_live_tup, 0) AS rows, (SELECT count(*) FROM information_schema.columns c WHERE c.table_schema = s.schemaname AND c.table_name = s.tablename) AS columns FROM pg_stat_user_tables s JOIN pg_tables USING (tablename, schemaname) WHERE schemaname = 'public' ORDER BY tablename) t" 2>/dev/null`);
+
+  let tables = [];
+  try {
+    const parsed = JSON.parse(tablesResult.output?.trim());
+    tables = parsed || [];
+  } catch { /* empty database */ }
+
+  // Get database size
+  const sizeResult = exec(`docker exec ${dbContainer} psql -U ship -d ${dbName} -tc "SELECT pg_size_pretty(pg_database_size('${dbName}'))" 2>/dev/null`);
+
+  res.json({
+    database: dbName,
+    instance: name,
+    size: sizeResult.output?.trim() || "unknown",
+    tables,
+    table_count: tables.length,
+  });
+});
+
+/**
+ * Execute SQL against a specific database inside an instance.
+ * Supports both read and write operations (admin only).
+ */
+app.post("/api/instances/:name/databases/:db/query", authMiddleware, requireRole("admin"), async (req, res) => {
+  const name = req.params.name;
+  const dbName = req.params.db;
+  const { query, readonly } = req.body;
+  const config = loadDeployments();
+  if (!config.instances[name]) return res.status(404).json({ error: "Instance not found" });
+
+  if (!query) return res.status(400).json({ error: "query is required" });
+
+  const dbContainer = `db-${name}`;
+  const safeQuery = query.replace(/'/g, "'\\''");
+  const result = exec(`docker exec ${dbContainer} psql -U ship -d ${dbName} -c '${safeQuery}'`, { timeout: 30000 });
+
+  auditLog(req.tokenEntry?.label || "api", "database_query", name, { database: dbName, query: query.substring(0, 200) });
 
   res.json({ success: result.success, output: result.output || result.error });
 });

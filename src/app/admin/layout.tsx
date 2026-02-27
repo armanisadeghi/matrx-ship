@@ -8,6 +8,7 @@ import {
   BarChart3,
   Rocket,
   Database,
+  HardDrive,
   TerminalSquare,
   ScrollText,
   HeartPulse,
@@ -52,6 +53,7 @@ const navGroups: NavGroup[] = [
   {
     label: "Data",
     items: [
+      { href: "/admin/databases", label: "Databases", icon: HardDrive },
       { href: "/admin/database", label: "Tables", icon: Database },
       { href: "/admin/database/schema", label: "Schema", icon: Columns3 },
       { href: "/admin/database/migrations", label: "Migrations", icon: History },

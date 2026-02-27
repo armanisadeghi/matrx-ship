@@ -506,3 +506,42 @@ export type InfraBackup = typeof infraBackups.$inferSelect;
 export type NewInfraBackup = typeof infraBackups.$inferInsert;
 export type InfraAuditLog = typeof infraAuditLog.$inferSelect;
 export type NewInfraAuditLog = typeof infraAuditLog.$inferInsert;
+
+// ─────────────────────────────────────────────────
+// Managed databases — tracks databases created by
+// clients within their Ship instance's Postgres
+// ─────────────────────────────────────────────────
+
+/**
+ * managed_databases — registry of user-created databases.
+ * Each row represents a database created inside the instance's
+ * Postgres container (same Postgres, separate database).
+ * The default "ship" database is NOT tracked here.
+ */
+export const managedDatabases = pgTable(
+  "managed_databases",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    databaseName: text("database_name").notNull(),
+    displayName: text("display_name").notNull(),
+    description: text("description"),
+    template: text("template"), // which template was used: blank, flashcards, crm, etc.
+    status: text("status").notNull().default("active"), // active, archived, error
+    sizeBytes: integer("size_bytes"),
+    tableCount: integer("table_count"),
+    createdBy: text("created_by"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("idx_managed_databases_name").on(table.databaseName),
+    index("idx_managed_databases_status").on(table.status),
+  ],
+);
+
+export type ManagedDatabase = typeof managedDatabases.$inferSelect;
+export type NewManagedDatabase = typeof managedDatabases.$inferInsert;
