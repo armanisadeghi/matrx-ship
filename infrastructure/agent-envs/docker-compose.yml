@@ -29,6 +29,7 @@ services:
       - "traefik.http.routers.agent-1.rule=Host(`agent-1.dev.codematrx.com`)"
       - "traefik.http.routers.agent-1.entrypoints=websecure"
       - "traefik.http.routers.agent-1.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.agent-1.middlewares=security-headers@file"
       - "traefik.http.services.agent-1.loadbalancer.server.port=7681"
 
   agent-2:
@@ -57,6 +58,7 @@ services:
       - "traefik.http.routers.agent-2.rule=Host(`agent-2.dev.codematrx.com`)"
       - "traefik.http.routers.agent-2.entrypoints=websecure"
       - "traefik.http.routers.agent-2.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.agent-2.middlewares=security-headers@file"
       - "traefik.http.services.agent-2.loadbalancer.server.port=7681"
 
 volumes:

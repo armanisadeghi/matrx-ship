@@ -1,0 +1,31 @@
+# Security Headers Middleware
+# Applied to all routers via labels: traefik.http.routers.<name>.middlewares=security-headers@file
+http:
+  middlewares:
+    security-headers:
+      headers:
+        # HSTS — tell browsers to always use HTTPS (1 year, include subdomains)
+        stsSeconds: 31536000
+        stsIncludeSubdomains: true
+        stsPreload: true
+        forceSTSHeader: true
+
+        # Prevent clickjacking
+        frameDeny: true
+
+        # Prevent MIME-type sniffing
+        contentTypeNosniff: true
+
+        # Prevent reflected XSS via browser heuristics
+        browserXssFilter: true
+
+        # Control referrer information leakage
+        referrerPolicy: strict-origin-when-cross-origin
+
+        # Only allow HTTPS content
+        contentSecurityPolicy: upgrade-insecure-requests
+
+        # Remove Traefik's server identification header
+        customResponseHeaders:
+          X-Powered-By: ""
+          Server: ""

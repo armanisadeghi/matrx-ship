@@ -299,6 +299,7 @@ services:
       - "traefik.http.routers.matrx-manager.rule=Host(`manager.DOMAIN_SUFFIX`)"
       - "traefik.http.routers.matrx-manager.entrypoints=websecure"
       - "traefik.http.routers.matrx-manager.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.matrx-manager.middlewares=security-headers@file"
       - "traefik.http.services.matrx-manager.loadbalancer.server.port=3000"
 
 networks:
@@ -357,6 +358,7 @@ services:
       - "traefik.http.routers.matrx-deploy.rule=Host(`deploy.DOMAIN_SUFFIX`)"
       - "traefik.http.routers.matrx-deploy.entrypoints=websecure"
       - "traefik.http.routers.matrx-deploy.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.matrx-deploy.middlewares=security-headers@file"
       - "traefik.http.services.matrx-deploy.loadbalancer.server.port=3000"
 
 networks:

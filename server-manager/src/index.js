@@ -356,6 +356,7 @@ services:
       - "traefik.http.routers.${name}.rule=Host(\`${name}.${DOMAIN_SUFFIX}\`)"
       - "traefik.http.routers.${name}.entrypoints=websecure"
       - "traefik.http.routers.${name}.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.${name}.middlewares=security-headers@file"
       - "traefik.http.services.${name}.loadbalancer.server.port=3000"
       - "traefik.docker.network=proxy"
 

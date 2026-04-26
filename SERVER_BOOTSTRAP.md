@@ -139,7 +139,7 @@ services:
       - "traefik.enable=true"
       - "traefik.http.routers.dashboard.rule=Host(`traefik.${DOMAIN}`)"
       - "traefik.http.routers.dashboard.service=api@internal"
-      - "traefik.http.routers.dashboard.middlewares=auth"
+      - "traefik.http.routers.dashboard.middlewares=auth,security-headers@file"
       - "traefik.http.middlewares.auth.basicauth.users=${TRAEFIK_DASHBOARD_AUTH}"
 
 volumes:
@@ -246,6 +246,7 @@ services:
       - "traefik.http.routers.matrx-deploy.rule=Host(`deploy.dev.codematrx.com`)"
       - "traefik.http.routers.matrx-deploy.entrypoints=websecure"
       - "traefik.http.routers.matrx-deploy.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.matrx-deploy.middlewares=security-headers@file"
       - "traefik.http.services.matrx-deploy.loadbalancer.server.port=3000"
 
 networks:
