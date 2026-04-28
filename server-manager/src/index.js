@@ -2264,6 +2264,47 @@ app.get("/api/orchestrator-sandboxes/:id/logs", authMiddleware, async (req, res)
   } catch (e) { res.status(502).json({ error: `Orchestrator unreachable: ${e.message}` }); }
 });
 
+// Reset (destroy + recreate) — proxies to POST /sandboxes/{id}/reset
+app.post("/api/orchestrator-sandboxes/:id/reset", authMiddleware, async (req, res) => {
+  if (!ORCH_KEY) return res.status(503).json({ error: "Orchestrator API key not configured" });
+  const wipe = req.query.wipe_volume === "true" ? "true" : "false";
+  try {
+    const r = await orchFetch(`/sandboxes/${encodeURIComponent(req.params.id)}/reset?wipe_volume=${wipe}`, { method: "POST" });
+    res.status(r.status).type(r.headers.get("content-type") || "application/json").send(await r.text());
+  } catch (e) { res.status(502).json({ error: `Orchestrator unreachable: ${e.message}` }); }
+});
+
+// Agent env — three views of the env vars actually visible inside the container
+app.get("/api/orchestrator-sandboxes/:id/agent-env", authMiddleware, async (req, res) => {
+  if (!ORCH_KEY) return res.status(503).json({ error: "Orchestrator API key not configured" });
+  try {
+    const r = await orchFetch(`/sandboxes/${encodeURIComponent(req.params.id)}/agent-env`);
+    res.status(r.status).type(r.headers.get("content-type") || "application/json").send(await r.text());
+  } catch (e) { res.status(502).json({ error: `Orchestrator unreachable: ${e.message}` }); }
+});
+
+// Agent filesystem — same /fs/list endpoint matrx-ai's fs_list tool calls
+app.get("/api/orchestrator-sandboxes/:id/fs/list", authMiddleware, async (req, res) => {
+  if (!ORCH_KEY) return res.status(503).json({ error: "Orchestrator API key not configured" });
+  const path = String(req.query.path || "/home/agent");
+  const depth = String(req.query.depth || "1");
+  try {
+    const r = await orchFetch(`/sandboxes/${encodeURIComponent(req.params.id)}/fs/list?path=${encodeURIComponent(path)}&depth=${encodeURIComponent(depth)}`);
+    res.status(r.status).type(r.headers.get("content-type") || "application/json").send(await r.text());
+  } catch (e) { res.status(502).json({ error: `Orchestrator unreachable: ${e.message}` }); }
+});
+
+app.get("/api/orchestrator-sandboxes/:id/fs/read", authMiddleware, async (req, res) => {
+  if (!ORCH_KEY) return res.status(503).json({ error: "Orchestrator API key not configured" });
+  const path = String(req.query.path || "");
+  if (!path) return res.status(400).json({ error: "path query param required" });
+  const encoding = req.query.encoding === "base64" ? "base64" : "utf8";
+  try {
+    const r = await orchFetch(`/sandboxes/${encodeURIComponent(req.params.id)}/fs/read?path=${encodeURIComponent(path)}&encoding=${encoding}`);
+    res.status(r.status).type(r.headers.get("content-type") || "text/plain").send(await r.text());
+  } catch (e) { res.status(502).json({ error: `Orchestrator unreachable: ${e.message}` }); }
+});
+
 app.get("/api/orchestrator-sandboxes-status", authMiddleware, async (_req, res) => {
   if (!ORCH_KEY) return res.status(503).json({ error: "Orchestrator API key not configured" });
   try {

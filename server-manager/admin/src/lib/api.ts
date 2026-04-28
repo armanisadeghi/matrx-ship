@@ -32,6 +32,14 @@ export const API = {
   ORCH_SANDBOX_DIAG: (id: string) => `/api/orchestrator-sandboxes/${id}/diagnostics`,
   ORCH_SANDBOX_LOGS: (id: string, source = "orchestrator", tail = 500) =>
     `/api/orchestrator-sandboxes/${id}/logs?source=${encodeURIComponent(source)}&tail=${tail}`,
+  ORCH_SANDBOX_RESET: (id: string, wipeVolume = false) =>
+    `/api/orchestrator-sandboxes/${id}/reset?wipe_volume=${wipeVolume ? "true" : "false"}`,
+  ORCH_SANDBOX_AGENT_ENV: (id: string) =>
+    `/api/orchestrator-sandboxes/${id}/agent-env`,
+  ORCH_SANDBOX_FS_LIST: (id: string, path: string, depth = 1) =>
+    `/api/orchestrator-sandboxes/${id}/fs/list?path=${encodeURIComponent(path)}&depth=${depth}`,
+  ORCH_SANDBOX_FS_READ: (id: string, path: string, encoding: "utf8" | "base64" = "utf8") =>
+    `/api/orchestrator-sandboxes/${id}/fs/read?path=${encodeURIComponent(path)}&encoding=${encoding}`,
 } as const;
 
 // ── Token Management ────────────────────────────────────────────────────────
