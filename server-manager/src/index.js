@@ -2206,6 +2206,72 @@ app.post("/api/sandboxes/:name/exec", authMiddleware, requireRole("admin", "depl
   } catch (e) { res.status(500).json({ output: e.stdout || "", error: e.stderr || e.message }); }
 });
 
+// ─── Orchestrator-spawned sandboxes (sbx-XXX) ──────────────────────────────
+// The static sandbox-N pool above pre-dates the orchestrator and is being
+// retired. The /api/orchestrator-sandboxes/* surface below talks to the
+// hosted matrx-orchestrator (`https://orchestrator.dev.codematrx.com` or
+// the URL in MATRX_HOSTED_ORCHESTRATOR_URL) so the Server Manager admin UI
+// can show every dynamically-spawned aidream sandbox + its diagnostics +
+// live logs without touching the host's docker daemon directly.
+//
+// The orchestrator's own auth (master X-API-Key) gates these — we read
+// the key from MATRX_HOSTED_ORCHESTRATOR_API_KEY here, which is set in
+// the manager's docker-compose env_file. NEVER expose this key to the
+// browser; the manager admin UI calls these endpoints as itself.
+
+const ORCH_URL = (process.env.MATRX_HOSTED_ORCHESTRATOR_URL || "https://orchestrator.dev.codematrx.com").replace(/\/$/, "");
+const ORCH_KEY = process.env.MATRX_HOSTED_ORCHESTRATOR_API_KEY || process.env.SANDBOX_ORCHESTRATOR_HOSTED_API_KEY || "";
+
+async function orchFetch(path, init = {}) {
+  const headers = { ...(init.headers || {}) };
+  if (ORCH_KEY) headers["X-API-Key"] = ORCH_KEY;
+  return fetch(`${ORCH_URL}${path}`, { ...init, headers });
+}
+
+app.get("/api/orchestrator-sandboxes", authMiddleware, async (_req, res) => {
+  if (!ORCH_KEY) return res.status(503).json({ error: "Orchestrator API key not configured (set MATRX_HOSTED_ORCHESTRATOR_API_KEY)" });
+  try {
+    const r = await orchFetch("/sandboxes");
+    if (!r.ok) return res.status(r.status).json({ error: `Orchestrator ${r.status}`, body: await r.text() });
+    const data = await r.json();
+    res.json(data);
+  } catch (e) { res.status(502).json({ error: `Orchestrator unreachable: ${e.message}` }); }
+});
+
+app.get("/api/orchestrator-sandboxes/:id", authMiddleware, async (req, res) => {
+  if (!ORCH_KEY) return res.status(503).json({ error: "Orchestrator API key not configured" });
+  try {
+    const r = await orchFetch(`/sandboxes/${encodeURIComponent(req.params.id)}`);
+    res.status(r.status).type(r.headers.get("content-type") || "application/json").send(await r.text());
+  } catch (e) { res.status(502).json({ error: `Orchestrator unreachable: ${e.message}` }); }
+});
+
+app.get("/api/orchestrator-sandboxes/:id/diagnostics", authMiddleware, async (req, res) => {
+  if (!ORCH_KEY) return res.status(503).json({ error: "Orchestrator API key not configured" });
+  try {
+    const r = await orchFetch(`/sandboxes/${encodeURIComponent(req.params.id)}/diagnostics`);
+    res.status(r.status).type(r.headers.get("content-type") || "application/json").send(await r.text());
+  } catch (e) { res.status(502).json({ error: `Orchestrator unreachable: ${e.message}` }); }
+});
+
+app.get("/api/orchestrator-sandboxes/:id/logs", authMiddleware, async (req, res) => {
+  if (!ORCH_KEY) return res.status(503).json({ error: "Orchestrator API key not configured" });
+  const source = req.query.source || "all";
+  const tail = req.query.tail || 200;
+  try {
+    const r = await orchFetch(`/sandboxes/${encodeURIComponent(req.params.id)}/logs?source=${encodeURIComponent(source)}&tail=${tail}`);
+    res.status(r.status).type(r.headers.get("content-type") || "text/plain").send(await r.text());
+  } catch (e) { res.status(502).json({ error: `Orchestrator unreachable: ${e.message}` }); }
+});
+
+app.get("/api/orchestrator-sandboxes-status", authMiddleware, async (_req, res) => {
+  if (!ORCH_KEY) return res.status(503).json({ error: "Orchestrator API key not configured" });
+  try {
+    const r = await orchFetch("/");
+    res.status(r.status).type(r.headers.get("content-type") || "application/json").send(await r.text());
+  } catch (e) { res.status(502).json({ error: `Orchestrator unreachable: ${e.message}` }); }
+});
+
 // System
 app.get("/api/system", authMiddleware, async (_req, res) => {
   res.json(getSystemInfo());

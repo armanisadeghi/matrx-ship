@@ -26,6 +26,12 @@ export const API = {
   SELF_REBUILD: "/api/self-rebuild",
   SELF_REBUILD_STREAM: "/api/self-rebuild/stream",
   BUILD_CLEANUP: "/api/build-cleanup",
+  ORCH_STATUS: "/api/orchestrator-sandboxes-status",
+  ORCH_SANDBOXES: "/api/orchestrator-sandboxes",
+  ORCH_SANDBOX: (id: string) => `/api/orchestrator-sandboxes/${id}`,
+  ORCH_SANDBOX_DIAG: (id: string) => `/api/orchestrator-sandboxes/${id}/diagnostics`,
+  ORCH_SANDBOX_LOGS: (id: string, source = "orchestrator", tail = 500) =>
+    `/api/orchestrator-sandboxes/${id}/logs?source=${encodeURIComponent(source)}&tail=${tail}`,
 } as const;
 
 // ── Token Management ────────────────────────────────────────────────────────
