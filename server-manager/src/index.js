@@ -2,7 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import express from "express";
 import { z } from "zod";
-import { execSync, spawn } from "node:child_process";
+import { execFileSync, execSync, spawn } from "node:child_process";
 import { readFileSync, writeFileSync, readdirSync, statSync, existsSync, mkdirSync, unlinkSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { cpus, totalmem, freemem, uptime as osUptime, hostname } from "node:os";
@@ -2198,10 +2198,18 @@ app.post("/api/sandboxes/:name/exec", authMiddleware, requireRole("admin", "depl
   const { command } = req.body;
   if (!/^sandbox-\d+$/.test(name)) return res.status(400).json({ error: "Invalid sandbox name" });
   if (!command) return res.status(400).json({ error: "command required" });
+  // argv-style spawn — no shell-string concatenation. The previous form
+  // built `bash -c "${command.replace(/"/g, '\\"')}"`, which only escaped
+  // double-quotes — backticks, $(...), backslashes still let an admin
+  // (or anything that gets the admin token) break out. With execFileSync
+  // every element of argv is passed as a separate process argument and
+  // the shell only interprets `command` itself, not the surrounding wrap.
   try {
-    const output = execSync(`docker exec -u agent ${name} bash -c "${command.replace(/"/g, '\\"')}"`, {
-      encoding: "utf-8", timeout: 30000
-    });
+    const output = execFileSync(
+      "docker",
+      ["exec", "-u", "agent", name, "bash", "-c", command],
+      { encoding: "utf-8", timeout: 30000 },
+    );
     res.json({ output });
   } catch (e) { res.status(500).json({ output: e.stdout || "", error: e.stderr || e.message }); }
 });

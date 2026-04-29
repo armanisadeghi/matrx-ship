@@ -244,10 +244,8 @@ The Server Manager runs in Docker but mounts host paths:
 
 | File | Purpose |
 |------|---------|
-| `server-manager/src/index.ts` | Express server entry point |
-| `server-manager/src/mcp/` | MCP protocol implementation |
-| `server-manager/src/routes/` | API route handlers |
-| `server-manager/src/services/` | Business logic (instances, builds, backups) |
+| `server-manager/src/index.js` | Single ~2,500-line file — Express server, all route handlers, MCP protocol implementation, business logic. Yes, it's monolithic by design (one place to grep). |
+| `server-manager/admin/` | Next.js 16 admin UI (separate from the Express server, runs on port 3001). |
 
 ---
 
@@ -591,11 +589,9 @@ matrx-ship/
 │           ├── mcp/               #   MCP protocol endpoint
 │           └── health/            #   Health check
 ├── server-manager/                # Server Manager (Express + MCP)
-│   └── src/
-│       ├── index.ts               #   Entry point
-│       ├── routes/                #   API routes
-│       ├── services/              #   Business logic
-│       └── mcp/                   #   MCP tools
+│   ├── src/
+│   │   └── index.js               #   Single-file: Express + routes + MCP + business logic
+│   └── admin/                     #   Next.js 16 admin UI (port 3001)
 ├── deploy/                        # Deploy Server (Next.js)
 │   └── src/app/
 │       ├── deploy/                #   Rebuild UI

@@ -63,7 +63,7 @@ Built-in **ticket system** has an AI-triage workflow (autonomy scores, MCP tools
 
 ## Server Manager ([server-manager/](server-manager/))
 
-Express server (~2,300 lines in [server-manager/src/index.js](server-manager/src/index.js)) + Next.js admin UI ([server-manager/admin/](server-manager/admin/)). Runs as `matrx-manager`. **The brain of the host** — owns `/srv/apps/deployments.json` and is the only thing that should be writing it.
+Express server (single ~2,500-line [server-manager/src/index.js](server-manager/src/index.js) — there is no separate `routes/`, `services/`, or `mcp/` directory; everything lives in this one file) + Next.js admin UI ([server-manager/admin/](server-manager/admin/)). Runs as `matrx-manager`. **The brain of the host** — owns `/srv/apps/deployments.json` and is the only thing that should be writing it.
 
 - Mounts host paths: `/srv` → `/host-srv`, `/data` → `/host-data`, plus the Docker socket. So it can read/write any file under `/srv` and manage any container on the host.
 - Auth: `MANAGER_TOKENS` (comma-separated) for env-defined tokens, plus a hashed-token store at `/srv/apps/tokens.json` for managed tokens with roles (`admin` / `deployer` / `viewer`). Legacy `MANAGER_BEARER_TOKEN` still supported.
