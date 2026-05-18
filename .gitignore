@@ -41,3 +41,7 @@ drizzle/meta/
 .matrx.json
 .matrx-tools.conf
 .env.local
+
+# macOS Finder metadata
+.DS_Store
+**/.DS_Store
