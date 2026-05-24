@@ -49,8 +49,8 @@ Each stage delivers standalone value and unlocks the next. Status tags: ✅ ship
 ### Stage 1 — Single-host UI parity (no SSH for one host) — 🟡
 **Goal:** every recurring operation on *this* host is a UI/MCP action. **Detail:** [UI_REFACTOR_PLAN.md](UI_REFACTOR_PLAN.md) (its Phases 1–6 map onto Stages 1–2 here).
 - ✅ Phase 1 cheap wins (partial) · ✅ Phase 2 sandbox image + orchestrator build/restart (the incident fix).
-- ⬜ **A2/A3** — create-sandbox from the UI; surface the **EC2 tier** (Manager is hosted-only today).
-- ⬜ **A4 guardrails** — Manager startup missing-tag banner; `docker rmi matrx-sandbox:*` reverse-tag protection.
+- ✅ **A2** — create-sandbox from the UI (hosted tier). · ✅ **A4 guardrails** — global missing-required-tag banner + reverse-tag protection (`docker rmi`/`prune -a` of protected images refused without `MATRX_DESTRUCTIVE_OPS=1`).
+- ⬜ **A3** — surface the **EC2 tier** in the Manager. *Blocked:* needs `MATRX_EC2_ORCHESTRATOR_URL` + `_API_KEY` (the hosted key is 403 on EC2); the dual-tier proxy is straightforward once those exist.
 - ⬜ Phase 3 — repo `git pull` (status/diff/pull as MCP tools + UI).
 - ⬜ Phase 4 — config-file catalog + editor; encrypted backup of `/srv/.credentials`.
 - ⬜ Phase 5 — backup scheduling, **certificate observability**, disk-pressure cleanup, cron/systemd inventory, aggregated log firehose.

@@ -181,6 +181,35 @@ function formatBytes(bytes) {
   return `${val.toFixed(1)} ${units[i]}`;
 }
 
+// ── Reverse-tag protection (2026-04-30 incident guardrail) ──────────────────
+// The sandbox-spawn outage was caused by the local matrx-sandbox:* image tags
+// being deleted (a stray `docker rmi` / `docker ... prune -a`). These tags are
+// expensive to rebuild (~2.9 GB) and the orchestrator 404s without them. Refuse
+// any command that would delete a protected image unless the operator opts in
+// with MATRX_DESTRUCTIVE_OPS=1. Returns an error-shaped result if blocked, else
+// null. Best-effort string analysis — it's a seatbelt, not a sandbox.
+const PROTECTED_IMAGE_RE = /matrx-sandbox|matrx-orchestrator/i;
+function guardDestructiveImageOp(command) {
+  if (process.env.MATRX_DESTRUCTIVE_OPS === "1") return null;
+  const cmd = String(command || "");
+  const removesByName = /\bdocker\b[^\n]*\b(rmi|image\s+rm|image\s+remove)\b/i.test(cmd) && PROTECTED_IMAGE_RE.test(cmd);
+  // `prune -a/--all` removes unused images wholesale — exactly how the tags got
+  // stripped — even though the protected name isn't on the command line.
+  const prunesAll = /\bdocker\b[^\n]*\b(system|image)\s+prune\b[^\n]*(-a|--all)\b/i.test(cmd);
+  if (removesByName || prunesAll) {
+    return {
+      success: false,
+      error:
+        "Blocked by reverse-tag protection: this command can delete the " +
+        "matrx-sandbox:* / matrx-orchestrator images that sandbox spawning " +
+        "depends on (the 2026-04-30 incident). Rebuild via the Manager UI " +
+        "instead, or set MATRX_DESTRUCTIVE_OPS=1 to override.",
+      blocked: true,
+    };
+  }
+  return null;
+}
+
 function textResult(data) {
   return {
     content: [{
@@ -969,6 +998,8 @@ function createServer() {
     "Execute a shell command on the server. Has access to Docker CLI, host /srv and /data directories.",
     { command: z.string(), working_directory: z.string().optional(), timeout_ms: z.number().optional() },
     async ({ command, working_directory, timeout_ms }) => {
+      const blocked = guardDestructiveImageOp(command);
+      if (blocked) return textResult(blocked);
       const timeout = Math.min(timeout_ms || 30000, 120000);
       const cwd = working_directory ? resolveHostPath(working_directory) : HOST_SRV;
       return textResult(exec(command, { timeout, cwd }));
@@ -2248,11 +2279,15 @@ const ORCH_COMPOSE_DIR = join(HOST_SRV, "apps", "sandbox-orchestrator");
 // Build recipes per variant. core/slim/local are plain `docker build`; aidream
 // runs the repo's build-aidream.sh (it stages an aidream checkout into context
 // and requires :core first).
+// `required: true` = the orchestrator actually spawns from this tag at runtime,
+// so its absence breaks spawning (incident condition → banner). core is only a
+// BUILD dependency of aidream; local is the deprecated static pool — both are
+// surfaced but their absence is not an alarm.
 const SANDBOX_IMAGE_VARIANTS = {
-  core: { tag: "matrx-sandbox:core", context: join(SANDBOX_PROJECT, "sandbox-image") },
-  slim: { tag: "matrx-sandbox:slim", context: join(SANDBOX_PROJECT, "sandbox-image"), dockerfile: "Dockerfile.slim" },
-  local: { tag: "matrx-sandbox:local", context: join(SANDBOX_PROJECT, "sandbox-local") },
-  aidream: { tag: "matrx-sandbox:aidream", script: join(SANDBOX_PROJECT, "sandbox-image", "build-aidream.sh") },
+  core: { tag: "matrx-sandbox:core", context: join(SANDBOX_PROJECT, "sandbox-image"), required: false },
+  slim: { tag: "matrx-sandbox:slim", context: join(SANDBOX_PROJECT, "sandbox-image"), dockerfile: "Dockerfile.slim", required: true },
+  local: { tag: "matrx-sandbox:local", context: join(SANDBOX_PROJECT, "sandbox-local"), required: false },
+  aidream: { tag: "matrx-sandbox:aidream", script: join(SANDBOX_PROJECT, "sandbox-image", "build-aidream.sh"), required: true },
 };
 const ORCH_IMAGE_TAG = "matrx-orchestrator:latest";
 
@@ -2312,6 +2347,25 @@ app.post("/api/orchestrator-sandboxes/:id/reset", authMiddleware, async (req, re
   const wipe = req.query.wipe_volume === "true" ? "true" : "false";
   try {
     const r = await orchFetch(`/sandboxes/${encodeURIComponent(req.params.id)}/reset?wipe_volume=${wipe}`, { method: "POST" });
+    res.status(r.status).type(r.headers.get("content-type") || "application/json").send(await r.text());
+  } catch (e) { res.status(502).json({ error: `Orchestrator unreachable: ${e.message}` }); }
+});
+
+// Create a sandbox — proxies to POST /sandboxes on the (hosted) orchestrator.
+// Body: { user_id (required UUID), template?, ttl_seconds?, tier?, config?,
+// resources?, labels? }. Returns the new SandboxResponse.
+app.post("/api/orchestrator-sandboxes", authMiddleware, requireRole("admin", "deployer"), async (req, res) => {
+  if (!ORCH_KEY) return res.status(503).json({ error: "Orchestrator API key not configured" });
+  const body = req.body || {};
+  if (!body.user_id || !/^[0-9a-f-]{36}$/i.test(String(body.user_id))) {
+    return res.status(400).json({ error: "user_id (a valid UUID) is required" });
+  }
+  try {
+    const r = await orchFetch("/sandboxes", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
     res.status(r.status).type(r.headers.get("content-type") || "application/json").send(await r.text());
   } catch (e) { res.status(502).json({ error: `Orchestrator unreachable: ${e.message}` }); }
 });
@@ -2399,14 +2453,17 @@ app.get("/api/orchestrator-sandboxes-status", authMiddleware, async (_req, res) 
 app.get("/api/sandbox-images/health", authMiddleware, async (_req, res) => {
   const images = Object.entries(SANDBOX_IMAGE_VARIANTS).map(([variant, spec]) => ({
     variant,
+    required: spec.required === true,
     ...inspectImage(spec.tag),
   }));
   const orchestrator = inspectImage(ORCH_IMAGE_TAG);
-  // A variant is "required" if the orchestrator/warm-pool actually reference it.
-  // We don't hard-fail on absence (core/local may be intermediate), but we flag
-  // the ones missing so the operator sees drift at a glance.
+  // `missing` = every absent variant (informational). `missing_required` =
+  // absent variants the orchestrator actually spawns from (+ the orchestrator
+  // image) — this is the real "spawning is/'ll-be broken" alarm the banner uses.
   const missing = images.filter((i) => !i.present).map((i) => i.variant);
-  res.json({ images, orchestrator, missing, checked_at: new Date().toISOString() });
+  const missing_required = images.filter((i) => i.required && !i.present).map((i) => i.variant);
+  if (!orchestrator.present) missing_required.push("orchestrator");
+  res.json({ images, orchestrator, missing, missing_required, checked_at: new Date().toISOString() });
 });
 
 // ── Restart the orchestrator (recreate container, no rebuild) ───────────────

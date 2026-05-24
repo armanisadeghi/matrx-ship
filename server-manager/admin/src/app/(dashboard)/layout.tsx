@@ -19,6 +19,7 @@ import {
 import { cn } from "@/lib/utils";
 import { AuthProvider, useAuth } from "@/lib/auth-context";
 import { LoginScreen } from "@/components/admin/login-screen";
+import { SandboxImageBanner } from "@/components/admin/sandbox-image-banner";
 import { AdminShell, type NavGroup, type NavItem } from "@matrx/admin-ui/components/admin-shell";
 import { Badge } from "@matrx/admin-ui/ui/badge";
 
@@ -138,6 +139,7 @@ function DashboardContent({ children }: { children: React.ReactNode }) {
         );
       }}
     >
+      <SandboxImageBanner />
       {children}
     </AdminShell>
   );

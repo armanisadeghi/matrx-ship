@@ -2,10 +2,11 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { RefreshCw, ExternalLink, Power, AlertTriangle, Hammer, Terminal, Loader2, CheckCircle2 } from "lucide-react";
+import { RefreshCw, ExternalLink, Power, AlertTriangle, Hammer, Terminal, Loader2, CheckCircle2, Plus } from "lucide-react";
 import { Button } from "@matrx/admin-ui/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@matrx/admin-ui/ui/card";
 import { Badge } from "@matrx/admin-ui/ui/badge";
+import { Input } from "@matrx/admin-ui/ui/input";
 import { Table, TableHeader, TableHead, TableBody, TableRow, TableCell } from "@matrx/admin-ui/ui/table";
 import { PageShell } from "@matrx/admin-ui/components/page-shell";
 import { useAuth } from "@/lib/auth-context";
@@ -71,6 +72,7 @@ interface ImageInfo {
   variant: string;
   tag: string;
   present: boolean;
+  required?: boolean;
   id?: string;
   size_bytes?: number | null;
   created?: string | null;
@@ -80,6 +82,7 @@ interface ImageHealth {
   images: ImageInfo[];
   orchestrator: ImageInfo;
   missing: string[];
+  missing_required: string[];
   checked_at: string;
 }
 
@@ -104,6 +107,12 @@ export default function OrchestratorSandboxesPage() {
   const [building, setBuilding] = useState<string | null>(null);
   const [buildLogs, setBuildLogs] = useState<string[]>([]);
   const [buildPhase, setBuildPhase] = useState<string | null>(null);
+  // Create-sandbox form state
+  const [showCreate, setShowCreate] = useState(false);
+  const [cUserId, setCUserId] = useState("");
+  const [cTemplate, setCTemplate] = useState("slim");
+  const [cTtlMin, setCTtlMin] = useState("120");
+  const [creating, setCreating] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -123,6 +132,27 @@ export default function OrchestratorSandboxesPage() {
       setLoading(false);
     }
   }, []);
+
+  const handleCreate = useCallback(async () => {
+    const ttl = Math.round(Number(cTtlMin) * 60);
+    if (!/^[0-9a-f-]{36}$/i.test(cUserId.trim())) { alert("Enter a valid user UUID."); return; }
+    if (!Number.isFinite(ttl) || ttl < 60 || ttl > 86400) { alert("TTL must be 1–1440 minutes."); return; }
+    setCreating(true);
+    try {
+      const sb = await api<{ sandbox_id?: string }>(API.ORCH_SANDBOXES, {
+        method: "POST",
+        body: JSON.stringify({ user_id: cUserId.trim(), template: cTemplate || undefined, ttl_seconds: ttl, tier: "hosted" }),
+      });
+      setShowCreate(false);
+      setCUserId("");
+      if (sb?.sandbox_id) router.push(`/orchestrator-sandboxes/${sb.sandbox_id}`);
+      else load();
+    } catch (e) {
+      alert(`Create failed: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setCreating(false);
+    }
+  }, [cUserId, cTemplate, cTtlMin, router, load]);
 
   const restartOrchestrator = useCallback(async () => {
     if (!confirm("Restart the orchestrator? It recreates the container (brief blip); running sandbox containers are untouched and reconciled on boot.")) {
@@ -199,9 +229,14 @@ export default function OrchestratorSandboxesPage() {
       title="Orchestrator Sandboxes"
       description="Live view of every sandbox spawned by the hosted orchestrator. Click a row for full diagnostics + live logs."
       actions={
-        <Button variant="outline" size="sm" onClick={load}>
-          <RefreshCw className="size-4" /> Refresh
-        </Button>
+        <div className="flex gap-2">
+          <Button variant="default" size="sm" onClick={() => setShowCreate((s) => !s)}>
+            <Plus className="size-4" /> New sandbox
+          </Button>
+          <Button variant="outline" size="sm" onClick={load}>
+            <RefreshCw className="size-4" /> Refresh
+          </Button>
+        </div>
       }
     >
       <Card>
@@ -226,11 +261,11 @@ export default function OrchestratorSandboxesPage() {
                   {images.images.map((img) => (
                     <Badge
                       key={img.variant}
-                      variant={img.present ? "secondary" : "destructive"}
-                      title={img.present ? `${img.tag} · ${fmtSize(img.size_bytes)} · ${img.created ? new Date(img.created).toLocaleString() : ""}` : `${img.tag} is MISSING — sandbox spawns using this image will fail until it is rebuilt.`}
+                      variant={img.present ? "secondary" : img.required ? "destructive" : "outline"}
+                      title={img.present ? `${img.tag} · ${fmtSize(img.size_bytes)} · ${img.created ? new Date(img.created).toLocaleString() : ""}` : img.required ? `${img.tag} is MISSING and REQUIRED — sandbox spawns using this image will fail until it is rebuilt.` : `${img.tag} is absent (not required for spawns — core is a build dep, local is the deprecated pool).`}
                     >
-                      {!img.present && <AlertTriangle className="size-3" />} {img.variant}
-                      {img.present ? "" : " · missing"}
+                      {!img.present && img.required && <AlertTriangle className="size-3" />} {img.variant}
+                      {img.present ? "" : img.required ? " · missing" : " · absent"}
                     </Badge>
                   ))}
                   <Badge
@@ -276,12 +311,12 @@ export default function OrchestratorSandboxesPage() {
             ))}
           </div>
 
-          {images && images.missing.length > 0 && (
+          {images && images.missing_required.length > 0 && (
             <div className="mt-3 flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/5 p-2 text-xs">
               <AlertTriangle className="size-4 text-destructive shrink-0 mt-0.5" />
               <span>
-                Missing image tag(s): <b>{images.missing.join(", ")}</b>. Sandboxes that spawn from these
-                will fail (the orchestrator falls through to a registry pull). Rebuild them before launching.
+                Missing <b>required</b> image(s): <b>{images.missing_required.join(", ")}</b>. Sandboxes that
+                spawn from these will fail (the orchestrator falls through to a registry pull). Rebuild before launching.
               </span>
             </div>
           )}
@@ -315,6 +350,48 @@ export default function OrchestratorSandboxesPage() {
           )}
         </CardContent>
       </Card>
+
+      {showCreate && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">New sandbox</CardTitle>
+            <CardDescription>
+              Spawns a hosted-tier sandbox via the orchestrator. (EC2-tier create arrives with multi-tier support.)
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="grid gap-3 sm:grid-cols-3">
+              <div className="sm:col-span-1">
+                <label className="text-xs text-muted-foreground">User ID (UUID)</label>
+                <Input value={cUserId} onChange={(e) => setCUserId(e.target.value)} placeholder="00000000-0000-0000-0000-000000000000" className="font-mono text-xs" />
+              </div>
+              <div>
+                <label className="text-xs text-muted-foreground">Template</label>
+                <select
+                  value={cTemplate}
+                  onChange={(e) => setCTemplate(e.target.value)}
+                  className="w-full h-9 rounded-md border border-input bg-background px-2 text-sm"
+                >
+                  <option value="slim">slim</option>
+                  <option value="aidream">aidream</option>
+                  <option value="">bare</option>
+                </select>
+              </div>
+              <div>
+                <label className="text-xs text-muted-foreground">TTL (minutes)</label>
+                <Input type="number" value={cTtlMin} onChange={(e) => setCTtlMin(e.target.value)} />
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <Button size="sm" onClick={handleCreate} disabled={creating}>
+                {creating ? <Loader2 className="size-4 animate-spin" /> : <Plus className="size-4" />}
+                {creating ? "Creating…" : "Create sandbox"}
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => setShowCreate(false)}>Cancel</Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {error && (
         <Card className="border-destructive/40">
