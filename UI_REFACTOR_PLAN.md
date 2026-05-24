@@ -10,7 +10,7 @@
 
 **2026-05-24 — sandbox/orchestrator control (partial Phase 1 + 2):** Shipped to the Server Manager + admin UI:
 - Orchestrator sandboxes now expose full lifecycle state (`updated_at`/`last_heartbeat_at`/`stopped_at`/`stop_reason`) with a **"Last updated" staleness badge**, and gained **destroy / extend / resume** controls (role-gated proxies).
-- **Phase 2 (image incident fix) partially landed:** `GET /api/sandbox-images/health` + a **missing-tag banner**, `POST /api/orchestrator/restart` (Restart button), and the build SSE endpoints `POST /api/sandbox-images/build/stream?variant={core,slim,local,aidream}` + `POST /api/orchestrator/build/stream`. **Remaining for Phase 2:** wire the streaming-log **build buttons** into the UI, the startup missing-tag banner on the Manager itself, and the `docker rmi` reverse-tag protection guardrail.
+- **Phase 2 (image incident fix) — UI now complete:** `GET /api/sandbox-images/health` + a **missing-tag banner**, `POST /api/orchestrator/restart` (Restart button), and **streaming rebuild buttons** wired into the orchestrator-sandboxes page for every variant + the orchestrator image (SSE `POST /api/sandbox-images/build/stream?variant={core,slim,local,aidream}` + `POST /api/orchestrator/build/stream`, logs streamed live). **Remaining for Phase 2 (guardrails only):** the startup missing-tag banner on the Manager itself, and the `docker rmi matrx-sandbox:*` reverse-tag protection.
 - Underlying orchestrator fix: tier-scoped liveness reconcile (boot + 60s) that marks vanished-container rows STOPPED and refreshes `updated_at` for live rows — eliminating the "stuck running" watchdog offenders.
 
 ---
