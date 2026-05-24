@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { RefreshCw, ExternalLink, Power, AlertTriangle } from "lucide-react";
+import { RefreshCw, ExternalLink, Power, AlertTriangle, Hammer, Terminal, Loader2, CheckCircle2 } from "lucide-react";
 import { Button } from "@matrx/admin-ui/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@matrx/admin-ui/ui/card";
 import { Badge } from "@matrx/admin-ui/ui/badge";
@@ -100,6 +100,10 @@ export default function OrchestratorSandboxesPage() {
   const [restartBusy, setRestartBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  // Streaming build state (shared across image-variant + orchestrator rebuilds)
+  const [building, setBuilding] = useState<string | null>(null);
+  const [buildLogs, setBuildLogs] = useState<string[]>([]);
+  const [buildPhase, setBuildPhase] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -134,6 +138,54 @@ export default function OrchestratorSandboxesPage() {
       setRestartBusy(false);
     }
   }, [load]);
+
+  // Stream an SSE build (sandbox image variant or orchestrator image) into the
+  // log viewer. Mirrors the Builds tab's fetch+getReader consumer.
+  const runBuild = useCallback(async (label: string, url: string, confirmMsg?: string) => {
+    if (building) return;
+    if (confirmMsg && !confirm(confirmMsg)) return;
+    setBuilding(label);
+    setBuildPhase("starting");
+    setBuildLogs([`── Starting ${label} ──`]);
+    const token = typeof window !== "undefined" ? localStorage.getItem("manager_token") || "" : "";
+    try {
+      const resp = await fetch(url, { method: "POST", headers: { Authorization: `Bearer ${token}` } });
+      if (!resp.ok && resp.headers.get("content-type")?.includes("application/json")) {
+        const j = await resp.json();
+        throw new Error(j.error || `HTTP ${resp.status}`);
+      }
+      const reader = resp.body?.getReader();
+      if (!reader) throw new Error("No response stream");
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let eventType = "";
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+        for (const line of lines) {
+          if (line.startsWith("event: ")) eventType = line.slice(7);
+          else if (line.startsWith("data: ")) {
+            try {
+              const data = JSON.parse(line.slice(6));
+              if (eventType === "log") setBuildLogs((p) => [...p, data.message]);
+              else if (eventType === "phase") { setBuildPhase(data.phase); setBuildLogs((p) => [...p, `── ${data.message} ──`]); }
+              else if (eventType === "done") { setBuildPhase("done"); setBuildLogs((p) => [...p, `✓ ${data.message || "done"}`]); }
+              else if (eventType === "error") { setBuildPhase("error"); setBuildLogs((p) => [...p, `✗ ${data.message || "failed"}`]); }
+            } catch { /* skip malformed */ }
+          }
+        }
+      }
+    } catch (e) {
+      setBuildPhase("error");
+      setBuildLogs((p) => [...p, `✗ ${e instanceof Error ? e.message : String(e)}`]);
+    } finally {
+      setBuilding(null);
+      setTimeout(load, 2000);
+    }
+  }, [building, load]);
 
   useEffect(() => {
     if (!authed) return;
@@ -192,10 +244,38 @@ export default function OrchestratorSandboxesPage() {
                 <span className="text-xs text-muted-foreground">checking…</span>
               )}
             </div>
-            <Button variant="outline" size="sm" onClick={restartOrchestrator} disabled={restartBusy}>
-              <Power className={`size-4 ${restartBusy ? "animate-pulse" : ""}`} /> Restart orchestrator
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button variant="outline" size="sm" onClick={restartOrchestrator} disabled={restartBusy || building !== null}>
+                <Power className={`size-4 ${restartBusy ? "animate-pulse" : ""}`} /> Restart orchestrator
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => runBuild("orchestrator image rebuild", API.ORCH_BUILD_STREAM, "Rebuild the orchestrator image and recreate the container? Brief blip; sandbox containers are untouched.")}
+                disabled={building !== null}
+              >
+                <Hammer className={`size-4 ${building === "orchestrator image rebuild" ? "animate-pulse" : ""}`} /> Rebuild orchestrator
+              </Button>
+            </div>
           </div>
+
+          {/* Per-variant image rebuilds (SSE streamed into the log viewer below) */}
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <span className="text-xs text-muted-foreground mr-1">Rebuild image:</span>
+            {(["core", "slim", "local", "aidream"] as const).map((v) => (
+              <Button
+                key={v}
+                variant="outline"
+                size="sm"
+                className="h-7 px-2 text-xs"
+                onClick={() => runBuild(`${v} image build`, API.SANDBOX_IMAGE_BUILD_STREAM(v), `Rebuild matrx-sandbox:${v}? This can take several minutes${v === "aidream" ? " (requires :core first)" : ""}.`)}
+                disabled={building !== null}
+              >
+                <Hammer className={`size-3 ${building === `${v} image build` ? "animate-pulse" : ""}`} /> {v}
+              </Button>
+            ))}
+          </div>
+
           {images && images.missing.length > 0 && (
             <div className="mt-3 flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/5 p-2 text-xs">
               <AlertTriangle className="size-4 text-destructive shrink-0 mt-0.5" />
@@ -203,6 +283,34 @@ export default function OrchestratorSandboxesPage() {
                 Missing image tag(s): <b>{images.missing.join(", ")}</b>. Sandboxes that spawn from these
                 will fail (the orchestrator falls through to a registry pull). Rebuild them before launching.
               </span>
+            </div>
+          )}
+
+          {buildLogs.length > 0 && (
+            <div className="mt-3">
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-xs flex items-center gap-1.5 text-muted-foreground">
+                  <Terminal className="size-3.5" /> Build output
+                  {building && <Loader2 className="size-3.5 animate-spin text-primary" />}
+                  {!building && buildPhase === "done" && <CheckCircle2 className="size-3.5 text-success" />}
+                  {!building && buildPhase === "error" && <AlertTriangle className="size-3.5 text-destructive" />}
+                </span>
+                {!building && (
+                  <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" onClick={() => { setBuildLogs([]); setBuildPhase(null); }}>
+                    Clear
+                  </Button>
+                )}
+              </div>
+              <div
+                ref={(el) => { if (el) el.scrollTop = el.scrollHeight; }}
+                className="bg-zinc-950 text-zinc-300 rounded-lg p-3 font-mono text-[11px] leading-relaxed max-h-80 overflow-y-auto whitespace-pre-wrap"
+              >
+                {buildLogs.map((line, i) => (
+                  <div key={i} className={line.startsWith("✗") ? "text-red-400" : line.startsWith("✓") ? "text-green-400" : line.startsWith("──") ? "text-zinc-500" : ""}>
+                    {line}
+                  </div>
+                ))}
+              </div>
             </div>
           )}
         </CardContent>
