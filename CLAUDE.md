@@ -6,7 +6,8 @@ Already deeply documented. Don't duplicate — read the right doc for the questi
 
 | Question | Read |
 |---|---|
-| **What's getting moved into the UI next** | **[UI_REFACTOR_PLAN.md](UI_REFACTOR_PLAN.md) — read before adding any new ops command** |
+| **The big picture — where the whole platform is going** | **[MASTER_PLAN.md](MASTER_PLAN.md) — the North Star + all stages; start here** |
+| **What's getting moved into the UI next** | **[UI_REFACTOR_PLAN.md](UI_REFACTOR_PLAN.md) — Stage 1 detail; read before adding any new ops command** |
 | Architecture, components, how pieces fit | [SYSTEM_OVERVIEW.md](SYSTEM_OVERVIEW.md) |
 | User-facing CLI reference | [README.md](README.md), [cli/README.md](cli/README.md) |
 | Deploy a Ship instance manually | [DEPLOY.md](DEPLOY.md) |
