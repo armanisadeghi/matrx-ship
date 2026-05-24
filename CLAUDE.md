@@ -6,6 +6,7 @@ Already deeply documented. Don't duplicate — read the right doc for the questi
 
 | Question | Read |
 |---|---|
+| **What's getting moved into the UI next** | **[UI_REFACTOR_PLAN.md](UI_REFACTOR_PLAN.md) — read before adding any new ops command** |
 | Architecture, components, how pieces fit | [SYSTEM_OVERVIEW.md](SYSTEM_OVERVIEW.md) |
 | User-facing CLI reference | [README.md](README.md), [cli/README.md](cli/README.md) |
 | Deploy a Ship instance manually | [DEPLOY.md](DEPLOY.md) |
@@ -108,8 +109,45 @@ If you change anything here, it does **not** affect the live host until someone 
 - Root [Dockerfile](Dockerfile) builds `matrx-ship:latest` (the Ship app image used by every instance).
 - [server-manager/Dockerfile](server-manager/Dockerfile) builds the Manager image (multi-stage: Express + Next.js admin UI).
 - [deploy/Dockerfile](deploy/Dockerfile) builds the Deploy image.
-- [drizzle/](drizzle/) holds Ship app schema + migrations. `pnpm db:push` for dev, migrations for prod.
+- [drizzle/](drizzle/) holds Ship app schema + migrations. `pnpm db:push` for dev, migrations for prod. Note: the schema includes `infra_servers` + `infra_instances` tables that aren't actively queried yet — they're reserved for the future multi-host work in [UI_REFACTOR_PLAN.md](UI_REFACTOR_PLAN.md) Phase 6.
 - This repo's own `.matrx.json` points at `https://matrx-ship.dev.codematrx.com` — **the platform ships itself** through its own pipeline.
+
+---
+
+## Capability matrix (current state, updated 2026-05-24)
+
+The numbers and gaps below are the working ground truth for [UI_REFACTOR_PLAN.md](UI_REFACTOR_PLAN.md). Update these alongside the plan when capabilities ship.
+
+### Server Manager
+
+- **70 HTTP routes + 35 MCP tools** in [server-manager/src/index.js](server-manager/src/index.js) (~2,600 lines).
+- **Full UI coverage today:** instance lifecycle (create/delete/start/stop/restart/backup/restore/env-edit/exec/db-query), build pipeline for `matrx-ship:latest` (rebuild + rollback + cleanup with SSE log streaming), token management, static sandbox lifecycle (sandbox-1..5 — restart/stop/start/exec), system info, db-health audit, docs browser. Self-rebuild via SSE.
+- **Orchestrator sandboxes (expanded 2026-05-24):** list + detail + diagnostics + logs + agent-env + fs-list + fs-read + **reset**, plus **lifecycle control — destroy / extend / resume** (proxied to the orchestrator, role-gated), a **"Last updated" staleness column** (red badge when a live row hasn't been refreshed in >5 min — surfaces the orchestrator losing track of a box), **image-health card + missing-tag banner** (`GET /api/sandbox-images/health`), and **Restart orchestrator** (`POST /api/orchestrator/restart`).
+- **Backend exists, UI button pending:** **sandbox image builds** + **orchestrator image rebuild** — SSE endpoints `POST /api/sandbox-images/build/stream?variant={core,slim,local,aidream}` and `POST /api/orchestrator/build/stream` exist and are verified; they still need a streaming-log UI button wired (the health banner already tells the operator *which* tags are missing).
+- **Backend exists, UI missing** (cheap wins, [Plan Phase 1](UI_REFACTOR_PLAN.md#phase-1--cheap-ui-wins-12-days)): Supabase sync/restore (`POST /api/supabase/{sync,restore}`), Deploy server self-rebuild proxy, Traefik reload (via `docker_compose` MCP tool), `docker system prune` (via `shell_exec`).
+- **Not implemented at all** ([Plan Phases 3-5](UI_REFACTOR_PLAN.md)): repo `git pull`, generic config-file editor, backup scheduling, cert observability, host job inventory.
+
+### Deploy Server
+
+- **22 endpoints, 8 pages.** Read-mostly emergency surface. Has `/api/self-rebuild/stream` for self-recovery. Cannot create instances or modify secrets — those require the Manager.
+
+### Ship App (per-project admin)
+
+- **14 admin routes + 30+ API routes.** Per-project versioning + ticketing + audit trail + database browser. Strictly per-project — no cross-instance ops. Schema: `app_version`, `api_keys`, `logs`, `tickets`, `ticket_activity`, `ticket_attachments`, plus the inactive `infra_servers` / `infra_instances` mentioned above.
+
+### CLI
+
+- **Versioning, env-sync, instance provisioning.** Auth: `sk_ship_*` API keys for the Ship app, `MATRX_SHIP_SERVER_TOKEN` for the Manager.
+- **No sandbox or orchestrator commands yet.** [Plan Phase 2 + 3](UI_REFACTOR_PLAN.md) extend the CLI to mirror the Manager UI's new image-build / repo-pull capabilities.
+
+### admin-ui package
+
+- **Top reusables:** `Button`, `Card`, `Table`, `Dialog`, `Sheet`, `Input`, `Select`, `Badge`, `Tabs`, `Collapsible`, `DropdownMenu`, `Tooltip`, `Label`, `BuildLogViewer` (terminal-styled SSE log display), `PageShell`, `AdminShell`, `ThemeProvider`, `CodeBlock`, `MarkdownRenderer`, `sonner` toast.
+- **No `ConfirmDialog` primitive yet** — destructive-action dialogs are ad-hoc Dialog+Button compositions per page. Worth consolidating once we add a third one.
+
+### ticket-widget package
+
+- **Published as `@matrx/ticket-widget`.** Stable public API: `TicketProvider`, `TicketButton`, `TicketForm`, `TicketTracker`, `useTicketConfig`. Embedded in external apps; treat the contract as stable.
 
 ---
 

@@ -27,6 +27,10 @@ export const API = {
   SELF_REBUILD_STREAM: "/api/self-rebuild/stream",
   BUILD_CLEANUP: "/api/build-cleanup",
   ORCH_STATUS: "/api/orchestrator-sandboxes-status",
+  SANDBOX_IMAGES_HEALTH: "/api/sandbox-images/health",
+  ORCH_RESTART: "/api/orchestrator/restart",
+  ORCH_BUILD_STREAM: "/api/orchestrator/build/stream",
+  SANDBOX_IMAGE_BUILD_STREAM: (variant: string) => `/api/sandbox-images/build/stream?variant=${encodeURIComponent(variant)}`,
   ORCH_SANDBOXES: "/api/orchestrator-sandboxes",
   ORCH_SANDBOX: (id: string) => `/api/orchestrator-sandboxes/${id}`,
   ORCH_SANDBOX_DIAG: (id: string) => `/api/orchestrator-sandboxes/${id}/diagnostics`,
@@ -34,6 +38,9 @@ export const API = {
     `/api/orchestrator-sandboxes/${id}/logs?source=${encodeURIComponent(source)}&tail=${tail}`,
   ORCH_SANDBOX_RESET: (id: string, wipeVolume = false) =>
     `/api/orchestrator-sandboxes/${id}/reset?wipe_volume=${wipeVolume ? "true" : "false"}`,
+  ORCH_SANDBOX_EXTEND: (id: string) => `/api/orchestrator-sandboxes/${id}/extend`,
+  ORCH_SANDBOX_RESUME: (id: string) => `/api/orchestrator-sandboxes/${id}/resume`,
+  // Destroy uses ORCH_SANDBOX(id) with the DELETE method.
   ORCH_SANDBOX_AGENT_ENV: (id: string) =>
     `/api/orchestrator-sandboxes/${id}/agent-env`,
   ORCH_SANDBOX_FS_LIST: (id: string, path: string, depth = 1) =>

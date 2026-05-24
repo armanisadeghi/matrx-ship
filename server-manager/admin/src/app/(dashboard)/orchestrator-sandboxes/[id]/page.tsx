@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { ChevronLeft, RefreshCw, CheckCircle2, XCircle, Clock, RotateCcw, ChevronRight, ChevronDown, File as FileIcon, Folder as FolderIcon, FolderOpen, Loader2 } from "lucide-react";
+import { ChevronLeft, RefreshCw, CheckCircle2, XCircle, Clock, RotateCcw, ChevronRight, ChevronDown, File as FileIcon, Folder as FolderIcon, FolderOpen, Loader2, Trash2, TimerReset, Play } from "lucide-react";
 import { Button } from "@matrx/admin-ui/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@matrx/admin-ui/ui/card";
 import { Badge } from "@matrx/admin-ui/ui/badge";
@@ -17,6 +17,10 @@ interface OrchSandbox {
   status: string;
   container_id?: string | null;
   created_at: string;
+  updated_at?: string | null;
+  last_heartbeat_at?: string | null;
+  stopped_at?: string | null;
+  stop_reason?: string | null;
   ssh_port?: number | null;
   tier?: string | null;
   template?: string | null;
@@ -140,6 +144,12 @@ export default function OrchestratorSandboxDetailPage() {
   // Reset state
   const [resetBusy, setResetBusy] = useState(false);
   const [resetWipe, setResetWipe] = useState(false);
+  // Lifecycle-action state (destroy / extend / resume share one busy flag)
+  const [actionBusy, setActionBusy] = useState<null | "destroy" | "extend" | "resume">(null);
+
+  const authHeader = () => ({
+    Authorization: `Bearer ${typeof window !== "undefined" ? localStorage.getItem("manager_token") : ""}`,
+  });
 
   // Filesystem tree state
   const [fsRootPath, setFsRootPath] = useState("/home/agent");
@@ -217,6 +227,81 @@ export default function OrchestratorSandboxDetailPage() {
       setResetBusy(false);
     }
   }, [id, resetWipe, router, loadSummary]);
+
+  // Destroy = graceful stop + remove container; per-user volume is preserved,
+  // so the sandbox is resumable. This is the "force stop a stuck/unwanted box".
+  const handleDestroy = useCallback(async () => {
+    if (!confirm(`Destroy sandbox ${id}? The container stops and is removed; the persistent volume is preserved (resumable). Active work in the container is lost.`)) {
+      return;
+    }
+    setActionBusy("destroy");
+    try {
+      const r = await fetch(API.ORCH_SANDBOX(id), { method: "DELETE", headers: authHeader() });
+      if (!r.ok && r.status !== 204) {
+        alert(`Destroy failed (HTTP ${r.status}): ${(await r.text()).slice(0, 300)}`);
+        return;
+      }
+      await loadSummary();
+    } catch (e) {
+      alert(`Destroy error: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setActionBusy(null);
+    }
+  }, [id, loadSummary]);
+
+  // Extend TTL — prompts for minutes, posts seconds to the orchestrator.
+  const handleExtend = useCallback(async () => {
+    const mins = prompt("Extend this sandbox's TTL by how many minutes?", "60");
+    if (mins === null) return;
+    const seconds = Math.round(Number(mins) * 60);
+    if (!Number.isFinite(seconds) || seconds < 60 || seconds > 86400) {
+      alert("Enter a number of minutes between 1 and 1440.");
+      return;
+    }
+    setActionBusy("extend");
+    try {
+      const r = await fetch(API.ORCH_SANDBOX_EXTEND(id), {
+        method: "POST",
+        headers: { ...authHeader(), "Content-Type": "application/json" },
+        body: JSON.stringify({ ttl_seconds: seconds }),
+      });
+      if (!r.ok) {
+        alert(`Extend failed (HTTP ${r.status}): ${(await r.text()).slice(0, 300)}`);
+        return;
+      }
+      await loadSummary();
+    } catch (e) {
+      alert(`Extend error: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setActionBusy(null);
+    }
+  }, [id, loadSummary]);
+
+  // Resume — spawn a fresh container on the preserved volume for a
+  // stopped/expired sandbox. Orchestrator returns a NEW sandbox_id.
+  const handleResume = useCallback(async () => {
+    if (!confirm(`Resume sandbox ${id}? A fresh container is spawned on its preserved volume.`)) {
+      return;
+    }
+    setActionBusy("resume");
+    try {
+      const r = await fetch(API.ORCH_SANDBOX_RESUME(id), { method: "POST", headers: authHeader() });
+      if (!r.ok) {
+        alert(`Resume failed (HTTP ${r.status}): ${(await r.text()).slice(0, 300)}`);
+        return;
+      }
+      const newSandbox = await r.json();
+      if (newSandbox?.sandbox_id && newSandbox.sandbox_id !== id) {
+        router.push(`/orchestrator-sandboxes/${newSandbox.sandbox_id}`);
+      } else {
+        await loadSummary();
+      }
+    } catch (e) {
+      alert(`Resume error: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setActionBusy(null);
+    }
+  }, [id, router, loadSummary]);
 
   // Filesystem tree
   const loadDir = useCallback(async (path: string): Promise<FsNode[]> => {
@@ -387,6 +472,18 @@ export default function OrchestratorSandboxDetailPage() {
             />
             wipe volume
           </label>
+          <Button variant="outline" size="sm" onClick={handleExtend} disabled={actionBusy !== null}>
+            <TimerReset className={`size-4 ${actionBusy === "extend" ? "animate-spin" : ""}`} /> Extend
+          </Button>
+          {sandbox && ["stopped", "expired", "failed"].includes(sandbox.status) ? (
+            <Button variant="outline" size="sm" onClick={handleResume} disabled={actionBusy !== null}>
+              <Play className={`size-4 ${actionBusy === "resume" ? "animate-spin" : ""}`} /> Resume
+            </Button>
+          ) : (
+            <Button variant="destructive" size="sm" onClick={handleDestroy} disabled={actionBusy !== null}>
+              <Trash2 className={`size-4 ${actionBusy === "destroy" ? "animate-spin" : ""}`} /> Destroy
+            </Button>
+          )}
           <Button variant="outline" size="sm" onClick={handleReset} disabled={resetBusy}>
             <RotateCcw className={`size-4 ${resetBusy ? "animate-spin" : ""}`} /> Reset
           </Button>
@@ -432,9 +529,21 @@ export default function OrchestratorSandboxDetailPage() {
                   <Field label="SSH port" value={sandbox.ssh_port?.toString() ?? "—"} mono />
                   <Field label="Created" value={new Date(sandbox.created_at).toLocaleString()} />
                   <Field
+                    label="Last updated"
+                    value={sandbox.updated_at ? new Date(sandbox.updated_at).toLocaleString() : "—"}
+                  />
+                  <Field
+                    label="Last heartbeat"
+                    value={sandbox.last_heartbeat_at ? new Date(sandbox.last_heartbeat_at).toLocaleString() : "never"}
+                  />
+                  <Field
                     label="Expires"
                     value={sandbox.expires_at ? new Date(sandbox.expires_at).toLocaleString() : "never"}
                   />
+                  {sandbox.stopped_at && (
+                    <Field label="Stopped at" value={new Date(sandbox.stopped_at).toLocaleString()} />
+                  )}
+                  {sandbox.stop_reason && <Field label="Stop reason" value={sandbox.stop_reason} />}
                 </>
               ) : (
                 <div className="text-muted-foreground col-span-2">Loading...</div>

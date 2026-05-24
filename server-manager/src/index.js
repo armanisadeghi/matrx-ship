@@ -2236,6 +2236,40 @@ async function orchFetch(path, init = {}) {
   return fetch(`${ORCH_URL}${path}`, { ...init, headers });
 }
 
+// ── Sandbox image + orchestrator build surface ──────────────────────────────
+// Closes the 2026-04-30 incident gap: there was NO UI to see whether the
+// matrx-sandbox:* image tags exist or to rebuild them / the orchestrator —
+// a pruned tag silently bricked sandbox spawning until someone SSH'd in.
+// Paths are the manager-container view of the host (/host-srv == host /srv);
+// `docker build` reads the context from inside this container and ships it to
+// the host daemon over the mounted socket, so these /host-srv paths are correct.
+const SANDBOX_PROJECT = join(HOST_SRV, "projects", "matrx-sandbox");
+const ORCH_COMPOSE_DIR = join(HOST_SRV, "apps", "sandbox-orchestrator");
+// Build recipes per variant. core/slim/local are plain `docker build`; aidream
+// runs the repo's build-aidream.sh (it stages an aidream checkout into context
+// and requires :core first).
+const SANDBOX_IMAGE_VARIANTS = {
+  core: { tag: "matrx-sandbox:core", context: join(SANDBOX_PROJECT, "sandbox-image") },
+  slim: { tag: "matrx-sandbox:slim", context: join(SANDBOX_PROJECT, "sandbox-image"), dockerfile: "Dockerfile.slim" },
+  local: { tag: "matrx-sandbox:local", context: join(SANDBOX_PROJECT, "sandbox-local") },
+  aidream: { tag: "matrx-sandbox:aidream", script: join(SANDBOX_PROJECT, "sandbox-image", "build-aidream.sh") },
+};
+const ORCH_IMAGE_TAG = "matrx-orchestrator:latest";
+
+// Inspect one image tag; returns presence + size + age (read-only).
+function inspectImage(tag) {
+  const r = exec(`docker image inspect ${tag} --format '{{.Id}}|{{.Size}}|{{.Created}}'`);
+  if (!r.success || !r.output) return { tag, present: false };
+  const [id, size, created] = r.output.split("|");
+  return {
+    tag,
+    present: true,
+    id: (id || "").replace("sha256:", "").slice(0, 12),
+    size_bytes: Number(size) || null,
+    created: created || null,
+  };
+}
+
 app.get("/api/orchestrator-sandboxes", authMiddleware, async (_req, res) => {
   if (!ORCH_KEY) return res.status(503).json({ error: "Orchestrator API key not configured (set MATRX_HOSTED_ORCHESTRATOR_API_KEY)" });
   try {
@@ -2282,6 +2316,46 @@ app.post("/api/orchestrator-sandboxes/:id/reset", authMiddleware, async (req, re
   } catch (e) { res.status(502).json({ error: `Orchestrator unreachable: ${e.message}` }); }
 });
 
+// Destroy (graceful stop + remove container, preserve per-user volume) —
+// proxies to DELETE /sandboxes/{id}. This is the "force stop a stuck/unwanted
+// sandbox" control: the volume survives, so a destroyed sandbox is resumable.
+app.delete("/api/orchestrator-sandboxes/:id", authMiddleware, requireRole("admin", "deployer"), async (req, res) => {
+  if (!ORCH_KEY) return res.status(503).json({ error: "Orchestrator API key not configured" });
+  const graceful = req.query.graceful === "false" ? "false" : "true";
+  try {
+    const r = await orchFetch(`/sandboxes/${encodeURIComponent(req.params.id)}?graceful=${graceful}`, { method: "DELETE" });
+    // 204 has no body; pass status through and surface any error text.
+    res.status(r.status).type(r.headers.get("content-type") || "application/json").send(await r.text());
+  } catch (e) { res.status(502).json({ error: `Orchestrator unreachable: ${e.message}` }); }
+});
+
+// Extend TTL — proxies to POST /sandboxes/{id}/extend with {ttl_seconds}.
+app.post("/api/orchestrator-sandboxes/:id/extend", authMiddleware, requireRole("admin", "deployer"), async (req, res) => {
+  if (!ORCH_KEY) return res.status(503).json({ error: "Orchestrator API key not configured" });
+  const ttl = Number(req.body?.ttl_seconds);
+  if (!Number.isFinite(ttl) || ttl < 60 || ttl > 86400) {
+    return res.status(400).json({ error: "ttl_seconds must be a number between 60 and 86400" });
+  }
+  try {
+    const r = await orchFetch(`/sandboxes/${encodeURIComponent(req.params.id)}/extend`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ttl_seconds: ttl }),
+    });
+    res.status(r.status).type(r.headers.get("content-type") || "application/json").send(await r.text());
+  } catch (e) { res.status(502).json({ error: `Orchestrator unreachable: ${e.message}` }); }
+});
+
+// Resume — proxies to POST /sandboxes/{id}/resume (spawn a fresh container on
+// the preserved volume for a stopped/expired sandbox). Returns the NEW row.
+app.post("/api/orchestrator-sandboxes/:id/resume", authMiddleware, requireRole("admin", "deployer"), async (req, res) => {
+  if (!ORCH_KEY) return res.status(503).json({ error: "Orchestrator API key not configured" });
+  try {
+    const r = await orchFetch(`/sandboxes/${encodeURIComponent(req.params.id)}/resume`, { method: "POST" });
+    res.status(r.status).type(r.headers.get("content-type") || "application/json").send(await r.text());
+  } catch (e) { res.status(502).json({ error: `Orchestrator unreachable: ${e.message}` }); }
+});
+
 // Agent env — three views of the env vars actually visible inside the container
 app.get("/api/orchestrator-sandboxes/:id/agent-env", authMiddleware, async (req, res) => {
   if (!ORCH_KEY) return res.status(503).json({ error: "Orchestrator API key not configured" });
@@ -2319,6 +2393,91 @@ app.get("/api/orchestrator-sandboxes-status", authMiddleware, async (_req, res) 
     const r = await orchFetch("/");
     res.status(r.status).type(r.headers.get("content-type") || "application/json").send(await r.text());
   } catch (e) { res.status(502).json({ error: `Orchestrator unreachable: ${e.message}` }); }
+});
+
+// ── Sandbox image health (read-only) — powers the "missing tag" banner ──────
+app.get("/api/sandbox-images/health", authMiddleware, async (_req, res) => {
+  const images = Object.entries(SANDBOX_IMAGE_VARIANTS).map(([variant, spec]) => ({
+    variant,
+    ...inspectImage(spec.tag),
+  }));
+  const orchestrator = inspectImage(ORCH_IMAGE_TAG);
+  // A variant is "required" if the orchestrator/warm-pool actually reference it.
+  // We don't hard-fail on absence (core/local may be intermediate), but we flag
+  // the ones missing so the operator sees drift at a glance.
+  const missing = images.filter((i) => !i.present).map((i) => i.variant);
+  res.json({ images, orchestrator, missing, checked_at: new Date().toISOString() });
+});
+
+// ── Restart the orchestrator (recreate container, no rebuild) ───────────────
+app.post("/api/orchestrator/restart", authMiddleware, requireRole("admin", "deployer"), async (_req, res) => {
+  const r = exec("docker compose up -d --force-recreate", { cwd: ORCH_COMPOSE_DIR, timeout: 120000 });
+  res.status(r.success ? 200 : 500).json(r);
+});
+
+// ── SSE helper for streamed builds (mirrors /api/rebuild/stream) ────────────
+function streamSpawn(res, { cmd, args, cwd, onDoneLog }) {
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache",
+    Connection: "keep-alive",
+    "X-Accel-Buffering": "no",
+  });
+  const send = (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  send("phase", { phase: "build", message: `Running: ${cmd} ${args.join(" ")}` });
+  const proc = spawn(cmd, args, { cwd, env: { ...process.env, DOCKER_BUILDKIT: "1" } });
+  const relay = (chunk) => {
+    for (const line of chunk.toString().split("\n").filter(Boolean)) send("log", { message: line });
+  };
+  proc.stdout.on("data", relay);
+  proc.stderr.on("data", relay);
+  proc.on("close", (code) => {
+    if (code === 0) {
+      if (onDoneLog) send("log", { message: onDoneLog });
+      send("done", { success: true });
+    } else {
+      send("error", { success: false, message: `Exited with code ${code}` });
+    }
+    res.end();
+  });
+  proc.on("error", (err) => { send("error", { success: false, message: err.message }); res.end(); });
+}
+
+// ── Rebuild the orchestrator image + recreate (SSE) ─────────────────────────
+app.post("/api/orchestrator/build/stream", authMiddleware, requireRole("admin"), async (_req, res) => {
+  const context = join(SANDBOX_PROJECT, "orchestrator");
+  res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive", "X-Accel-Buffering": "no" });
+  const send = (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  send("phase", { phase: "build", message: `Building ${ORCH_IMAGE_TAG} from ${context}` });
+  const proc = spawn("docker", ["build", "--progress=plain", "-t", ORCH_IMAGE_TAG, context], { env: { ...process.env, DOCKER_BUILDKIT: "1" } });
+  const relay = (c) => { for (const l of c.toString().split("\n").filter(Boolean)) send("log", { message: l }); };
+  proc.stdout.on("data", relay);
+  proc.stderr.on("data", relay);
+  proc.on("close", (code) => {
+    if (code !== 0) { send("error", { success: false, message: `Build exited with code ${code}` }); return res.end(); }
+    send("phase", { phase: "restart", message: "Recreating orchestrator container..." });
+    const r = exec("docker compose up -d --force-recreate", { cwd: ORCH_COMPOSE_DIR, timeout: 120000 });
+    send(r.success ? "done" : "error", { success: r.success, message: r.success ? "Orchestrator rebuilt + recreated" : (r.error || "recreate failed") });
+    res.end();
+  });
+  proc.on("error", (err) => { send("error", { success: false, message: err.message }); res.end(); });
+});
+
+// ── Rebuild a sandbox image variant (SSE) ───────────────────────────────────
+app.post("/api/sandbox-images/build/stream", authMiddleware, requireRole("admin", "deployer"), async (req, res) => {
+  const variant = String(req.query.variant || req.body?.variant || "");
+  const spec = SANDBOX_IMAGE_VARIANTS[variant];
+  if (!spec) {
+    return res.status(400).json({ error: `Unknown variant '${variant}'. Valid: ${Object.keys(SANDBOX_IMAGE_VARIANTS).join(", ")}` });
+  }
+  if (spec.script) {
+    // aidream: run the repo's build script (stages an aidream checkout, needs :core).
+    return streamSpawn(res, { cmd: "bash", args: [spec.script], cwd: dirname(spec.script), onDoneLog: `Built ${spec.tag}` });
+  }
+  const args = ["build", "--progress=plain", "-t", spec.tag];
+  if (spec.dockerfile) args.push("-f", join(spec.context, spec.dockerfile));
+  args.push(spec.context);
+  streamSpawn(res, { cmd: "docker", args, onDoneLog: `Built ${spec.tag}` });
 });
 
 // System
