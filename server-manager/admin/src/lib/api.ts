@@ -37,6 +37,7 @@ export const API = {
   AGENT_GW_STATUS: "/api/agent-gw/status",
   AGENT_GW_GRANT: "/api/agent-gw/grant",
   AGENT_GW_REVOKE: "/api/agent-gw/revoke",
+  AUDIT: (limit = 200) => `/api/audit?limit=${limit}`,
   SANDBOX_IMAGES_HEALTH: "/api/sandbox-images/health",
   ORCH_RESTART: "/api/orchestrator/restart",
   ORCH_BUILD_STREAM: "/api/orchestrator/build/stream",

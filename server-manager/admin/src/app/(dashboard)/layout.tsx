@@ -19,6 +19,7 @@ import {
   Cloud,
   SquareTerminal,
   KeyRound,
+  ScrollText,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { AuthProvider, useAuth } from "@/lib/auth-context";
@@ -50,6 +51,7 @@ const navGroups: NavGroup[] = [
   {
     label: "Monitoring",
     items: [
+      { id: "activity", href: "/activity", label: "Activity", icon: ScrollText },
       { id: "fleet-health", href: "/fleet-health", label: "Fleet Health", icon: Activity },
       { id: "system", href: "/system", label: "System", icon: Monitor },
       { id: "db-health", href: "/db-health", label: "DB Health", icon: Database },

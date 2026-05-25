@@ -11,10 +11,17 @@
  */
 
 import { hostname } from "node:os";
+import { appendFileSync, readFileSync, existsSync, mkdirSync } from "node:fs";
+import { dirname } from "node:path";
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY;
 const DOMAIN_SUFFIX = "dev.codematrx.com";
+
+// Local append-only audit trail. Always written (even when Supabase is off, the
+// common case on this host), so the activity log has a durable source. The
+// Manager sees the host /srv at /host-srv.
+const AUDIT_FILE = process.env.MANAGER_AUDIT_FILE || "/host-srv/apps/manager-audit.jsonl";
 
 let serverId = null;
 
@@ -332,19 +339,43 @@ export async function recordBackupInSupabase(backup) {
  * Log an action to the audit trail.
  */
 export async function auditLog(actor, action, target, details = null) {
-  if (!serverId) return;
+  // 1) Always append locally (durable even in local-only mode).
+  try {
+    const line = JSON.stringify({ ts: new Date().toISOString(), actor, action, target, details }) + "\n";
+    if (!existsSync(dirname(AUDIT_FILE))) mkdirSync(dirname(AUDIT_FILE), { recursive: true });
+    appendFileSync(AUDIT_FILE, line);
+  } catch (err) {
+    console.error("Local audit append failed:", err.message);
+  }
 
-  // Fire and forget — audit logging should never block the main operation
+  // 2) Mirror to Supabase when configured (backup store).
+  if (!serverId) return;
   supabaseRequest("infra_audit_log", {
     method: "POST",
-    body: JSON.stringify({
-      server_id: serverId,
-      actor,
-      action,
-      target,
-      details,
-    }),
+    body: JSON.stringify({ server_id: serverId, actor, action, target, details }),
   }).catch((err) => console.error("Audit log failed:", err.message));
+}
+
+/**
+ * Read the most recent audit entries from the local trail (newest first).
+ */
+export function readAuditLog({ limit = 200, actor, action } = {}) {
+  try {
+    if (!existsSync(AUDIT_FILE)) return [];
+    const lines = readFileSync(AUDIT_FILE, "utf-8").split("\n").filter(Boolean);
+    const out = [];
+    for (let i = lines.length - 1; i >= 0 && out.length < limit; i--) {
+      let row;
+      try { row = JSON.parse(lines[i]); } catch { continue; }
+      if (actor && row.actor !== actor) continue;
+      if (action && row.action !== action) continue;
+      out.push(row);
+    }
+    return out;
+  } catch (err) {
+    console.error("Read audit log failed:", err.message);
+    return [];
+  }
 }
 
 // ── Full Sync ───────────────────────────────────────────────────────────────

@@ -17,6 +17,7 @@ import {
   recordBuildInSupabase,
   recordBackupInSupabase,
   auditLog,
+  readAuditLog,
   fullSync,
   fullRestore,
 } from "./supabase.js";
@@ -2923,6 +2924,13 @@ app.post("/api/agent-gw/revoke", authMiddleware, requireRole("admin"), (req, res
 // GET /api/agent-gw/status — whether the gateway is enabled. admin only.
 app.get("/api/agent-gw/status", authMiddleware, requireRole("admin"), (_req, res) => {
   res.json({ enabled: gwEnabled() });
+});
+
+// GET /api/audit — the activity log (every audited operator/agent action),
+// newest first. admin only. ?limit= &actor= &action= filters.
+app.get("/api/audit", authMiddleware, requireRole("admin"), (req, res) => {
+  const limit = Math.min(Math.max(Number(req.query.limit) || 200, 1), 2000);
+  res.json({ entries: readAuditLog({ limit, actor: req.query.actor, action: req.query.action }) });
 });
 
 // System
