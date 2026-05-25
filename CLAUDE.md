@@ -8,6 +8,7 @@ Already deeply documented. Don't duplicate — read the right doc for the questi
 |---|---|
 | **The big picture — where the whole platform is going** | **[MASTER_PLAN.md](MASTER_PLAN.md) — the North Star + all stages; start here** |
 | **Total control plane + real-infra agent access (ACTIVE BUILD)** | **[CONTROL_PLANE_PLAN.md](CONTROL_PLANE_PLAN.md) — making the UI control everything (AWS/boxes/terminals) + agents getting real operator access via the sandbox mechanism** |
+| **Give a coding agent real shell/file access to the host or a container (HTTP API)** | **[AGENT_GATEWAY_API.md](AGENT_GATEWAY_API.md) — grant/exec/fs/search/revoke contract; LIVE on the Manager; the API behind the /admin/agent-access portal + remote triggers** |
 | **What does this term mean? (instance / sandbox / orchestrator / deployment)** | **[NAMING.md](NAMING.md) — canonical taxonomy; when a word is ambiguous, it wins** |
 | **What's getting moved into the UI next** | **[UI_REFACTOR_PLAN.md](UI_REFACTOR_PLAN.md) — read before adding any new ops command (Phase 2 done; see its 2026-05-25 status block)** |
 | Architecture, components, how pieces fit | [SYSTEM_OVERVIEW.md](SYSTEM_OVERVIEW.md) |
