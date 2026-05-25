@@ -77,8 +77,11 @@ export function mintAgentToken({ target, rootPath, scopes, ttlSeconds, label } =
     ? scopes.filter((s) => ALL_SCOPES.includes(s))
     : ["exec.run"];
   const payload = {
+    // host target: the Manager process sees the host's /srv mounted at
+    // /host-srv (and /data at /host-data), so that's the path that actually
+    // works inside commands — advertise it, don't lie with "/srv".
     t: String(target),
-    r: rootPath || (parseTarget(target).kind === "host" ? "/srv" : "/"),
+    r: rootPath || (parseTarget(target).kind === "host" ? "/host-srv" : "/"),
     s: useScopes,
     iat: now,
     exp: now + ttl,

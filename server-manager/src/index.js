@@ -2774,7 +2774,7 @@ app.post("/api/containers/:name/exec", authMiddleware, requireRole("admin", "dep
 // /host-srv in scope, same as shell_exec); container → docker exec.
 function gwExecOnTarget(payload, { command, cwd, user, env, stdin, timeout }) {
   const target = parseTarget(payload.t);
-  const rootPath = payload.r || (target.kind === "host" ? "/srv" : "/");
+  const rootPath = payload.r || (target.kind === "host" ? "/host-srv" : "/");
   const effCwd = cwd || rootPath;
   const tmo = Math.min(Math.max(Number(timeout) || 60, 1), 600) * 1000;
   const envExtra = env && typeof env === "object" ? env : {};
