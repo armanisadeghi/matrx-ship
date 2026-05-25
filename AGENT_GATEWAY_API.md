@@ -119,6 +119,29 @@ Optional body: `user`, `env` (object), `stdin`, `timeout` (s, ≤600).
 
 ---
 
+## Wiring an agent (matrx-ai)
+
+The `grant` response IS the `active_sandbox` binding shape matrx-ai already
+understands. To point an agent's fs/shell tools at a real target, put the binding
+on the request's `AppContext.metadata["active_sandbox"]`:
+
+```python
+binding = grant_response  # {sandbox_id, base_url, access_token, root_path, ...}
+ctx.metadata["active_sandbox"] = {
+    "sandbox_id":   binding["sandbox_id"],
+    "base_url":     binding["base_url"],
+    "access_token": binding["access_token"],
+    "root_path":    binding["root_path"],
+}
+```
+
+`matrx_ai.tools._sandbox_proxy.get_active_sandbox()` reads exactly those four
+fields and routes `exec_command` / `fs_*` to `{base_url}/exec`, `{base_url}/fs/*`
+with the `X-Sandbox-Access-Token` header — **no tool code changes**. When the key
+is absent the tools fall back to their local behavior, so non-targeted turns are
+unaffected. (AI Dream's production backend isn't hosted on this server; this is
+the integration contract for whichever deployment injects the binding.)
+
 ## Revoke + audit (admin)
 
 ```
