@@ -2510,6 +2510,38 @@ app.post("/api/orchestrator-sandboxes/:id/migrate", authMiddleware, requireRole(
   } catch (e) { res.status(502).json({ error: `Orchestrator unreachable: ${e.message}` }); }
 });
 
+// Live resource stats for a box — CPU / memory / disk + whether the in-box
+// agent daemon is alive. Hosted boxes are local containers, so we read this
+// straight off the local docker socket (no orchestrator round-trip). ec2-tier
+// boxes run on a remote host and report available:false.
+app.get("/api/orchestrator-sandboxes/:id/stats", authMiddleware, async (req, res) => {
+  const id = String(req.params.id);
+  if (!/^[A-Za-z0-9_.-]+$/.test(id)) return res.status(400).json({ error: "invalid sandbox id" });
+  const running = exec(`docker inspect ${id} --format '{{.State.Running}}' 2>/dev/null`);
+  if (!running.success || running.output.trim() !== "true") {
+    return res.json({ available: false, reason: "container is not running on this host (ec2-tier boxes run remotely)" });
+  }
+  const s = exec(`docker stats ${id} --no-stream --format '{"cpu":"{{.CPUPerc}}","mem":"{{.MemUsage}}","mem_pct":"{{.MemPerc}}","pids":"{{.PIDs}}"}' 2>/dev/null`);
+  let stats = null; try { stats = JSON.parse(s.output); } catch { /* */ }
+  let disk = null;
+  const df = exec(`docker exec ${id} sh -c "df -Ph /home/agent | tail -1" 2>/dev/null`);
+  if (df.success && df.output) {
+    const p = df.output.trim().split(/\s+/); // FS Size Used Avail Use% Mounted
+    if (p.length >= 5) disk = { size: p[1], used: p[2], avail: p[3], use_pct: p[4] };
+  }
+  // Is the in-box matrx_agent daemon (port 8000) actually answering?
+  const agent = exec(`docker exec ${id} sh -c "curl -sf -m 2 http://localhost:8000/health >/dev/null 2>&1 && echo up || (pgrep -f matrx_agent >/dev/null 2>&1 && echo proc || echo down)" 2>/dev/null`);
+  res.json({
+    available: true,
+    cpu: stats?.cpu ?? null,
+    mem: stats?.mem ?? null,
+    mem_pct: stats?.mem_pct ?? null,
+    pids: stats?.pids ?? null,
+    disk,
+    agent: agent.success && agent.output ? agent.output.trim() : "unknown",
+  });
+});
+
 // Agent env — three views of the env vars actually visible inside the container
 app.get("/api/orchestrator-sandboxes/:id/agent-env", authMiddleware, requireSuperadmin, async (req, res) => {
   if (!ORCH_KEY) return res.status(503).json({ error: "Orchestrator API key not configured" });
@@ -2587,12 +2619,30 @@ async function checkOrchestratorDrift() {
   try { ec2 = await fetchOrchestratorRoot(EC2_ORCH_URL); } catch (e) { eErr = e.message; }
   if (hErr) return { id: "orchestrator-drift", label: "Orchestrator code/config drift", status: "critical", detail: `Hosted orchestrator unreachable: ${hErr}`, hosted, ec2 };
   if (eErr) return { id: "orchestrator-drift", label: "Orchestrator code/config drift", status: "warning", detail: `EC2 orchestrator unreachable (${eErr}) — can't compare; it may be down or the IP moved.`, hosted, ec2 };
-  const issues = [];
-  if (hosted.version !== ec2.version) issues.push(`version mismatch (hosted ${hosted.version} vs ec2 ${ec2.version})`);
-  if (hosted.passthrough_total !== ec2.passthrough_total) issues.push(`aidream key-list size differs (hosted ${hosted.passthrough_total} vs ec2 ${ec2.passthrough_total}) — likely an older build on EC2`);
-  if (ec2.passthrough_configured === 0) issues.push(`EC2 has 0 aidream secrets loaded — aidream boxes on EC2 will fail`);
-  const status = issues.length ? "critical" : "ok";
-  return { id: "orchestrator-drift", label: "Orchestrator code/config drift", status, detail: issues.length ? issues.join("; ") : "Hosted and EC2 orchestrators match.", hosted, ec2 };
+  // Real code drift between the two orchestrators — the only CRITICAL here
+  // (it means one tier is running a different build). The banner shows criticals.
+  const critical = [];
+  if (hosted.version !== ec2.version) {
+    critical.push(`version mismatch (hosted ${hosted.version} vs ec2 ${ec2.version}) — redeploy the lagging tier`);
+  }
+
+  // AI Dream secret passthrough is a host-CONFIG difference, NOT a build
+  // difference (versions are compared above). It only affects the EC2
+  // "AI Dream baked-in" (aidream-template) sandboxes — slim sandboxes and the
+  // co-located AI Dream backend are unaffected. So it's a WARNING (visible on
+  // the Fleet Health page) and deliberately NOT critical, so it doesn't raise
+  // the global banner over a known, accepted gap. (To actually run aidream
+  // boxes on EC2, the host needs the populated aidream .env.)
+  const warnings = [];
+  if (ec2.passthrough_configured === 0) {
+    warnings.push(`EC2 has no AI Dream secrets loaded — the "AI Dream baked-in" (aidream-template) sandboxes on the EC2 tier can't run yet; slim sandboxes and the co-located AI Dream backend are unaffected`);
+  } else if (hosted.passthrough_total !== ec2.passthrough_total) {
+    warnings.push(`AI Dream secret list differs between hosts (hosted ${hosted.passthrough_total} vs ec2 ${ec2.passthrough_total}) — a host-config difference, not a build difference`);
+  }
+
+  const status = critical.length ? "critical" : warnings.length ? "warning" : "ok";
+  const detail = [...critical, ...warnings].join("; ") || "Hosted and EC2 orchestrators match.";
+  return { id: "orchestrator-drift", label: "Orchestrator code/config drift", status, detail, hosted, ec2 };
 }
 
 function checkSandboxImages() {

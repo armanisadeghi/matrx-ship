@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { ChevronLeft, RefreshCw, CheckCircle2, XCircle, Clock, RotateCcw, ChevronRight, ChevronDown, File as FileIcon, Folder as FolderIcon, FolderOpen, Loader2, Trash2, TimerReset, Play } from "lucide-react";
 import { Button } from "@matrx/admin-ui/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@matrx/admin-ui/ui/card";
@@ -10,6 +10,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@matrx/admin-ui/ui/tab
 import { Input } from "@matrx/admin-ui/ui/input";
 import { useAuth } from "@/lib/auth-context";
 import { api, apiText, API, ApiError } from "@/lib/api";
+import { WebTerminal } from "@/components/web-terminal";
 
 interface OrchSandbox {
   sandbox_id: string;
@@ -122,10 +123,58 @@ function CheckRow({ label, ok, detail }: { label: string; ok: boolean; detail?: 
   );
 }
 
+// Color a log line by severity so errors/warnings jump out instead of a wall
+// of green. Heuristic on common level keywords.
+function logLineClass(line: string): string {
+  const l = line.toLowerCase();
+  if (/\b(error|fatal|exception|traceback|critical|fail(ed|ure)?)\b/.test(l)) return "text-red-400";
+  if (/\b(warn|warning)\b/.test(l)) return "text-amber-400";
+  if (/\b(debug|trace)\b/.test(l)) return "text-zinc-500";
+  return "text-green-400";
+}
+
+interface BoxStats {
+  available: boolean;
+  reason?: string;
+  cpu?: string | null;
+  mem?: string | null;
+  mem_pct?: string | null;
+  pids?: string | null;
+  disk?: { size: string; used: string; avail: string; use_pct: string } | null;
+  agent?: string;
+}
+
+function parsePct(s?: string | null): number | null {
+  if (!s) return null;
+  const m = /([\d.]+)%/.exec(s);
+  return m ? Math.min(100, parseFloat(m[1])) : null;
+}
+
+function Stat({ label, value, sub, pct }: { label: string; value: string; sub?: string; pct?: number | null }) {
+  return (
+    <div>
+      <div className="text-muted-foreground text-xs">{label}</div>
+      <div className="font-mono text-sm">{value}</div>
+      {pct != null ? (
+        <div className="mt-1 h-1.5 w-full rounded bg-muted overflow-hidden">
+          <div
+            className={`h-full ${pct > 90 ? "bg-red-500" : pct > 70 ? "bg-amber-500" : "bg-green-500"}`}
+            style={{ width: `${pct}%` }}
+          />
+        </div>
+      ) : sub ? (
+        <div className="text-xs text-muted-foreground">{sub}</div>
+      ) : null}
+    </div>
+  );
+}
+
 export default function OrchestratorSandboxDetailPage() {
   const router = useRouter();
   const params = useParams();
   const id = params.id as string;
+  const searchParams = useSearchParams();
+  const initialTab = searchParams.get("tab") || "overview";
   const { authed } = useAuth();
 
   const [sandbox, setSandbox] = useState<OrchSandbox | null>(null);
@@ -136,6 +185,10 @@ export default function OrchestratorSandboxDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [logsLoading, setLogsLoading] = useState(false);
+  const [logFilter, setLogFilter] = useState("");
+  const [logFollow, setLogFollow] = useState(true);
+  const logEndRef = useRef<HTMLDivElement | null>(null);
+  const [stats, setStats] = useState<BoxStats | null>(null);
   const logSourceRef = useRef(logSource);
   logSourceRef.current = logSource;
   const tailRef = useRef(tail);
@@ -422,6 +475,23 @@ export default function OrchestratorSandboxDetailPage() {
     return () => clearInterval(t);
   }, [authed, loadLogs, logSource, tail]);
 
+  // Follow mode: stick to the newest line as logs stream in (like `tail -f`).
+  useEffect(() => {
+    if (logFollow) logEndRef.current?.scrollIntoView({ block: "end" });
+  }, [logs, logFollow]);
+
+  // Live resource stats (CPU/mem/disk + agent alive), refreshed every 4s.
+  useEffect(() => {
+    if (!authed) return;
+    let stop = false;
+    const tick = async () => {
+      try { const s = await api<BoxStats>(API.ORCH_SANDBOX_STATS(id)); if (!stop) setStats(s); } catch { /* */ }
+    };
+    tick();
+    const t = setInterval(tick, 4000);
+    return () => { stop = true; clearInterval(t); };
+  }, [authed, id]);
+
   const checks = diag?.checks ?? {};
 
   return (
@@ -494,7 +564,7 @@ export default function OrchestratorSandboxDetailPage() {
       </div>
 
       <Tabs
-        defaultValue="overview"
+        defaultValue={initialTab}
         onValueChange={(v) => {
           if (v === "filesystem" && !fsTree && !fsLoading) void loadFsRoot();
           if (v === "agent-env" && !agentEnv && !agentEnvLoading) void loadAgentEnv();
@@ -502,6 +572,7 @@ export default function OrchestratorSandboxDetailPage() {
       >
         <TabsList variant="line" className="w-full justify-start overflow-x-auto">
           <TabsTrigger value="overview">Overview</TabsTrigger>
+          <TabsTrigger value="terminal">Terminal</TabsTrigger>
           <TabsTrigger value="diagnostics">Diagnostics</TabsTrigger>
           <TabsTrigger value="filesystem">Agent Filesystem</TabsTrigger>
           <TabsTrigger value="agent-env">Agent Env</TabsTrigger>
@@ -511,6 +582,35 @@ export default function OrchestratorSandboxDetailPage() {
         </TabsList>
 
         <TabsContent value="overview" className="space-y-4">
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base">Live health</CardTitle>
+              <CardDescription>CPU, memory, and disk inside the box — refreshed every few seconds.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              {!stats ? (
+                <span className="text-sm text-muted-foreground">Loading…</span>
+              ) : !stats.available ? (
+                <span className="text-sm text-muted-foreground">{stats.reason || "Live stats aren't available for this box."}</span>
+              ) : (
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                  <Stat label="CPU" value={stats.cpu || "—"} pct={parsePct(stats.cpu)} />
+                  <Stat label="Memory" value={stats.mem || "—"} pct={parsePct(stats.mem_pct)} />
+                  <Stat
+                    label="Disk (/home/agent)"
+                    value={stats.disk ? `${stats.disk.used} / ${stats.disk.size}` : "—"}
+                    pct={parsePct(stats.disk?.use_pct)}
+                  />
+                  <div>
+                    <div className="text-muted-foreground text-xs">Agent</div>
+                    <Badge variant={stats.agent === "up" ? "success" : stats.agent === "proc" ? "secondary" : "outline"}>
+                      {stats.agent === "up" ? "responding" : stats.agent === "proc" ? "process up" : stats.agent === "down" ? "down" : (stats.agent || "unknown")}
+                    </Badge>
+                  </div>
+                </div>
+              )}
+            </CardContent>
+          </Card>
           <Card>
             <CardHeader>
               <CardTitle className="text-base">Sandbox identity</CardTitle>
@@ -548,6 +648,33 @@ export default function OrchestratorSandboxDetailPage() {
               ) : (
                 <div className="text-muted-foreground col-span-2">Loading...</div>
               )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="terminal" className="space-y-3">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Terminal</CardTitle>
+              <CardDescription>
+                A live, interactive shell <em>inside this box</em> — as the agent user, in <span className="font-mono">/home/agent</span>,
+                exactly what the agent sees. No SSH needed.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <WebTerminal
+                target={`sandbox:${id}`}
+                heightClass="h-[55vh]"
+                autoConnect
+                disabled={sandbox?.status !== "running" || (sandbox?.tier ?? "hosted") === "ec2"}
+                disabledReason={
+                  sandbox?.status !== "running"
+                    ? "The box must be running to open a shell (resume it from the header above)."
+                    : (sandbox?.tier === "ec2"
+                        ? "In-box terminal is available for hosted-tier boxes; ec2 boxes run on a remote host."
+                        : undefined)
+                }
+              />
             </CardContent>
           </Card>
         </TabsContent>
@@ -816,7 +943,7 @@ export default function OrchestratorSandboxDetailPage() {
             <CardHeader className="pb-3">
               <CardTitle className="text-base">Live logs</CardTitle>
               <CardDescription className="text-xs">
-                Auto-refresh every 4s. Tail: {tail}.
+                Auto-refresh every 4s · search to filter · errors/warnings are color-coded · Follow sticks to newest.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
@@ -848,9 +975,39 @@ export default function OrchestratorSandboxDetailPage() {
                   </Button>
                 </div>
               </div>
-              <pre className="bg-black text-green-400 text-[11px] font-mono p-3 rounded-lg overflow-auto max-h-[500px] whitespace-pre-wrap break-all">
-                {logs || "(no log lines yet)"}
-              </pre>
+              <div className="flex flex-wrap items-center gap-2">
+                <Input
+                  value={logFilter}
+                  onChange={(e) => setLogFilter(e.target.value)}
+                  placeholder="Search lines (e.g. error, a path, a request id)…"
+                  className="h-8 max-w-sm text-xs"
+                />
+                <Button
+                  variant={logFollow ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setLogFollow((f) => !f)}
+                  title="Stick to the newest line as logs stream in, like tail -f"
+                >
+                  {logFollow ? "Following ✓" : "Follow"}
+                </Button>
+              </div>
+              {(() => {
+                const lines = (logs || "").split("\n");
+                const q = logFilter.trim().toLowerCase();
+                const shown = q ? lines.filter((ln) => ln.toLowerCase().includes(q)) : lines;
+                return (
+                  <div className="bg-black rounded-lg p-3 overflow-auto max-h-[500px] text-[11px] font-mono leading-relaxed">
+                    {shown.length === 0 ? (
+                      <span className="text-muted-foreground">{q ? `(no lines match "${logFilter}")` : "(no log lines yet)"}</span>
+                    ) : (
+                      shown.map((ln, i) => (
+                        <div key={i} className={`whitespace-pre-wrap break-all ${logLineClass(ln)}`}>{ln || " "}</div>
+                      ))
+                    )}
+                    <div ref={logEndRef} />
+                  </div>
+                );
+              })()}
             </CardContent>
           </Card>
         </TabsContent>

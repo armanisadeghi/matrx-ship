@@ -496,7 +496,7 @@ export default function OrchestratorSandboxesPage() {
                   <TableHead>Last updated</TableHead>
                   <TableHead className="hidden lg:table-cell">Created</TableHead>
                   <TableHead className="hidden lg:table-cell">Expires</TableHead>
-                  <TableHead className="text-right">Open</TableHead>
+                  <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -537,13 +537,25 @@ export default function OrchestratorSandboxesPage() {
                       {sbx.expires_at ? new Date(sbx.expires_at).toLocaleString() : "—"}
                     </TableCell>
                     <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => router.push(`/orchestrator-sandboxes/${sbx.sandbox_id}`)}
-                      >
-                        <ExternalLink className="size-3.5" />
-                      </Button>
+                      <div className="flex items-center justify-end gap-1.5">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          title="Open a live shell inside this box"
+                          disabled={sbx.status !== "running" || (sbx.tier ?? "hosted") === "ec2"}
+                          onClick={() => router.push(`/orchestrator-sandboxes/${sbx.sandbox_id}?tab=terminal`)}
+                        >
+                          <Terminal className="size-3.5" /> Terminal
+                        </Button>
+                        <Button
+                          variant="default"
+                          size="sm"
+                          title="Open this box — health, files, logs, terminal"
+                          onClick={() => router.push(`/orchestrator-sandboxes/${sbx.sandbox_id}`)}
+                        >
+                          <ExternalLink className="size-3.5" /> Look inside
+                        </Button>
+                      </div>
                     </TableCell>
                   </TableRow>
                 ))}

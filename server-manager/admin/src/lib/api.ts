@@ -59,6 +59,7 @@ export const API = {
   ORCH_SANDBOXES_DRIFT: "/api/orchestrator-sandboxes-drift",
   ORCH_SANDBOXES_MIGRATE_ALL: "/api/orchestrator-sandboxes-migrate-all",
   ORCH_SANDBOX_MIGRATE: (id: string) => `/api/orchestrator-sandboxes/${id}/migrate`,
+  ORCH_SANDBOX_STATS: (id: string) => `/api/orchestrator-sandboxes/${id}/stats`,
   // Destroy uses ORCH_SANDBOX(id) with the DELETE method.
   ORCH_SANDBOX_AGENT_ENV: (id: string) =>
     `/api/orchestrator-sandboxes/${id}/agent-env`,

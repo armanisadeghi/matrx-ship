@@ -45,6 +45,18 @@ function spawnForTarget(target, { cols, rows }) {
       opts,
     );
   }
+  // A sandbox box IS a container (named by its sandbox_id). Shell in AS THE
+  // AGENT USER, in its home dir — i.e. exactly what the agent sees — so an
+  // operator can "look inside" the box the way the agent experiences it.
+  const s = /^sandbox:([A-Za-z0-9][A-Za-z0-9_.-]*)$/.exec(target || "");
+  if (s) {
+    return pty.spawn(
+      "docker",
+      ["exec", "-it", "-u", "agent", "-w", "/home/agent", s[1],
+       "sh", "-c", "command -v bash >/dev/null 2>&1 && exec bash || exec sh"],
+      opts,
+    );
+  }
   throw new Error(`invalid target '${target}'`);
 }
 
