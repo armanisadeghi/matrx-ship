@@ -14,6 +14,9 @@ const nextConfig: NextConfig = {
   async redirects() {
     return [
       { source: "/", destination: "/admin/instances", permanent: false, basePath: false },
+      // aidream's OAuth broker sends denied users to the bare-origin /access-denied
+      // (no /admin prefix). Map it under basePath where the page actually lives.
+      { source: "/access-denied", destination: "/admin/access-denied", permanent: false, basePath: false },
     ];
   },
 };

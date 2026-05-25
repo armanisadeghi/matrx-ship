@@ -4,6 +4,8 @@
 export const API = {
   HEALTH: "/health",
   SYSTEM: "/api/system",
+  ME: "/api/me",
+  AUTH_CONFIG: "/api/auth-config",
   INSTANCES: "/api/instances",
   INSTANCE: (name: string) => `/api/instances/${name}`,
   INSTANCE_ENV: (name: string) => `/api/instances/${name}/env`,

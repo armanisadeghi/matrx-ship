@@ -88,7 +88,14 @@ export async function resolveAdmin(userId) {
   }
   const url = `${supabaseUrl()}/rest/v1/admins?user_id=eq.${encodeURIComponent(userId)}&select=user_id,level`;
   const resp = await fetch(url, {
-    headers: { apikey: supabaseKey(), Authorization: `Bearer ${supabaseKey()}`, Accept: "application/json" },
+    headers: {
+      apikey: supabaseKey(),
+      Authorization: `Bearer ${supabaseKey()}`,
+      Accept: "application/json",
+      // This Supabase project's PostgREST defaults to the `api` schema; admins
+      // lives in `public`. Accept-Profile selects the schema for this read.
+      "Accept-Profile": "public",
+    },
   });
   if (!resp.ok) {
     const body = await resp.text().catch(() => "");
