@@ -16,6 +16,7 @@ import {
   ExternalLink,
   Boxes,
   Activity,
+  Package,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { AuthProvider, useAuth } from "@/lib/auth-context";
@@ -38,6 +39,7 @@ const navGroups: NavGroup[] = [
     label: "Operations",
     items: [
       { id: "builds", href: "/builds", label: "Builds", icon: History },
+      { id: "sandbox-images", href: "/sandbox-images", label: "Sandbox Images", icon: Package },
       { id: "tokens", href: "/tokens", label: "Tokens", icon: Key },
     ],
   },
