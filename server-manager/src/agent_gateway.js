@@ -75,7 +75,7 @@ export function mintAgentToken({ target, rootPath, scopes, ttlSeconds, label } =
   const ttl = Math.min(Math.max(Number(ttlSeconds) || DEFAULT_TTL_SECONDS, 60), MAX_TTL_SECONDS);
   const useScopes = Array.isArray(scopes) && scopes.length
     ? scopes.filter((s) => ALL_SCOPES.includes(s))
-    : ["exec.run"];
+    : ["exec.run", "fs.read", "fs.write", "search"];
   const payload = {
     // host target: the Manager process sees the host's /srv mounted at
     // /host-srv (and /data at /host-data), so that's the path that actually

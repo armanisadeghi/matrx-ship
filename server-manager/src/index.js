@@ -36,6 +36,16 @@ import {
   parseTarget,
   revokeJti,
 } from "./agent_gateway.js";
+import {
+  fsList,
+  fsStat,
+  fsRead,
+  fsWrite,
+  fsMkdir,
+  fsPatch,
+  searchContent,
+  searchPaths,
+} from "./agent_gateway_fs.js";
 
 const PORT = process.env.PORT || 3000;
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -2856,6 +2866,49 @@ app.post("/api/agent-gw/t/:target/exec", agentGwAuth, (req, res) => {
   });
   try { auditLog(payload.lbl || "agent", "agent_exec", payload.t, { jti: payload.jti, command: command.slice(0, 500), exit_code: result.exit_code }); } catch { /* */ }
   res.json(result);
+});
+
+// ── Gateway filesystem + search surface (matrx-ai consumer contract) ────────
+// Lets an agent's structured file tools (not just the shell) operate on the
+// target. Scope-gated: fs.read for read/list/stat/search, fs.write for write/
+// mkdir/patch. Backed by agent_gateway_fs.js (host -> Node fs at /host-srv;
+// container -> docker exec). All audited.
+function gwScope(req, res, scope) {
+  if (!req.gwPayload.s?.includes(scope)) { res.status(403).json({ error: `token lacks ${scope} scope` }); return false; }
+  return true;
+}
+function gwFs(fn, scope, action) {
+  return (req, res) => {
+    if (!gwScope(req, res, scope)) return;
+    try {
+      const out = fn(req.gwPayload, { ...req.query, ...req.body });
+      try { auditLog(req.gwPayload.lbl || "agent", action, req.gwPayload.t, { jti: req.gwPayload.jti, path: req.query?.path || req.body?.path || req.body?.cwd }); } catch { /* */ }
+      res.json(out);
+    } catch (e) {
+      res.status(e.status || 500).json({ error: e.message });
+    }
+  };
+}
+
+app.get("/api/agent-gw/t/:target/fs/list", agentGwAuth, gwFs(fsList, "fs.read", "agent_fs_list"));
+app.get("/api/agent-gw/t/:target/fs/stat", agentGwAuth, gwFs(fsStat, "fs.read", "agent_fs_stat"));
+app.put("/api/agent-gw/t/:target/fs/write", agentGwAuth, gwFs(fsWrite, "fs.write", "agent_fs_write"));
+app.post("/api/agent-gw/t/:target/fs/mkdir", agentGwAuth, gwFs(fsMkdir, "fs.write", "agent_fs_mkdir"));
+app.post("/api/agent-gw/t/:target/fs/patch", agentGwAuth, gwFs(fsPatch, "fs.write", "agent_fs_patch"));
+app.post("/api/agent-gw/t/:target/search/content", agentGwAuth, gwFs(searchContent, "search", "agent_search_content"));
+app.post("/api/agent-gw/t/:target/search/paths", agentGwAuth, gwFs(searchPaths, "search", "agent_search_paths"));
+
+// fs/read returns raw text/plain (utf8 or base64 string), not JSON — the
+// consumer reads response.text() and decodes client-side.
+app.get("/api/agent-gw/t/:target/fs/read", agentGwAuth, (req, res) => {
+  if (!gwScope(req, res, "fs.read")) return;
+  try {
+    const text = fsRead(req.gwPayload, { path: req.query.path, encoding: req.query.encoding === "base64" ? "base64" : "utf8" });
+    try { auditLog(req.gwPayload.lbl || "agent", "agent_fs_read", req.gwPayload.t, { jti: req.gwPayload.jti, path: req.query.path }); } catch { /* */ }
+    res.type("text/plain").send(text);
+  } catch (e) {
+    res.status(e.status || 500).json({ error: e.message });
+  }
 });
 
 // POST /api/agent-gw/revoke — revoke a minted token by jti. admin only.
