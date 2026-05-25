@@ -35,7 +35,7 @@ export function SandboxImageBanner() {
       <span>
         Missing required sandbox image(s): <b>{missing.join(", ")}</b> — sandbox spawning will fail until rebuilt.
       </span>
-      <Link href="/sandbox-images" className="ml-auto whitespace-nowrap font-medium text-destructive underline">
+      <Link href="/orchestrator-sandboxes" className="ml-auto whitespace-nowrap font-medium text-destructive underline">
         Rebuild now →
       </Link>
     </div>
