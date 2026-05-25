@@ -20,6 +20,15 @@ import {
   fullSync,
   fullRestore,
 } from "./supabase.js";
+import {
+  awsConfigured,
+  awsRegion,
+  ssmRun,
+  ssmInstances,
+  ec2Describe,
+  ec2Power,
+  FLEET_HOSTS,
+} from "./aws.js";
 
 const PORT = process.env.PORT || 3000;
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -2616,6 +2625,77 @@ app.post("/api/sandbox-images/build/stream", authMiddleware, requireRole("admin"
   if (spec.dockerfile) args.push("-f", join(spec.context, spec.dockerfile));
   args.push(spec.context);
   streamSpawn(res, { cmd: "docker", args, onDoneLog: `Built ${spec.tag}` });
+});
+
+// ── Fleet hosts (AWS/SSM control plane) ─────────────────────────────────────
+// The remote EC2 boxes the Manager can reach via SSM. "this" is the local /srv
+// host (managed directly via the docker socket + shell_exec, not SSM). A1 ships
+// remote command execution; A2 adds terminals; A5 formalizes the registry.
+
+// GET /api/hosts — list the fleet + live SSM/EC2 status.
+app.get("/api/hosts", authMiddleware, async (_req, res) => {
+  if (!awsConfigured()) {
+    return res.status(503).json({ error: "AWS not configured on the Manager (set MATRX_ADMIN_AWS_* in /srv/apps/server-manager/.env)", aws_configured: false });
+  }
+  try {
+    const [ssm, ec2] = await Promise.all([
+      ssmInstances().catch(() => []),
+      ec2Describe(Object.values(FLEET_HOSTS).map((h) => h.instanceId)).catch(() => []),
+    ]);
+    const ssmById = Object.fromEntries(ssm.map((i) => [i.instanceId, i]));
+    const ec2ById = Object.fromEntries(ec2.map((i) => [i.instanceId, i]));
+    const hosts = Object.entries(FLEET_HOSTS).map(([name, h]) => ({
+      id: name,
+      role: h.role,
+      instanceId: h.instanceId,
+      region: h.region,
+      ssm: ssmById[h.instanceId] || null,
+      ec2: ec2ById[h.instanceId] || null,
+      online: ssmById[h.instanceId]?.ping === "Online",
+    }));
+    res.json({ aws_configured: true, region: awsRegion(), hosts });
+  } catch (e) {
+    res.status(502).json({ error: `AWS error: ${e.message}` });
+  }
+});
+
+// POST /api/hosts/:id/exec — run a shell command on a fleet host via SSM.
+// Body: { command, timeout? }. Returns { status, stdout, stderr, exitCode }.
+// SSM returns output at completion (not incrementally), so this is request/
+// response — the UI shows a spinner, then the result. (Interactive shells come
+// in A2 via SSM StartSession.)
+app.post("/api/hosts/:id/exec", authMiddleware, requireRole("admin", "deployer"), async (req, res) => {
+  if (!awsConfigured()) return res.status(503).json({ error: "AWS not configured on the Manager" });
+  const host = FLEET_HOSTS[req.params.id];
+  if (!host) return res.status(404).json({ error: `Unknown host '${req.params.id}'. Known: ${Object.keys(FLEET_HOSTS).join(", ")}` });
+  const command = String(req.body?.command || "").trim();
+  if (!command) return res.status(400).json({ error: "command is required" });
+  const timeout = Number(req.body?.timeout) || 120;
+  try {
+    const result = await ssmRun(host.instanceId, command, { timeout, comment: `manager:${req.tokenEntry?.label || "admin"}` });
+    try {
+      auditLog(req.tokenEntry?.label || "manager", "host_exec", req.params.id, { command: command.slice(0, 500), status: result.status, exitCode: result.exitCode });
+    } catch { /* audit is best-effort */ }
+    res.json({ host: req.params.id, instanceId: host.instanceId, ...result });
+  } catch (e) {
+    res.status(502).json({ error: `SSM error: ${e.message}` });
+  }
+});
+
+// POST /api/hosts/:id/power — start/stop/reboot a fleet host (EC2). admin only.
+app.post("/api/hosts/:id/power", authMiddleware, requireRole("admin"), async (req, res) => {
+  if (!awsConfigured()) return res.status(503).json({ error: "AWS not configured on the Manager" });
+  const host = FLEET_HOSTS[req.params.id];
+  if (!host) return res.status(404).json({ error: `Unknown host '${req.params.id}'` });
+  const action = String(req.body?.action || "");
+  if (!["start", "stop", "reboot"].includes(action)) return res.status(400).json({ error: "action must be start, stop, or reboot" });
+  try {
+    await ec2Power(action, host.instanceId);
+    try { auditLog(req.tokenEntry?.label || "manager", `host_power_${action}`, req.params.id, {}); } catch { /* */ }
+    res.json({ host: req.params.id, action, ok: true });
+  } catch (e) {
+    res.status(502).json({ error: `EC2 error: ${e.message}` });
+  }
 });
 
 // System
