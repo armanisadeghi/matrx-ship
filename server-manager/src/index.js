@@ -49,6 +49,7 @@ import {
 } from "./agent_gateway_fs.js";
 import http from "node:http";
 import { attachTerminalWs } from "./terminal_ws.js";
+import { oauthEnabled, authenticateOAuthAdmin } from "./oauth_auth.js";
 
 const PORT = process.env.PORT || 3000;
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -149,25 +150,61 @@ function initTokenStore() {
 // ║  AUTH MIDDLEWARE                                                           ║
 // ╚════════════════════════════════════════════════════════════════════════════╝
 
-function authMiddleware(req, res, next) {
-  // Check if any auth is configured (MANAGER_TOKENS, MANAGER_BEARER_TOKEN, or legacy MCP_BEARER_TOKEN)
-  const hasAuth = !!(process.env.MANAGER_TOKENS || process.env.MANAGER_BEARER_TOKEN || process.env.MCP_BEARER_TOKEN);
-  if (!hasAuth) return next(); // No token configured = open
+async function authMiddleware(req, res, next) {
+  // Auth is "configured" if ANY scheme is set: operator tokens (env or store)
+  // or the AI Matrx OAuth admin path. Nothing configured = fully open (dev).
+  const hasAuth = !!(process.env.MANAGER_TOKENS || process.env.MANAGER_BEARER_TOKEN || process.env.MCP_BEARER_TOKEN || oauthEnabled());
+  if (!hasAuth) return next();
 
   const auth = req.headers.authorization;
   if (!auth || !auth.startsWith("Bearer ")) {
     return res.status(401).json({ error: "Unauthorized — Bearer token required" });
   }
-
   const token = auth.replace("Bearer ", "");
+
+  // 1) Operator token (env-defined or managed in tokens.json). The break-glass
+  //    root path — CLI, Deploy server, MCP agents, and the bootstrap admin.
+  //    An admin-role operator token counts as superadmin (highest privilege).
   const entry = verifyToken(token);
-  if (!entry) {
-    return res.status(401).json({ error: "Unauthorized — invalid token" });
+  if (entry) {
+    req.tokenEntry = entry;
+    req.tokenRole = entry.role;
+    req.isSuperadmin = entry.role === "admin";
+    req.authKind = "token";
+    return next();
   }
 
-  req.tokenEntry = entry;
-  req.tokenRole = entry.role;
-  next();
+  // 2) AI Matrx OAuth admin (Supabase JWT). Verified signature + present in
+  //    public.admins. Superadmin = admins.level == "super_admin".
+  if (oauthEnabled()) {
+    try {
+      const r = await authenticateOAuthAdmin(token);
+      if (r.ok) {
+        req.tokenEntry = { label: r.email || "oauth-admin", role: "admin" };
+        req.tokenRole = "admin";
+        req.isSuperadmin = r.isSuperadmin;
+        req.authKind = "oauth";
+        req.oauthUser = { email: r.email, userId: r.userId, level: r.level };
+        return next();
+      }
+      if (r.reason === "not_admin") {
+        return res.status(403).json({ error: "Not an authorized admin", email: r.email });
+      }
+    } catch {
+      // fall through to 401
+    }
+  }
+
+  return res.status(401).json({ error: "Unauthorized — invalid token" });
+}
+
+// Gate a route to superadmins only (operator admin tokens, or OAuth admins
+// whose admins.level == "super_admin"). Mirrors requireRole's open-when-unauthed
+// behavior so a fully-open dev deployment isn't broken.
+function requireSuperadmin(req, res, next) {
+  if (!req.tokenRole) return next(); // auth disabled
+  if (!req.isSuperadmin) return res.status(403).json({ error: "Forbidden — requires superadmin" });
+  return next();
 }
 
 function requireRole(...roles) {
@@ -2926,6 +2963,28 @@ app.post("/api/agent-gw/revoke", authMiddleware, requireRole("admin"), (req, res
 // GET /api/agent-gw/status — whether the gateway is enabled. admin only.
 app.get("/api/agent-gw/status", authMiddleware, requireRole("admin"), (_req, res) => {
   res.json({ enabled: gwEnabled() });
+});
+
+// GET /api/auth-config — unauthenticated: tells the login screen whether the
+// AI Matrx OAuth button should show and where to point it.
+app.get("/api/auth-config", (_req, res) => {
+  res.json({
+    oauth_enabled: oauthEnabled(),
+    aidream_url: (process.env.MATRX_AIDREAM_URL || "https://server.app.matrxserver.com").replace(/\/$/, ""),
+  });
+});
+
+// GET /api/me — who am I (after auth). Drives the UI's identity + superadmin
+// gating (display only; the backend enforces requireSuperadmin).
+app.get("/api/me", authMiddleware, (req, res) => {
+  res.json({
+    authenticated: !!req.tokenRole,
+    email: req.oauthUser?.email || req.tokenEntry?.label || null,
+    role: req.tokenRole || null,
+    is_superadmin: !!req.isSuperadmin,
+    auth_kind: req.authKind || null,
+    level: req.oauthUser?.level || null,
+  });
 });
 
 // GET /api/audit — the activity log (every audited operator/agent action),
