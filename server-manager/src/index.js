@@ -29,6 +29,13 @@ import {
   ec2Power,
   FLEET_HOSTS,
 } from "./aws.js";
+import {
+  gwEnabled,
+  mintAgentToken,
+  verifyAgentToken,
+  parseTarget,
+  revokeJti,
+} from "./agent_gateway.js";
 
 const PORT = process.env.PORT || 3000;
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -2751,6 +2758,118 @@ app.post("/api/containers/:name/exec", authMiddleware, requireRole("admin", "dep
     auditLog(req.tokenEntry?.label || "manager", "container_exec", `container:${name}`, { command: command.slice(0, 500), success: result.success, exitCode: result.exitCode });
   } catch { /* audit is best-effort */ }
   res.json({ container: name, ...result });
+});
+
+// ── Agent Gateway (real-infra agent access — "hijack the sandbox mechanism") ─
+// The Manager mints a scoped, expiring HMAC token bound to one target (the /srv
+// host or one container) and acts as the authenticated proxy for it. A matrx-ai
+// consumer handed { base_url, access_token, root_path } runs its shell tools on
+// real infra unchanged — the same binding shape sandboxes use, but pointed at
+// the host. No unauthenticated daemon: auth is enforced here, on every call.
+// Disabled unless AGENT_GW_SECRET (>=32 chars) is set. See agent_gateway.js +
+// CONTROL_PLANE_PLAN.md Workstream B. exec.run ships now; fs/search follow.
+
+// Run a command on a gateway target, returning matrx-ai's ExecResponse shape
+// ({exit_code, stdout, stderr, cwd}) 1:1. host → local shell (Docker CLI +
+// /host-srv in scope, same as shell_exec); container → docker exec.
+function gwExecOnTarget(payload, { command, cwd, user, env, stdin, timeout }) {
+  const target = parseTarget(payload.t);
+  const rootPath = payload.r || (target.kind === "host" ? "/srv" : "/");
+  const effCwd = cwd || rootPath;
+  const tmo = Math.min(Math.max(Number(timeout) || 60, 1), 600) * 1000;
+  const envExtra = env && typeof env === "object" ? env : {};
+  const common = { encoding: "utf-8", timeout: tmo, maxBuffer: 10 * 1024 * 1024, input: stdin || undefined };
+  try {
+    let stdout;
+    if (target.kind === "host") {
+      stdout = execSync(command, { ...common, cwd: resolveHostPath(effCwd), env: { ...process.env, ...envExtra } });
+    } else {
+      const args = ["exec", "-i"];
+      if (user) args.push("-u", String(user).replace(/[^A-Za-z0-9_.:-]/g, ""));
+      if (effCwd) args.push("-w", String(effCwd));
+      for (const [k, v] of Object.entries(envExtra)) args.push("-e", `${k}=${String(v)}`);
+      args.push(target.name, "sh", "-c", command);
+      stdout = execFileSync("docker", args, common);
+    }
+    return { exit_code: 0, stdout: stdout || "", stderr: "", cwd: effCwd };
+  } catch (e) {
+    return {
+      exit_code: typeof e.status === "number" ? e.status : (e.code === "ETIMEDOUT" ? 124 : 1),
+      stdout: e.stdout?.toString() || "",
+      stderr: e.stderr?.toString() || e.message || "",
+      cwd: effCwd,
+    };
+  }
+}
+
+// Scoped-token auth for the public gateway routes (NOT the operator bearer
+// token). Reads X-Sandbox-Access-Token and binds it to the URL's :target.
+function agentGwAuth(req, res, next) {
+  if (!gwEnabled()) return res.status(503).json({ error: "agent gateway disabled (AGENT_GW_SECRET unset)" });
+  const token = req.headers["x-sandbox-access-token"] || "";
+  try {
+    req.gwPayload = verifyAgentToken(token, { requiredTarget: req.params.target });
+    next();
+  } catch (e) {
+    res.status(e.code === "disabled" ? 503 : 401).json({ error: `gateway auth: ${e.message}`, code: e.code });
+  }
+}
+
+// POST /api/agent-gw/grant — mint a binding for a target. admin only.
+// Body: { target, root_path?, scopes?, ttl?, label? }. Returns the active_sandbox
+// binding shape so it drops straight into AppContext.metadata["active_sandbox"].
+app.post("/api/agent-gw/grant", authMiddleware, requireRole("admin"), (req, res) => {
+  if (!gwEnabled()) return res.status(503).json({ error: "agent gateway disabled — set AGENT_GW_SECRET (>=32 chars) in /srv/apps/server-manager/.env and redeploy" });
+  const { target, root_path, scopes, ttl, label } = req.body || {};
+  try { parseTarget(target); } catch (e) { return res.status(400).json({ error: e.message }); }
+  try {
+    const minted = mintAgentToken({ target, rootPath: root_path, scopes, ttlSeconds: ttl, label: label || req.tokenEntry?.label });
+    const proto = String(req.headers["x-forwarded-proto"] || req.protocol || "https").split(",")[0];
+    const host = req.headers["x-forwarded-host"] || req.headers.host;
+    const baseUrl = `${proto}://${host}/api/agent-gw/t/${encodeURIComponent(target)}`;
+    try { auditLog(req.tokenEntry?.label || "manager", "agent_grant", target, { jti: minted.jti, scopes: minted.payload.s, expires_at: minted.expires_at }); } catch { /* */ }
+    res.json({
+      sandbox_id: `infra:${target}`,
+      base_url: baseUrl,
+      access_token: minted.access_token,
+      root_path: minted.payload.r,
+      target,
+      scopes: minted.payload.s,
+      jti: minted.jti,
+      expires_at: minted.expires_at,
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /api/agent-gw/t/:target/exec — run a command on the target (scoped token).
+// Matches matrx-ai's exec_command contract: { command, timeout?, user?, cwd?,
+// env?, stdin? } → { exit_code, stdout, stderr, cwd }.
+app.post("/api/agent-gw/t/:target/exec", agentGwAuth, (req, res) => {
+  const payload = req.gwPayload;
+  if (!payload.s?.includes("exec.run")) return res.status(403).json({ error: "token lacks exec.run scope" });
+  const command = String(req.body?.command || "");
+  if (!command.trim()) return res.status(400).json({ error: "command is required" });
+  const blocked = guardDestructiveImageOp(command);
+  if (blocked) return res.status(403).json({ exit_code: 126, stdout: "", stderr: blocked.error, cwd: payload.r });
+  const result = gwExecOnTarget(payload, {
+    command, cwd: req.body?.cwd, user: req.body?.user, env: req.body?.env, stdin: req.body?.stdin, timeout: req.body?.timeout,
+  });
+  try { auditLog(payload.lbl || "agent", "agent_exec", payload.t, { jti: payload.jti, command: command.slice(0, 500), exit_code: result.exit_code }); } catch { /* */ }
+  res.json(result);
+});
+
+// POST /api/agent-gw/revoke — revoke a minted token by jti. admin only.
+app.post("/api/agent-gw/revoke", authMiddleware, requireRole("admin"), (req, res) => {
+  const jti = String(req.body?.jti || "");
+  if (!jti) return res.status(400).json({ error: "jti is required" });
+  revokeJti(jti);
+  try { auditLog(req.tokenEntry?.label || "manager", "agent_revoke", jti, {}); } catch { /* */ }
+  res.json({ ok: true, jti });
+});
+
+// GET /api/agent-gw/status — whether the gateway is enabled. admin only.
+app.get("/api/agent-gw/status", authMiddleware, requireRole("admin"), (_req, res) => {
+  res.json({ enabled: gwEnabled() });
 });
 
 // System
