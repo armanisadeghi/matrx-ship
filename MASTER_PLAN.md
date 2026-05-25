@@ -62,9 +62,11 @@ Each stage delivers standalone value and unlocks the next. Status tags: ✅ ship
 - **"Add host"** flow: register → SSH in once → run `bootstrap.sh` → host self-registers and is thereafter UI-managed.
 - Turn on `infra_audit_log` so every fleet action is recorded immutably.
 
-### Stage 3 — Observability, alerting & guardrails — ⬜
-**Goal:** the platform tells *you* when something's wrong before a human notices. Today there is essentially **no notification system**.
-- A real notification/alerting layer (Slack/email/webhook) with rules: instance down, cert expiring, disk pressure, build failed, deploy drift, sandbox stuck.
+### Stage 3 — Observability, alerting & guardrails — 🟡
+**Goal:** the platform tells *you* when something's wrong before a human notices.
+- ✅ **Fleet Health monitor v1 (2026-05-25):** read-only `/api/fleet-health` + a `/admin/fleet-health` page + a **global red banner** across the admin UI. Checks (worst rolls up to `overall`): **cross-host orchestrator drift** (hosted vs EC2 version + aidream-key-list size + secrets-loaded — this is what caught EC2 running an older build with 0 secrets), **sandbox image staleness/missing** (flags required images older than `MATRX_IMAGE_STALE_DAYS`=14, e.g. the 24-day-old aidream image), and **recent deploy-run status** (GitHub Actions via `GITHUB_PAT` — degrades to "disabled" until a token is in the Manager env). Auto-refreshes every 30s.
+- ⬜ **Active push** (email via Mailgun / SMS via Twilio — creds already on host) on `critical`, so it doesn't rely on someone looking at the dashboard.
+- ⬜ Schema-drift check; cert observability; disk-pressure; broader rules (instance down, sandbox stuck).
 - Health canaries (deep health beyond `/health`), cert-expiry surfacing (Phase 5.2), drift detection (running image vs `:latest`, host config vs repo).
 - **Cost/usage tracking** (greenfield): per-host/per-instance/per-sandbox resource + spend, agent token spend. Needed once the fleet and the autonomous loop both scale.
 - Audit-trail surfacing (read `infra_audit_log` + ticket activity into one timeline).

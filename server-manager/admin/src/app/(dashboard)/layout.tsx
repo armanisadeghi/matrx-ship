@@ -15,11 +15,13 @@ import {
   TableProperties,
   ExternalLink,
   Boxes,
+  Activity,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { AuthProvider, useAuth } from "@/lib/auth-context";
 import { LoginScreen } from "@/components/admin/login-screen";
 import { SandboxImageBanner } from "@/components/admin/sandbox-image-banner";
+import { FleetHealthBanner } from "@/components/admin/fleet-health-banner";
 import { AdminShell, type NavGroup, type NavItem } from "@matrx/admin-ui/components/admin-shell";
 import { Badge } from "@matrx/admin-ui/ui/badge";
 
@@ -42,6 +44,7 @@ const navGroups: NavGroup[] = [
   {
     label: "Monitoring",
     items: [
+      { id: "fleet-health", href: "/fleet-health", label: "Fleet Health", icon: Activity },
       { id: "system", href: "/system", label: "System", icon: Monitor },
       { id: "db-health", href: "/db-health", label: "DB Health", icon: Database },
       { id: "infrastructure", href: "/infrastructure", label: "Infrastructure", icon: Server },
@@ -139,6 +142,7 @@ function DashboardContent({ children }: { children: React.ReactNode }) {
         );
       }}
     >
+      <FleetHealthBanner />
       <SandboxImageBanner />
       {children}
     </AdminShell>

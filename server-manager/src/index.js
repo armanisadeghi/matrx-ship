@@ -2260,6 +2260,9 @@ app.post("/api/sandboxes/:name/exec", authMiddleware, requireRole("admin", "depl
 
 const ORCH_URL = (process.env.MATRX_HOSTED_ORCHESTRATOR_URL || "https://orchestrator.dev.codematrx.com").replace(/\/$/, "");
 const ORCH_KEY = process.env.MATRX_HOSTED_ORCHESTRATOR_API_KEY || process.env.SANDBOX_ORCHESTRATOR_HOSTED_API_KEY || "";
+// EC2-tier orchestrator (matrx-sandbox-host-dev). Only its public root (`/`) is
+// read for drift detection — no API key needed. Override via env if the IP moves.
+const EC2_ORCH_URL = (process.env.MATRX_EC2_ORCHESTRATOR_URL || "http://54.144.86.132:8000").replace(/\/$/, "");
 
 async function orchFetch(path, init = {}) {
   const headers = { ...(init.headers || {}) };
@@ -2464,6 +2467,84 @@ app.get("/api/sandbox-images/health", authMiddleware, async (_req, res) => {
   const missing_required = images.filter((i) => i.required && !i.present).map((i) => i.variant);
   if (!orchestrator.present) missing_required.push("orchestrator");
   res.json({ images, orchestrator, missing, missing_required, checked_at: new Date().toISOString() });
+});
+
+// ── Fleet Health (read-only monitor) ────────────────────────────────────────
+// The thing that should have caught stale code / failed deploys / stale images
+// weeks ago. Read-only: it changes nothing it watches. Three checks, each green
+// /warn/critical with specifics; the worst rolls up to `overall`.
+const IMAGE_STALE_DAYS = Number(process.env.MATRX_IMAGE_STALE_DAYS || 14);
+
+async function fetchOrchestratorRoot(url) {
+  // Public `/` — no auth. Returns the bits we diff for drift.
+  const r = await fetch(`${url}/`, { signal: AbortSignal.timeout(8000) });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  const d = await r.json();
+  const ap = (d.integrations && d.integrations.aidream_passthrough) || {};
+  return { version: d.version, tier: d.tier, passthrough_total: ap.total_keys, passthrough_configured: ap.configured_count };
+}
+
+async function checkOrchestratorDrift() {
+  let hosted, ec2, hErr, eErr;
+  try { hosted = await fetchOrchestratorRoot(ORCH_URL); } catch (e) { hErr = e.message; }
+  try { ec2 = await fetchOrchestratorRoot(EC2_ORCH_URL); } catch (e) { eErr = e.message; }
+  if (hErr) return { id: "orchestrator-drift", label: "Orchestrator code/config drift", status: "critical", detail: `Hosted orchestrator unreachable: ${hErr}`, hosted, ec2 };
+  if (eErr) return { id: "orchestrator-drift", label: "Orchestrator code/config drift", status: "warning", detail: `EC2 orchestrator unreachable (${eErr}) — can't compare; it may be down or the IP moved.`, hosted, ec2 };
+  const issues = [];
+  if (hosted.version !== ec2.version) issues.push(`version mismatch (hosted ${hosted.version} vs ec2 ${ec2.version})`);
+  if (hosted.passthrough_total !== ec2.passthrough_total) issues.push(`aidream key-list size differs (hosted ${hosted.passthrough_total} vs ec2 ${ec2.passthrough_total}) — likely an older build on EC2`);
+  if (ec2.passthrough_configured === 0) issues.push(`EC2 has 0 aidream secrets loaded — aidream boxes on EC2 will fail`);
+  const status = issues.length ? "critical" : "ok";
+  return { id: "orchestrator-drift", label: "Orchestrator code/config drift", status, detail: issues.length ? issues.join("; ") : "Hosted and EC2 orchestrators match.", hosted, ec2 };
+}
+
+function checkSandboxImages() {
+  const now = Date.now();
+  const imgs = Object.entries(SANDBOX_IMAGE_VARIANTS).map(([variant, spec]) => {
+    const info = inspectImage(spec.tag);
+    const ageDays = info.present && info.created ? Math.floor((now - Date.parse(info.created)) / 86400000) : null;
+    return { variant, required: spec.required === true, present: info.present, age_days: ageDays };
+  });
+  const orch = inspectImage(ORCH_IMAGE_TAG);
+  const missingRequired = imgs.filter((i) => i.required && !i.present).map((i) => i.variant);
+  if (!orch.present) missingRequired.push("orchestrator");
+  const staleRequired = imgs.filter((i) => i.required && i.present && i.age_days != null && i.age_days > IMAGE_STALE_DAYS).map((i) => `${i.variant} (${i.age_days}d)`);
+  let status = "ok", detail = "All required images present and fresh.";
+  if (missingRequired.length) { status = "critical"; detail = `Missing required image(s): ${missingRequired.join(", ")}.`; }
+  else if (staleRequired.length) { status = "warning"; detail = `Stale required image(s) older than ${IMAGE_STALE_DAYS}d: ${staleRequired.join(", ")} — consider rebuilding.`; }
+  return { id: "sandbox-images", label: "Sandbox image freshness", status, detail, images: imgs };
+}
+
+async function checkRecentDeploys() {
+  const token = process.env.GITHUB_PAT || process.env.GH_TOKEN || "";
+  if (!token) return { id: "deploys", label: "Recent deploys (matrx-sandbox)", status: "unknown", detail: "GITHUB_PAT not set in the Manager env — deploy-status check disabled." };
+  try {
+    const r = await fetch("https://api.github.com/repos/armanisadeghi/matrx-sandbox/actions/workflows/deploy.yml/runs?per_page=5", {
+      headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", "User-Agent": "matrx-manager" },
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!r.ok) return { id: "deploys", label: "Recent deploys (matrx-sandbox)", status: "warning", detail: `GitHub API ${r.status}` };
+    const runs = ((await r.json()).workflow_runs || []).filter((x) => x.status === "completed");
+    if (!runs.length) return { id: "deploys", label: "Recent deploys (matrx-sandbox)", status: "ok", detail: "No completed deploy runs found." };
+    const latest = runs[0];
+    const failures = runs.filter((x) => x.conclusion === "failure").length;
+    let status = "ok", detail = `Latest deploy ${latest.conclusion} (${(latest.head_sha || "").slice(0, 7)}, ${latest.created_at?.slice(0, 16)}).`;
+    if (latest.conclusion === "failure") { status = "critical"; detail = `Latest deploy FAILED (${(latest.head_sha || "").slice(0, 7)}, ${latest.created_at?.slice(0, 16)}) — EC2 may be running older code.`; }
+    else if (failures) { status = "warning"; detail = `Latest deploy ok, but ${failures} of last ${runs.length} failed.`; }
+    return { id: "deploys", label: "Recent deploys (matrx-sandbox)", status, detail, runs: runs.map((x) => ({ conclusion: x.conclusion, sha: (x.head_sha || "").slice(0, 7), at: x.created_at })) };
+  } catch (e) {
+    return { id: "deploys", label: "Recent deploys (matrx-sandbox)", status: "warning", detail: `Deploy check failed: ${e.message}` };
+  }
+}
+
+app.get("/api/fleet-health", authMiddleware, async (_req, res) => {
+  const [drift, deploys] = await Promise.all([checkOrchestratorDrift(), checkRecentDeploys()]);
+  const images = checkSandboxImages();
+  const checks = [drift, images, deploys];
+  const rank = { ok: 0, unknown: 0, warning: 1, critical: 2 };
+  const worst = checks.reduce((m, c) => Math.max(m, rank[c.status] ?? 0), 0);
+  const overall = worst >= 2 ? "critical" : worst === 1 ? "degraded" : "ok";
+  res.json({ overall, checks, checked_at: new Date().toISOString() });
 });
 
 // ── Restart the orchestrator (recreate container, no rebuild) ───────────────

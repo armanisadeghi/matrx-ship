@@ -27,6 +27,7 @@ export const API = {
   SELF_REBUILD_STREAM: "/api/self-rebuild/stream",
   BUILD_CLEANUP: "/api/build-cleanup",
   ORCH_STATUS: "/api/orchestrator-sandboxes-status",
+  FLEET_HEALTH: "/api/fleet-health",
   SANDBOX_IMAGES_HEALTH: "/api/sandbox-images/health",
   ORCH_RESTART: "/api/orchestrator/restart",
   ORCH_BUILD_STREAM: "/api/orchestrator/build/stream",
