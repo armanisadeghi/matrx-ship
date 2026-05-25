@@ -9,6 +9,8 @@
   },
   "dependencies": {
     "@matrx/admin-ui": "workspace:*",
+    "@xterm/xterm": "^5.5.0",
+    "@xterm/addon-fit": "^0.10.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "lucide-react": "^0.475.0",

@@ -62,7 +62,10 @@ WORKDIR /app
 
 # Express API server
 COPY server-manager/package.json ./
-RUN npm install --omit=dev
+# node-pty is a native module (browser terminals) — needs a toolchain to compile.
+RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ \
+    && npm install --omit=dev \
+    && apt-get purge -y python3 make g++ && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
 
 COPY server-manager/src/ ./src/
 # Copy legacy public dir (favicons, manifest, etc.)

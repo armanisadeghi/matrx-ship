@@ -47,6 +47,8 @@ import {
   searchContent,
   searchPaths,
 } from "./agent_gateway_fs.js";
+import http from "node:http";
+import { attachTerminalWs } from "./terminal_ws.js";
 
 const PORT = process.env.PORT || 3000;
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -3051,10 +3053,14 @@ app.delete("/mcp", (_req, res) => res.status(405).json({ jsonrpc: "2.0", error: 
 // ── Start ────────────────────────────────────────────────────────────────────
 initTokenStore();
 
-app.listen(PORT, "0.0.0.0", () => {
+const httpServer = http.createServer(app);
+// Browser terminals: WebSocket upgrades on /api/terminal → PTY (see terminal_ws.js).
+attachTerminalWs(httpServer, { verifyToken, auditLog });
+httpServer.listen(PORT, "0.0.0.0", () => {
   console.log(`Matrx Manager v2.0 listening on port ${PORT}`);
   console.log(`Dashboard: http://0.0.0.0:${PORT}/admin`);
   console.log(`MCP endpoint: http://0.0.0.0:${PORT}/mcp`);
+  console.log(`Terminal WS: ws://0.0.0.0:${PORT}/api/terminal`);
   const hasAuth = !!(process.env.MANAGER_TOKENS || process.env.MANAGER_BEARER_TOKEN || process.env.MCP_BEARER_TOKEN);
   console.log(`Auth: ${hasAuth ? "enabled (token store)" : "DISABLED"}`);
   console.log(`Supabase: ${isSupabaseConfigured() ? "configured" : "not configured (local-only mode)"}`);

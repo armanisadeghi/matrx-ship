@@ -35,6 +35,7 @@ const navGroups: NavGroup[] = [
     items: [
       { id: "hosts", href: "/hosts", label: "Hosts", icon: Cloud },
       { id: "console", href: "/console", label: "Console", icon: SquareTerminal },
+      { id: "terminal", href: "/terminal", label: "Terminal", icon: Terminal },
       { id: "agent-access", href: "/agent-access", label: "Agent Access", icon: KeyRound },
       { id: "instances", href: "/instances", label: "Instances", icon: Layers },
       { id: "sandboxes", href: "/sandboxes", label: "Sandboxes", icon: Terminal },
