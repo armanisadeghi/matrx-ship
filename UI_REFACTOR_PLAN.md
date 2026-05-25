@@ -2,7 +2,22 @@
 
 **Goal:** every recurring server operation lives in the Ship UI. SSH is for emergencies, not for routine work. New operational tasks can be added by following an established pattern (MCP tool → HTTP endpoint → admin UI page) with no architectural decisions to make.
 
-**Last updated:** 2026-04-30
+**Last updated:** 2026-05-25 · **Vocabulary:** see [NAMING.md](NAMING.md) — the canonical taxonomy this plan uses (Server → Project → Deployment → Sandbox → Template → Image).
+
+---
+
+## Status update — 2026-05-25 (read this first; the phase bodies below predate it)
+
+Reconciling the plan against what's actually shipped on `manager.dev.codematrx.com/admin` today:
+
+- **Phase 2 (sandbox image builds — the incident fix): DONE & LIVE.** Backend (`/api/sandbox-images/{health,build/stream}`, `/api/orchestrator/{build/stream,restart}`) + UI live on the **orchestrator-sandboxes page** (per-variant rebuild buttons, image-health badges, restart/rebuild orchestrator, missing-required warning, streamed logs). Two global guardrail banners (`SandboxImageBanner`, `FleetHealthBanner`) in the admin layout. **Note:** the rebuild controls live *on the orchestrator-sandboxes page*, not a dedicated page — see "IA debt" below.
+- **Bonus shipped (not in original plan): Fleet Health** — `/api/fleet-health` + `/fleet-health` page: read-only monitor for orchestrator code/config drift (hosted vs ec2), stale/missing images, and recent deploy failures. This is the "catch silent failures before they bite" surface.
+- **Phase 1 partial:** orchestrator restart ✅ (on orchestrator-sandboxes page), per-sandbox agent-env viewer ✅. Supabase sync/restore endpoints exist (`/api/supabase/{sync,restore,status}`) but **no UI page yet**. Traefik reload, docker-prune button, systemd-status tab, Deploy self-rebuild proxy page: **still pending**.
+- **Phases 3 (repo sync), 4 (config mgmt), 5 (ops tooling beyond Fleet Health), 6 (multi-host): still pending.**
+
+**Architecture moved since this plan was written (absorb into any future phase work):** the sandbox platform now has **slim** boxes (git-persistence, the default Template), a **warm pool** + `claim` (~0.5s launch), per-user **memory** (Postgres), **expiry/reaper/resume** lifecycle, and **co-located AI Dream** (full AI Dream on EC2 driving lean boxes over the private LAN). The Orchestrator is v0.3.0 on both Tiers. None of these have first-class admin-UI representation yet — when Phase work resumes, the sandbox pages should surface Template, warm-pool status, memory, and TTL/expiry. NAMING.md defines all these nouns.
+
+**IA debt (deliberate, deferred — do NOT hastily patch):** image-rebuild controls are on the "Orchestrator Sandboxes" page, which conflates live-sandbox inspection with image management. The cleaner home is a dedicated **Sandbox Images** page in the Operations group (discoverable via sidebar; the missing-image banner would link there). Doing it right means *moving* the toolbar out of orchestrator-sandboxes (trim to a "Manage images →" link, keep the missing-required warning there) — not duplicating it. A reviewed change, not an autonomous quick-patch. (A duplicate page was built + reverted on 2026-05-25; the lesson: to check whether the FE wires an endpoint, grep the `API.*` constant names, not raw URL strings.)
 
 ---
 
@@ -57,9 +72,11 @@ These are capabilities that the Manager backend already exposes but no admin UI 
 
 ---
 
-## Phase 2 — Sandbox image builds (the incident fix) (2 days)
+## Phase 2 — Sandbox image builds (the incident fix) (2 days) — ✅ DONE (2026-05-24)
 
-The 2026-04-30 incident: someone pruned the local `matrx-sandbox:*` tags; the orchestrator falls through to a registry pull and 404s; spawning was bricked until a human SSH'd in to rebuild. **No UI surface exists for this today.** This phase closes that hole.
+> **Shipped.** Backend + UI live (see the 2026-05-25 status block at the top). The build recipes (`SANDBOX_IMAGE_VARIANTS` for core/slim/local/aidream), `/api/sandbox-images/{health,build/stream}`, `/api/orchestrator/{build/stream,restart}`, the two guardrail banners, and the Fleet Health monitor all exist. The remaining bit is **IA** (a dedicated Sandbox Images page vs. the controls' current home on the orchestrator-sandboxes page) — captured as "IA debt" up top. The original spec is kept below for reference.
+
+The 2026-04-30 incident: someone pruned the local `matrx-sandbox:*` tags; the orchestrator falls through to a registry pull and 404s; spawning was bricked until a human SSH'd in to rebuild. This phase closed that hole.
 
 ### 2.1 Backend
 
