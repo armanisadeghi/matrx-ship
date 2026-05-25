@@ -2659,6 +2659,24 @@ app.get("/api/hosts", authMiddleware, async (_req, res) => {
   }
 });
 
+// POST /api/hosts/local/exec — run a shell command on the LOCAL /srv host.
+// Body: { command, cwd?, timeout? }. Mirrors the shell_exec MCP tool (Docker
+// CLI + /host-srv + /host-data in scope). admin/deployer; reverse-tag guarded.
+// MUST be defined before /api/hosts/:id/exec so "local" isn't matched as an :id.
+app.post("/api/hosts/local/exec", authMiddleware, requireRole("admin", "deployer"), async (req, res) => {
+  const command = String(req.body?.command || "").trim();
+  if (!command) return res.status(400).json({ error: "command is required" });
+  const blocked = guardDestructiveImageOp(command);
+  if (blocked) return res.status(403).json(blocked);
+  const timeout = Math.min(Number(req.body?.timeout) || 30000, 120000);
+  const cwd = req.body?.cwd ? resolveHostPath(String(req.body.cwd)) : HOST_SRV;
+  const result = exec(command, { timeout, cwd });
+  try {
+    auditLog(req.tokenEntry?.label || "manager", "local_exec", "host:/srv", { command: command.slice(0, 500), success: result.success, exitCode: result.exitCode });
+  } catch { /* audit is best-effort */ }
+  res.json({ host: "local", ...result });
+});
+
 // POST /api/hosts/:id/exec — run a shell command on a fleet host via SSM.
 // Body: { command, timeout? }. Returns { status, stdout, stderr, exitCode }.
 // SSM returns output at completion (not incrementally), so this is request/
@@ -2696,6 +2714,43 @@ app.post("/api/hosts/:id/power", authMiddleware, requireRole("admin"), async (re
   } catch (e) {
     res.status(502).json({ error: `EC2 error: ${e.message}` });
   }
+});
+
+// ── Local host + container command execution (no SSM, no new daemons) ───────
+// The fleet /api/hosts/* routes reach the REMOTE EC2 boxes via SSM. These reach
+// the LOCAL /srv host and every container on it — the same god-mode the Manager
+// already has via the MCP shell_exec/docker_exec tools, surfaced over HTTP so
+// the admin UI can "run a command anywhere" without SSH. Same auth + audit +
+// reverse-tag guard. (Interactive PTY terminals are A2; this is one-shot exec.)
+
+// GET /api/containers — list every container on the local host (for the picker).
+app.get("/api/containers", authMiddleware, async (_req, res) => {
+  const result = exec(`docker ps -a --format '{"name":"{{.Names}}","image":"{{.Image}}","status":"{{.Status}}","state":"{{.State}}"}'`);
+  if (!result.success) return res.status(502).json({ error: result.error || "docker ps failed" });
+  const containers = result.output.split("\n").filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+  res.json({ containers, count: containers.length });
+});
+
+// POST /api/containers/:name/exec — run a command inside any local container.
+// Body: { command, user?, workingDir?, timeout? }. Mirrors the docker_exec MCP
+// tool. admin/deployer; reverse-tag guarded.
+app.post("/api/containers/:name/exec", authMiddleware, requireRole("admin", "deployer"), async (req, res) => {
+  const name = String(req.params.name || "").trim();
+  if (!/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(name)) return res.status(400).json({ error: "invalid container name" });
+  const command = String(req.body?.command || "").trim();
+  if (!command) return res.status(400).json({ error: "command is required" });
+  const blocked = guardDestructiveImageOp(command);
+  if (blocked) return res.status(403).json(blocked);
+  const timeout = Math.min(Number(req.body?.timeout) || 60000, 120000);
+  let cmd = "docker exec";
+  if (req.body?.user) cmd += ` -u ${String(req.body.user).replace(/[^A-Za-z0-9_.:-]/g, "")}`;
+  if (req.body?.workingDir) cmd += ` -w ${String(req.body.workingDir).replace(/'/g, "")}`;
+  cmd += ` ${name} sh -c '${command.replace(/'/g, "'\\''")}'`;
+  const result = exec(cmd, { timeout });
+  try {
+    auditLog(req.tokenEntry?.label || "manager", "container_exec", `container:${name}`, { command: command.slice(0, 500), success: result.success, exitCode: result.exitCode });
+  } catch { /* audit is best-effort */ }
+  res.json({ container: name, ...result });
 });
 
 // System

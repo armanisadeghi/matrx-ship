@@ -17,6 +17,7 @@ import {
   Boxes,
   Activity,
   Cloud,
+  SquareTerminal,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { AuthProvider, useAuth } from "@/lib/auth-context";
@@ -31,6 +32,7 @@ const navGroups: NavGroup[] = [
     label: "Main",
     items: [
       { id: "hosts", href: "/hosts", label: "Hosts", icon: Cloud },
+      { id: "console", href: "/console", label: "Console", icon: SquareTerminal },
       { id: "instances", href: "/instances", label: "Instances", icon: Layers },
       { id: "sandboxes", href: "/sandboxes", label: "Sandboxes", icon: Terminal },
       { id: "orchestrator-sandboxes", href: "/orchestrator-sandboxes", label: "Orchestrator Sandboxes", icon: Boxes },
