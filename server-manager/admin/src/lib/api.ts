@@ -53,6 +53,11 @@ export const API = {
     `/api/orchestrator-sandboxes/${id}/reset?wipe_volume=${wipeVolume ? "true" : "false"}`,
   ORCH_SANDBOX_EXTEND: (id: string) => `/api/orchestrator-sandboxes/${id}/extend`,
   ORCH_SANDBOX_RESUME: (id: string) => `/api/orchestrator-sandboxes/${id}/resume`,
+  // Zero-drift migration (matrx-sandbox/docs/ZERO_DRIFT.md). Hyphenated drift /
+  // migrate-all paths avoid colliding with ORCH_SANDBOX(id).
+  ORCH_SANDBOXES_DRIFT: "/api/orchestrator-sandboxes-drift",
+  ORCH_SANDBOXES_MIGRATE_ALL: "/api/orchestrator-sandboxes-migrate-all",
+  ORCH_SANDBOX_MIGRATE: (id: string) => `/api/orchestrator-sandboxes/${id}/migrate`,
   // Destroy uses ORCH_SANDBOX(id) with the DELETE method.
   ORCH_SANDBOX_AGENT_ENV: (id: string) =>
     `/api/orchestrator-sandboxes/${id}/agent-env`,

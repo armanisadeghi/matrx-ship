@@ -86,6 +86,22 @@ interface ImageHealth {
   checked_at: string;
 }
 
+interface DriftBox {
+  sandbox_id: string;
+  template?: string | null;
+  running_version?: string | null;
+  current_version?: string | null;
+  drifted: boolean;
+  reason?: string;
+}
+interface DriftResponse {
+  tier: string | null;
+  total: number;
+  drifted: number;
+  stale_sandbox_ids: string[];
+  boxes: DriftBox[];
+}
+
 const POLL_MS = 5000;
 
 function fmtSize(bytes?: number | null): string {
@@ -113,17 +129,22 @@ export default function OrchestratorSandboxesPage() {
   const [cTemplate, setCTemplate] = useState("slim");
   const [cTtlMin, setCTtlMin] = useState("120");
   const [creating, setCreating] = useState(false);
+  // Zero-drift state
+  const [drift, setDrift] = useState<DriftResponse | null>(null);
+  const [migrateBusy, setMigrateBusy] = useState(false);
 
   const load = useCallback(async () => {
     try {
-      const [list, st, img] = await Promise.all([
+      const [list, st, img, dr] = await Promise.all([
         api<OrchListResponse>(API.ORCH_SANDBOXES),
         api<OrchStatus>(API.ORCH_STATUS).catch(() => null),
         api<ImageHealth>(API.SANDBOX_IMAGES_HEALTH).catch(() => null),
+        api<DriftResponse>(API.ORCH_SANDBOXES_DRIFT).catch(() => null),
       ]);
       setSandboxes(list.sandboxes ?? []);
       setStatus(st);
       setImages(img);
+      setDrift(dr);
       setError(null);
     } catch (err) {
       const msg = err instanceof ApiError ? err.message : err instanceof Error ? err.message : String(err);
@@ -132,6 +153,24 @@ export default function OrchestratorSandboxesPage() {
       setLoading(false);
     }
   }, []);
+
+  const handleMigrateAll = useCallback(async () => {
+    if (!drift || drift.drifted === 0) return;
+    if (!confirm(
+      `Migrate ${drift.drifted} drifted sandbox(es) to the current image?\n\n` +
+      `The swap preserves each box's per-user volume — no data loss. Busy boxes ` +
+      `defer to the next sweep; calls during a swap transparently retry.`
+    )) return;
+    setMigrateBusy(true);
+    try {
+      await api(API.ORCH_SANDBOXES_MIGRATE_ALL, { method: "POST" });
+      setTimeout(load, 2500);
+    } catch (e) {
+      alert(`Migrate-all failed: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setMigrateBusy(false);
+    }
+  }, [drift, load]);
 
   const handleCreate = useCallback(async () => {
     const ttl = Math.round(Number(cTtlMin) * 60);
@@ -402,6 +441,38 @@ export default function OrchestratorSandboxesPage() {
               Verify <code>MATRX_HOSTED_ORCHESTRATOR_URL</code> and <code>MATRX_HOSTED_ORCHESTRATOR_API_KEY</code> are
               set in <code>/srv/apps/server-manager/.env</code> and that the matrx-manager container has been recreated.
             </p>
+          </CardContent>
+        </Card>
+      )}
+
+      {drift && drift.drifted > 0 && (
+        <Card className="border-amber-500/40 bg-amber-500/5">
+          <CardHeader>
+            <CardTitle className="text-base flex items-center gap-2">
+              <AlertTriangle className="size-4 text-amber-500" /> Version drift
+              <Badge variant="outline" className="ml-1">{drift.drifted} of {drift.total}</Badge>
+            </CardTitle>
+            <CardDescription>
+              These boxes are running an older image than the current one for their template.
+              Migrating swaps the container while preserving the per-user volume — no data loss;
+              busy boxes defer; calls during a swap transparently retry.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="max-h-40 overflow-y-auto rounded border border-border/50 divide-y divide-border/40">
+              {drift.boxes.filter((b) => b.drifted).map((b) => (
+                <div key={b.sandbox_id} className="flex items-center justify-between px-3 py-1.5 text-xs">
+                  <span className="font-mono">{b.sandbox_id}</span>
+                  <span className="text-muted-foreground font-mono">
+                    {(b.running_version || "unversioned").slice(0, 24)} → {(b.current_version || "current").slice(0, 24)}
+                  </span>
+                </div>
+              ))}
+            </div>
+            <Button variant="default" size="sm" onClick={handleMigrateAll} disabled={migrateBusy || building !== null}>
+              {migrateBusy ? <Loader2 className="size-4 animate-spin" /> : <Hammer className="size-4" />}
+              {migrateBusy ? "Migrating…" : `Migrate all (${drift.drifted})`}
+            </Button>
           </CardContent>
         </Card>
       )}

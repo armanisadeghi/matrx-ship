@@ -2479,6 +2479,37 @@ app.post("/api/orchestrator-sandboxes/:id/resume", authMiddleware, requireRole("
   } catch (e) { res.status(502).json({ error: `Orchestrator unreachable: ${e.message}` }); }
 });
 
+// ── Zero-drift migration (see matrx-sandbox/docs/ZERO_DRIFT.md) ─────────────
+// Drift report for the hosted tier. Hyphenated path (not /:id) so it doesn't
+// collide with GET /api/orchestrator-sandboxes/:id.
+app.get("/api/orchestrator-sandboxes-drift", authMiddleware, async (_req, res) => {
+  if (!ORCH_KEY) return res.status(503).json({ error: "Orchestrator API key not configured" });
+  try {
+    const r = await orchFetch("/drift");
+    res.status(r.status).type(r.headers.get("content-type") || "application/json").send(await r.text());
+  } catch (e) { res.status(502).json({ error: `Orchestrator unreachable: ${e.message}` }); }
+});
+
+// Roll every drifted box to the current image (busy boxes defer; S3-backed boxes
+// are safely refused — see ZERO_DRIFT.md). Role-gated.
+app.post("/api/orchestrator-sandboxes-migrate-all", authMiddleware, requireRole("admin", "deployer"), async (_req, res) => {
+  if (!ORCH_KEY) return res.status(503).json({ error: "Orchestrator API key not configured" });
+  try {
+    const r = await orchFetch("/migrate-all", { method: "POST" });
+    res.status(r.status).type(r.headers.get("content-type") || "application/json").send(await r.text());
+  } catch (e) { res.status(502).json({ error: `Orchestrator unreachable: ${e.message}` }); }
+});
+
+// Migrate ONE box onto the current image (same id + volume, no data loss). Role-gated.
+app.post("/api/orchestrator-sandboxes/:id/migrate", authMiddleware, requireRole("admin", "deployer"), async (req, res) => {
+  if (!ORCH_KEY) return res.status(503).json({ error: "Orchestrator API key not configured" });
+  const q = req.query.target_image ? `?target_image=${encodeURIComponent(String(req.query.target_image))}` : "";
+  try {
+    const r = await orchFetch(`/sandboxes/${encodeURIComponent(req.params.id)}/migrate${q}`, { method: "POST" });
+    res.status(r.status).type(r.headers.get("content-type") || "application/json").send(await r.text());
+  } catch (e) { res.status(502).json({ error: `Orchestrator unreachable: ${e.message}` }); }
+});
+
 // Agent env — three views of the env vars actually visible inside the container
 app.get("/api/orchestrator-sandboxes/:id/agent-env", authMiddleware, async (req, res) => {
   if (!ORCH_KEY) return res.status(503).json({ error: "Orchestrator API key not configured" });
