@@ -1520,7 +1520,7 @@ app.get("/api/instances/:name", authMiddleware, async (req, res) => {
 });
 
 // Dedicated sub-resource endpoints for instance detail views
-app.get("/api/instances/:name/env", authMiddleware, async (req, res) => {
+app.get("/api/instances/:name/env", authMiddleware, requireSuperadmin, async (req, res) => {
   const name = req.params.name;
   const config = loadDeployments();
   if (!config.instances[name]) return res.status(404).json({ error: "Instance not found" });
@@ -1613,7 +1613,7 @@ app.post("/api/instances/:name/backup", authMiddleware, requireRole("admin", "de
   else res.status(500).json({ success: false, error: result.error });
 });
 
-app.put("/api/instances/:name/env", authMiddleware, requireRole("admin", "deployer"), async (req, res) => {
+app.put("/api/instances/:name/env", authMiddleware, requireSuperadmin, async (req, res) => {
   const name = req.params.name;
   const config = loadDeployments();
   if (!config.instances[name]) return res.status(404).json({ error: "Instance not found" });
@@ -2511,7 +2511,7 @@ app.post("/api/orchestrator-sandboxes/:id/migrate", authMiddleware, requireRole(
 });
 
 // Agent env — three views of the env vars actually visible inside the container
-app.get("/api/orchestrator-sandboxes/:id/agent-env", authMiddleware, async (req, res) => {
+app.get("/api/orchestrator-sandboxes/:id/agent-env", authMiddleware, requireSuperadmin, async (req, res) => {
   if (!ORCH_KEY) return res.status(503).json({ error: "Orchestrator API key not configured" });
   try {
     const r = await orchFetch(`/sandboxes/${encodeURIComponent(req.params.id)}/agent-env`);
@@ -2751,7 +2751,7 @@ app.get("/api/hosts", authMiddleware, async (_req, res) => {
 // Body: { command, cwd?, timeout? }. Mirrors the shell_exec MCP tool (Docker
 // CLI + /host-srv + /host-data in scope). admin/deployer; reverse-tag guarded.
 // MUST be defined before /api/hosts/:id/exec so "local" isn't matched as an :id.
-app.post("/api/hosts/local/exec", authMiddleware, requireRole("admin", "deployer"), async (req, res) => {
+app.post("/api/hosts/local/exec", authMiddleware, requireSuperadmin, async (req, res) => {
   const command = String(req.body?.command || "").trim();
   if (!command) return res.status(400).json({ error: "command is required" });
   const blocked = guardDestructiveImageOp(command);
@@ -2770,7 +2770,7 @@ app.post("/api/hosts/local/exec", authMiddleware, requireRole("admin", "deployer
 // SSM returns output at completion (not incrementally), so this is request/
 // response — the UI shows a spinner, then the result. (Interactive shells come
 // in A2 via SSM StartSession.)
-app.post("/api/hosts/:id/exec", authMiddleware, requireRole("admin", "deployer"), async (req, res) => {
+app.post("/api/hosts/:id/exec", authMiddleware, requireSuperadmin, async (req, res) => {
   if (!awsConfigured()) return res.status(503).json({ error: "AWS not configured on the Manager" });
   const host = FLEET_HOSTS[req.params.id];
   if (!host) return res.status(404).json({ error: `Unknown host '${req.params.id}'. Known: ${Object.keys(FLEET_HOSTS).join(", ")}` });
@@ -2789,7 +2789,7 @@ app.post("/api/hosts/:id/exec", authMiddleware, requireRole("admin", "deployer")
 });
 
 // POST /api/hosts/:id/power — start/stop/reboot a fleet host (EC2). admin only.
-app.post("/api/hosts/:id/power", authMiddleware, requireRole("admin"), async (req, res) => {
+app.post("/api/hosts/:id/power", authMiddleware, requireSuperadmin, async (req, res) => {
   if (!awsConfigured()) return res.status(503).json({ error: "AWS not configured on the Manager" });
   const host = FLEET_HOSTS[req.params.id];
   if (!host) return res.status(404).json({ error: `Unknown host '${req.params.id}'` });
@@ -2822,7 +2822,7 @@ app.get("/api/containers", authMiddleware, async (_req, res) => {
 // POST /api/containers/:name/exec — run a command inside any local container.
 // Body: { command, user?, workingDir?, timeout? }. Mirrors the docker_exec MCP
 // tool. admin/deployer; reverse-tag guarded.
-app.post("/api/containers/:name/exec", authMiddleware, requireRole("admin", "deployer"), async (req, res) => {
+app.post("/api/containers/:name/exec", authMiddleware, requireSuperadmin, async (req, res) => {
   const name = String(req.params.name || "").trim();
   if (!/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(name)) return res.status(400).json({ error: "invalid container name" });
   const command = String(req.body?.command || "").trim();
@@ -2899,7 +2899,67 @@ function agentGwAuth(req, res, next) {
 // POST /api/agent-gw/grant — mint a binding for a target. admin only.
 // Body: { target, root_path?, scopes?, ttl?, label? }. Returns the active_sandbox
 // binding shape so it drops straight into AppContext.metadata["active_sandbox"].
-app.post("/api/agent-gw/grant", authMiddleware, requireRole("admin"), (req, res) => {
+// Human-readable "what is this thing" for a container, so an operator granting
+// an agent access knows exactly what they're exposing. `danger` flags
+// infrastructure where access ≈ control of the whole environment.
+function describeContainer(name, image, tmpl, warm, displayNames) {
+  const display = (n) => displayNames[n] || n;
+  const img = image || "";
+  if (name === "traefik") return { kind: "proxy", title: "Traefik reverse proxy", description: "Routes ALL HTTPS traffic for *.dev.codematrx.com and manages TLS certs. Breaking it takes every site offline.", danger: true };
+  if (name === "postgres") return { kind: "database", title: "Shared Postgres (pgvector)", description: "The main shared PostgreSQL database. Holds shared application data across projects.", danger: true };
+  if (name === "pgadmin") return { kind: "db-admin", title: "pgAdmin", description: "Web UI for administering the Postgres databases.", danger: false };
+  if (name === "matrx-manager") return { kind: "control-plane", title: "Server Manager — THIS control plane", description: "The brain of the host: manages every container, owns the deployments registry, holds the Docker socket. Access here ≈ control of the entire server.", danger: true };
+  if (name === "matrx-deploy") return { kind: "control-plane", title: "Deploy Server (recovery lifeline)", description: "The safety net that can rebuild the Server Manager if it breaks. Keep it pristine.", danger: true };
+  if (name === "matrx-orchestrator") return { kind: "orchestrator", title: "Sandbox Orchestrator (hosted tier)", description: "Spawns and manages the ephemeral sandbox containers that agents run in.", danger: true };
+  if (name.startsWith("agent-") && img.includes("agent-envs")) return { kind: "agent-env", title: "Agent VM (sysbox)", description: "An isolated sysbox-based VM for agents — shell only, not wired into the app stack.", danger: false };
+  if (name.startsWith("db-")) return { kind: "instance-db", title: `Database — ${display(name.slice(3))}`, description: `The PostgreSQL database for the "${display(name.slice(3))}" deployment. Contains that one app's data.`, danger: true };
+  if (img.startsWith("matrx-sandbox") || tmpl) return { kind: "sandbox", title: warm ? "Sandbox (warm pool, idle)" : "Sandbox container", description: `An ephemeral agent sandbox${tmpl ? ` (template: ${tmpl})` : ""}.${warm ? " Unclaimed — waiting in the warm pool." : ""} A scratch machine, not infrastructure — safe to experiment in.`, danger: false };
+  if (/^sandbox-\d+$/.test(name)) return { kind: "sandbox-legacy", title: "Starter-pool sandbox (deprecated)", description: "An old static sandbox (sandbox-1..5) that predates the orchestrator. Being retired.", danger: false };
+  if (img === "matrx-ship:latest") return { kind: "ship-instance", title: `Ship app — ${display(name)}`, description: `A per-project Matrx Ship instance (version tracking + admin portal) for "${display(name)}", served at ${name}.dev.codematrx.com.`, danger: false };
+  return { kind: "unknown", title: name, description: `Unrecognized container (image: ${img || "unknown"}).`, danger: false };
+}
+
+// GET /api/agent-gw/targets — the catalog of grantable targets (the /srv host +
+// every container), each annotated with what it actually is. superadmin only.
+app.get("/api/agent-gw/targets", authMiddleware, requireSuperadmin, (_req, res) => {
+  let displayNames = {};
+  try {
+    const dep = loadDeployments();
+    const instances = dep?.instances || dep || {};
+    for (const [k, v] of Object.entries(instances)) displayNames[k] = (v && v.display_name) || k;
+  } catch { /* best effort */ }
+
+  const targets = [{
+    target: "host",
+    name: "host",
+    kind: "host",
+    title: "The /srv host (this server)",
+    description: "The dev server itself — full operator access to every config, compose file, and source repo under /srv. The highest-privilege target.",
+    danger: true,
+    image: "",
+    state: "running",
+    status: "",
+  }];
+
+  const out = exec(`docker ps -a --format '{{.Names}}\t{{.Image}}\t{{.State}}\t{{.Status}}\t{{.Label "matrx.template"}}\t{{.Label "matrx.warm_pool"}}'`);
+  if (out.success) {
+    for (const line of out.output.split("\n").filter(Boolean)) {
+      const [name, image, state, status, tmpl, warm] = line.split("\t");
+      if (!name) continue;
+      const d = describeContainer(name, image, tmpl, warm === "1", displayNames);
+      targets.push({ target: `container:${name}`, name, image, state, status, ...d });
+    }
+  }
+  // Stable, useful order: host, then infra (danger) first, then the rest by name.
+  targets.sort((a, b) => {
+    if (a.kind === "host") return -1; if (b.kind === "host") return 1;
+    if (a.danger !== b.danger) return a.danger ? -1 : 1;
+    return a.name.localeCompare(b.name);
+  });
+  res.json({ targets, count: targets.length });
+});
+
+app.post("/api/agent-gw/grant", authMiddleware, requireSuperadmin, (req, res) => {
   if (!gwEnabled()) return res.status(503).json({ error: "agent gateway disabled — set AGENT_GW_SECRET (>=32 chars) in /srv/apps/server-manager/.env and redeploy" });
   const { target, root_path, scopes, ttl, label } = req.body || {};
   try { parseTarget(target); } catch (e) { return res.status(400).json({ error: e.message }); }
@@ -2983,7 +3043,7 @@ app.get("/api/agent-gw/t/:target/fs/read", agentGwAuth, (req, res) => {
 });
 
 // POST /api/agent-gw/revoke — revoke a minted token by jti. admin only.
-app.post("/api/agent-gw/revoke", authMiddleware, requireRole("admin"), (req, res) => {
+app.post("/api/agent-gw/revoke", authMiddleware, requireSuperadmin, (req, res) => {
   const jti = String(req.body?.jti || "");
   if (!jti) return res.status(400).json({ error: "jti is required" });
   revokeJti(jti);
@@ -2992,7 +3052,7 @@ app.post("/api/agent-gw/revoke", authMiddleware, requireRole("admin"), (req, res
 });
 
 // GET /api/agent-gw/status — whether the gateway is enabled. admin only.
-app.get("/api/agent-gw/status", authMiddleware, requireRole("admin"), (_req, res) => {
+app.get("/api/agent-gw/status", authMiddleware, requireSuperadmin, (_req, res) => {
   res.json({ enabled: gwEnabled() });
 });
 
@@ -3031,14 +3091,14 @@ app.get("/api/system", authMiddleware, async (_req, res) => {
 });
 
 // Tokens (admin only)
-app.get("/api/tokens", authMiddleware, requireRole("admin"), async (_req, res) => {
+app.get("/api/tokens", authMiddleware, requireSuperadmin, async (_req, res) => {
   const store = loadTokens();
   // Return tokens without the hashes
   const safe = store.tokens.map(({ token_hash, ...rest }) => rest);
   res.json({ tokens: safe, count: safe.length });
 });
 
-app.post("/api/tokens", authMiddleware, requireRole("admin"), async (req, res) => {
+app.post("/api/tokens", authMiddleware, requireSuperadmin, async (req, res) => {
   const { label, role } = req.body;
   if (!label) return res.status(400).json({ error: "label required" });
   if (!["admin", "deployer", "viewer"].includes(role)) return res.status(400).json({ error: "role must be admin, deployer, or viewer" });
@@ -3067,7 +3127,7 @@ app.post("/api/tokens", authMiddleware, requireRole("admin"), async (req, res) =
   });
 });
 
-app.delete("/api/tokens/:id", authMiddleware, requireRole("admin"), async (req, res) => {
+app.delete("/api/tokens/:id", authMiddleware, requireSuperadmin, async (req, res) => {
   const store = loadTokens();
   const idx = store.tokens.findIndex((t) => t.id === req.params.id);
   if (idx === -1) return res.status(404).json({ error: "Token not found" });
@@ -3145,7 +3205,7 @@ initTokenStore();
 
 const httpServer = http.createServer(app);
 // Browser terminals: WebSocket upgrades on /api/terminal → PTY (see terminal_ws.js).
-attachTerminalWs(httpServer, { verifyToken, auditLog });
+attachTerminalWs(httpServer, { verifyToken, auditLog, oauthEnabled, authenticateOAuthAdmin });
 httpServer.listen(PORT, "0.0.0.0", () => {
   console.log(`Matrx Manager v2.0 listening on port ${PORT}`);
   console.log(`Dashboard: http://0.0.0.0:${PORT}/admin`);

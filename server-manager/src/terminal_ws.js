@@ -49,12 +49,16 @@ function spawnForTarget(target, { cols, rows }) {
 }
 
 // Attach the terminal WS handler to an http.Server.
-//   deps.verifyToken(token) -> entry|null   (entry.role checked for admin)
+//   deps.verifyToken(token) -> entry|null            (operator tokens)
+//   deps.oauthEnabled() -> bool
+//   deps.authenticateOAuthAdmin(token) -> {ok,isSuperadmin,email,...}  (async)
 //   deps.auditLog(actor, action, target, details)
-export function attachTerminalWs(server, { verifyToken, auditLog } = {}) {
+// A live shell is "access" — gated to SUPERADMINS only (operator admin tokens,
+// or OAuth admins whose admins.level == super_admin).
+export function attachTerminalWs(server, { verifyToken, auditLog, oauthEnabled, authenticateOAuthAdmin } = {}) {
   const wss = new WebSocketServer({ noServer: true });
 
-  server.on("upgrade", (req, socket, head) => {
+  server.on("upgrade", async (req, socket, head) => {
     const { pathname, query } = parseUrl(req.url, true);
     if (pathname !== "/api/terminal") return; // not ours — leave for other handlers
 
@@ -63,14 +67,25 @@ export function attachTerminalWs(server, { verifyToken, auditLog } = {}) {
       socket.destroy();
     };
 
-    // Auth: require an admin operator token (unless auth is disabled entirely).
-    const authConfigured = !!(process.env.MANAGER_TOKENS || process.env.MANAGER_BEARER_TOKEN || process.env.MCP_BEARER_TOKEN);
-    let entry = null;
+    // Auth: resolve the caller to a superadmin (unless auth is disabled).
+    const authConfigured = !!(process.env.MANAGER_TOKENS || process.env.MANAGER_BEARER_TOKEN || process.env.MCP_BEARER_TOKEN || (oauthEnabled && oauthEnabled()));
+    let entry = null; // { label }
     if (authConfigured) {
       const token = pickToken(req, query);
-      entry = token ? verifyToken(token) : null;
+      if (!token) return reject(401, "Unauthorized");
+      let isSuperadmin = false;
+      const op = verifyToken(token);
+      if (op) {
+        isSuperadmin = op.role === "admin";
+        entry = { label: op.label };
+      } else if (oauthEnabled && oauthEnabled()) {
+        try {
+          const r = await authenticateOAuthAdmin(token);
+          if (r.ok) { isSuperadmin = r.isSuperadmin; entry = { label: r.email || "oauth-admin" }; }
+        } catch { /* fall through */ }
+      }
       if (!entry) return reject(401, "Unauthorized");
-      if (entry.role && entry.role !== "admin") return reject(403, "Forbidden");
+      if (!isSuperadmin) return reject(403, "Forbidden — requires superadmin");
     }
 
     const target = String(query.target || "host");

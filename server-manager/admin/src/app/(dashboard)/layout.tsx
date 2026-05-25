@@ -20,6 +20,7 @@ import {
   SquareTerminal,
   KeyRound,
   ScrollText,
+  ShieldAlert,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { AuthProvider, useAuth } from "@/lib/auth-context";
@@ -74,9 +75,23 @@ const navGroups: NavGroup[] = [
   },
 ];
 
+// Nav items that expose envs, tokens, or live access — restricted to superadmins
+// (admins.level == super_admin, or break-glass operator tokens). Developer and
+// Senior Admin don't see these. The backend enforces the same gate.
+const SUPERADMIN_ONLY = new Set(["hosts", "console", "terminal", "agent-access", "tokens"]);
+
 function DashboardContent({ children }: { children: React.ReactNode }) {
-  const { authed, loading, role, logout } = useAuth();
+  const { authed, loading, role, isSuperadmin, logout } = useAuth();
   const pathname = usePathname();
+
+  const visibleNavGroups = isSuperadmin
+    ? navGroups
+    : navGroups
+        .map((g) => ({ ...g, items: g.items.filter((it) => !SUPERADMIN_ONLY.has(it.id)) }))
+        .filter((g) => g.items.length > 0);
+
+  // Direct-URL guard: the first path segment maps to a nav id.
+  const needsSuperadmin = SUPERADMIN_ONLY.has(pathname.split("/")[1] || "");
 
   if (loading) {
     return (
@@ -96,7 +111,7 @@ function DashboardContent({ children }: { children: React.ReactNode }) {
         appName: "Server Manager",
         appDescription: "Matrx Infrastructure",
         logoSrc: "/admin/matrx-icon-purple.svg",
-        navGroups,
+        navGroups: visibleNavGroups,
         version: "v0.2.0",
       }}
       activePath={pathname}
@@ -153,7 +168,17 @@ function DashboardContent({ children }: { children: React.ReactNode }) {
     >
       <FleetHealthBanner />
       <SandboxImageBanner />
-      {children}
+      {needsSuperadmin && !isSuperadmin ? (
+        <div className="flex min-h-[50vh] flex-col items-center justify-center gap-3 text-center">
+          <ShieldAlert className="size-10 text-amber-500" />
+          <h2 className="text-lg font-semibold">Super-admin only</h2>
+          <p className="max-w-md text-sm text-muted-foreground">
+            This area exposes environment variables, tokens, or live access to infrastructure, so it&apos;s restricted to super-admins. Your role is <span className="font-mono">{role}</span>.
+          </p>
+        </div>
+      ) : (
+        children
+      )}
     </AdminShell>
   );
 }

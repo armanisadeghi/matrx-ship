@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 
 export default function RootPage() {
-  // next/navigation redirect() does NOT prepend basePath, so include it
-  // explicitly — otherwise /admin sends the browser to /instances (no route).
-  redirect("/admin/instances");
+  // redirect() prepends basePath (/admin), so pass the in-app path only —
+  // passing "/admin/instances" here produced /admin/admin/instances.
+  redirect("/instances");
 }
