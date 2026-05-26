@@ -17,7 +17,6 @@ import {
   Boxes,
   Activity,
   Cloud,
-  SquareTerminal,
   KeyRound,
   ScrollText,
   ShieldAlert,
@@ -35,7 +34,6 @@ const navGroups: NavGroup[] = [
     label: "Main",
     items: [
       { id: "hosts", href: "/hosts", label: "Hosts", icon: Cloud },
-      { id: "console", href: "/console", label: "Console", icon: SquareTerminal },
       { id: "terminal", href: "/terminal", label: "Terminal", icon: Terminal },
       { id: "agent-access", href: "/agent-access", label: "Agent Access", icon: KeyRound },
       { id: "instances", href: "/instances", label: "Instances", icon: Layers },
@@ -78,7 +76,7 @@ const navGroups: NavGroup[] = [
 // Nav items that expose envs, tokens, or live access — restricted to superadmins
 // (admins.level == super_admin, or break-glass operator tokens). Developer and
 // Senior Admin don't see these. The backend enforces the same gate.
-const SUPERADMIN_ONLY = new Set(["hosts", "console", "terminal", "agent-access", "tokens"]);
+const SUPERADMIN_ONLY = new Set(["hosts", "terminal", "agent-access", "tokens"]);
 
 function DashboardContent({ children }: { children: React.ReactNode }) {
   const { authed, loading, role, isSuperadmin, logout } = useAuth();
