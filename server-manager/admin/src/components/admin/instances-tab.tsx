@@ -57,8 +57,8 @@ export function InstancesTab({
 
   return (
     <PageShell
-      title="Instances"
-      description="Manage ship instances — deploy, configure, and monitor"
+      title="Apps"
+      description="Deployed per-project apps (each at its own subdomain with its own database) — deploy, configure, and monitor."
       actions={
         <Dialog open={showCreate} onOpenChange={setShowCreate}>
           <DialogTrigger asChild>

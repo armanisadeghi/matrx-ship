@@ -1072,6 +1072,23 @@ function createServer() {
     }
   );
 
+  server.tool("host_exec",
+    "Run a shell command on a remote FLEET EC2 host via AWS SSM (NOT this /srv host — use shell_exec for /srv). `host` is a fleet key like 'matrx-sandbox-host-dev' or 'matrx-python-server'. Returns {status, stdout, stderr, exitCode}. An AccessDenied means the box's EC2 IAM role lacks that permission, not a Manager bug.",
+    { host: z.string(), command: z.string(), timeout_s: z.number().optional() },
+    async ({ host, command, timeout_s }) => {
+      const h = FLEET_HOSTS[host];
+      if (!h) return textResult({ success: false, error: `Unknown host '${host}'. Known: ${Object.keys(FLEET_HOSTS).join(", ")}` });
+      if (!awsConfigured()) return textResult({ success: false, error: "AWS not configured on the Manager (MATRX_ADMIN_AWS_* unset)" });
+      try {
+        const result = await ssmRun(h.instanceId, command, { timeout: Math.min(timeout_s || 120, 600), comment: "mcp:host_exec" });
+        try { auditLog("mcp", "host_exec", host, { command: command.slice(0, 500), status: result.status, exitCode: result.exitCode }); } catch { /* */ }
+        return textResult(result);
+      } catch (e) {
+        return textResult({ success: false, error: `SSM error: ${e.message}` });
+      }
+    }
+  );
+
   // ── DOCKER TOOLS ────────────────────────────────────────────────────────
   server.tool("docker_ps", "List Docker containers.", { all: z.boolean().optional() },
     async ({ all }) => {

@@ -29,22 +29,25 @@ import { FleetHealthBanner } from "@/components/admin/fleet-health-banner";
 import { AdminShell, type NavGroup, type NavItem } from "@matrx/admin-ui/components/admin-shell";
 import { Badge } from "@matrx/admin-ui/ui/badge";
 
+// Nav grouped by the layers in UI_FLOW.md: Fleet (the things we run) → Access &
+// Ops (super-admin power tools) → Monitoring → Build → Reference. The word
+// "instance" is retired: a deployed app is an "App", a sandbox is a "Sandbox".
 const navGroups: NavGroup[] = [
   {
-    label: "Main",
+    label: "Fleet",
     items: [
-      { id: "hosts", href: "/hosts", label: "Hosts", icon: Cloud },
-      { id: "terminal", href: "/terminal", label: "Terminal", icon: Terminal },
-      { id: "agent-access", href: "/agent-access", label: "Agent Access", icon: KeyRound },
-      { id: "instances", href: "/instances", label: "Instances", icon: Layers },
-      { id: "sandboxes", href: "/sandboxes", label: "Sandboxes", icon: Terminal },
-      { id: "orchestrator-sandboxes", href: "/orchestrator-sandboxes", label: "Orchestrator Sandboxes", icon: Boxes },
+      { id: "servers", href: "/servers", label: "Servers", icon: Server },
+      { id: "instances", href: "/instances", label: "Apps", icon: Layers },
+      { id: "orchestrator-sandboxes", href: "/orchestrator-sandboxes", label: "Sandboxes", icon: Boxes },
+      { id: "sandboxes", href: "/sandboxes", label: "Starter pool", icon: Terminal },
     ],
   },
   {
-    label: "Operations",
+    label: "Access & Ops",
     items: [
-      { id: "builds", href: "/builds", label: "Builds", icon: History },
+      { id: "terminal", href: "/terminal", label: "Terminal", icon: Terminal },
+      { id: "agent-access", href: "/agent-access", label: "Agent Access", icon: KeyRound },
+      { id: "hosts", href: "/hosts", label: "Hosts (EC2)", icon: Cloud },
       { id: "tokens", href: "/tokens", label: "Tokens", icon: Key },
     ],
   },
@@ -56,6 +59,12 @@ const navGroups: NavGroup[] = [
       { id: "system", href: "/system", label: "System", icon: Monitor },
       { id: "db-health", href: "/db-health", label: "DB Health", icon: Database },
       { id: "infrastructure", href: "/infrastructure", label: "Infrastructure", icon: Server },
+    ],
+  },
+  {
+    label: "Build",
+    items: [
+      { id: "builds", href: "/builds", label: "Builds", icon: History },
     ],
   },
   {
