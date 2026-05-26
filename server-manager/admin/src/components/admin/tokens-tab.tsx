@@ -8,8 +8,8 @@ import { Card, CardContent } from "@matrx/admin-ui/ui/card";
 import { Badge } from "@matrx/admin-ui/ui/badge";
 import { Input } from "@matrx/admin-ui/ui/input";
 import { Label } from "@matrx/admin-ui/ui/label";
-import { Table, TableHeader, TableHead, TableBody, TableRow, TableCell } from "@matrx/admin-ui/ui/table";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@matrx/admin-ui/ui/select";
+import { DataTable, type Column } from "@/components/admin/data-table";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@matrx/admin-ui/ui/dialog";
 import { PageShell } from "@matrx/admin-ui/components/page-shell";
 import type { TokenInfo } from "@/lib/types";
@@ -60,48 +60,22 @@ export function TokensTab({ tokens, onCreateToken, onDeleteToken }: TokensTabPro
         </Card>
       )}
 
-      <Card>
-        <CardContent className="p-0">
-          {tokens.length === 0 ? (
-            <div className="p-6 text-center text-muted-foreground text-sm">No tokens</div>
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="hidden sm:table-cell">ID</TableHead>
-                  <TableHead>Label</TableHead>
-                  <TableHead>Role</TableHead>
-                  <TableHead className="hidden md:table-cell">Created</TableHead>
-                  <TableHead className="hidden md:table-cell">Last Used</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {tokens.map((t) => (
-                  <TableRow key={t.id}>
-                    <TableCell className="font-mono text-xs hidden sm:table-cell">{t.id}</TableCell>
-                    <TableCell className="font-medium">{t.label}</TableCell>
-                    <TableCell>
-                      <Badge variant={t.role === "admin" ? "default" : "secondary"}>{t.role}</Badge>
-                    </TableCell>
-                    <TableCell className="text-xs text-muted-foreground hidden md:table-cell">
-                      {new Date(t.created_at).toLocaleDateString()}
-                    </TableCell>
-                    <TableCell className="text-xs text-muted-foreground hidden md:table-cell">
-                      {t.last_used_at ? new Date(t.last_used_at).toLocaleDateString() : "Never"}
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <Button variant="ghost" size="sm" onClick={() => onDeleteToken(t.id)}>
-                        <Trash2 className="size-3" />
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
-        </CardContent>
-      </Card>
+      <DataTable
+        rows={tokens}
+        getRowKey={(t) => t.id}
+        getSearchText={(t) => `${t.label} ${t.role} ${t.id}`}
+        initialSort={{ key: "label", dir: "asc" }}
+        searchPlaceholder="Filter tokens…"
+        emptyMessage="No tokens yet."
+        columns={[
+          { key: "label", header: "Label", sortValue: (t) => t.label, render: (t) => <span className="font-medium">{t.label}</span> },
+          { key: "role", header: "Role", sortValue: (t) => t.role, render: (t) => <Badge variant={t.role === "admin" ? "default" : "secondary"}>{t.role}</Badge> },
+          { key: "id", header: "ID", hideBelow: "sm", sortValue: (t) => t.id, render: (t) => <span className="font-mono text-xs text-muted-foreground">{t.id}</span> },
+          { key: "created", header: "Created", hideBelow: "md", sortValue: (t) => new Date(t.created_at).getTime() || 0, render: (t) => <span className="text-xs text-muted-foreground">{new Date(t.created_at).toLocaleDateString()}</span> },
+          { key: "used", header: "Last used", hideBelow: "md", sortValue: (t) => (t.last_used_at ? new Date(t.last_used_at).getTime() : 0), render: (t) => <span className="text-xs text-muted-foreground">{t.last_used_at ? new Date(t.last_used_at).toLocaleDateString() : "Never"}</span> },
+          { key: "actions", header: "", sortable: false, align: "right", render: (t) => <Button variant="ghost" size="sm" onClick={() => onDeleteToken(t.id)}><Trash2 className="size-3" /></Button> },
+        ] as Column<TokenInfo>[]}
+      />
 
       <Dialog open={showCreate} onOpenChange={setShowCreate}>
         <DialogContent>
