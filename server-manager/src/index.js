@@ -2919,11 +2919,20 @@ app.post("/api/hosts/:id/power", authMiddleware, requireSuperadmin, async (req, 
 // the admin UI can "run a command anywhere" without SSH. Same auth + audit +
 // reverse-tag guard. (Interactive PTY terminals are A2; this is one-shot exec.)
 
-// GET /api/containers — list every container on the local host (for the picker).
+// GET /api/containers — every local container, each classified with what it is
+// (title/description) + its category (for grouping). One source of truth shared
+// with the agent-gw target catalog so the terminal picker, etc. all label + group
+// identically.
 app.get("/api/containers", authMiddleware, async (_req, res) => {
-  const result = exec(`docker ps -a --format '{"name":"{{.Names}}","image":"{{.Image}}","status":"{{.Status}}","state":"{{.State}}"}'`);
+  const result = exec(`docker ps -a --format '{{.Names}}\t{{.Image}}\t{{.State}}\t{{.Status}}\t{{.Label "matrx.template"}}\t{{.Label "matrx.warm_pool"}}'`);
   if (!result.success) return res.status(502).json({ error: result.error || "docker ps failed" });
-  const containers = result.output.split("\n").filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+  const displayNames = loadDisplayNames();
+  const containers = result.output.split("\n").filter(Boolean).map((line) => {
+    const [name, image, state, status, tmpl, warm] = line.split("\t");
+    if (!name) return null;
+    const d = classifyContainer(name, image, tmpl, warm === "1", displayNames);
+    return { name, image, state, status, ...d };
+  }).filter(Boolean);
   res.json({ containers, count: containers.length });
 });
 
@@ -3010,6 +3019,42 @@ function agentGwAuth(req, res, next) {
 // Human-readable "what is this thing" for a container, so an operator granting
 // an agent access knows exactly what they're exposing. `danger` flags
 // infrastructure where access ≈ control of the whole environment.
+// Canonical grouping for the UI: a container's `kind` maps to a labelled
+// category + sort order. ONE source of truth so the terminal picker, agent
+// access, and any future list all group + label targets identically.
+const KIND_CATEGORY = {
+  host:             { category: "server",         categoryLabel: "Servers",              order: 0 },
+  "control-plane":  { category: "control-plane",  categoryLabel: "Control plane",        order: 1 },
+  proxy:            { category: "infrastructure", categoryLabel: "Infrastructure",       order: 2 },
+  database:         { category: "infrastructure", categoryLabel: "Infrastructure",       order: 2 },
+  "db-admin":       { category: "infrastructure", categoryLabel: "Infrastructure",       order: 2 },
+  orchestrator:     { category: "sandbox-system", categoryLabel: "Sandbox system",       order: 3 },
+  sandbox:          { category: "sandbox",        categoryLabel: "Sandboxes",            order: 4 },
+  "sandbox-legacy": { category: "sandbox",        categoryLabel: "Sandboxes",            order: 4 },
+  "ship-instance":  { category: "app",            categoryLabel: "App deployments",      order: 5 },
+  "instance-db":    { category: "database",       categoryLabel: "Databases",            order: 6 },
+  "agent-env":      { category: "agent-env",      categoryLabel: "Agent environments",   order: 7 },
+  unknown:          { category: "other",          categoryLabel: "Other",                order: 9 },
+};
+function categoryFor(kind) { return KIND_CATEGORY[kind] || KIND_CATEGORY.unknown; }
+
+// describeContainer(...) + its category, in one object. Use this everywhere a
+// target is listed so naming + grouping stay consistent.
+function classifyContainer(name, image, tmpl, warm, displayNames) {
+  const d = describeContainer(name, image, tmpl, warm, displayNames);
+  return { ...d, ...categoryFor(d.kind) };
+}
+
+function loadDisplayNames() {
+  const out = {};
+  try {
+    const dep = loadDeployments();
+    const instances = dep?.instances || dep || {};
+    for (const [k, v] of Object.entries(instances)) out[k] = (v && v.display_name) || k;
+  } catch { /* best effort */ }
+  return out;
+}
+
 function describeContainer(name, image, tmpl, warm, displayNames) {
   const display = (n) => displayNames[n] || n;
   const img = image || "";
@@ -3030,23 +3075,19 @@ function describeContainer(name, image, tmpl, warm, displayNames) {
 // GET /api/agent-gw/targets — the catalog of grantable targets (the /srv host +
 // every container), each annotated with what it actually is. superadmin only.
 app.get("/api/agent-gw/targets", authMiddleware, requireSuperadmin, (_req, res) => {
-  let displayNames = {};
-  try {
-    const dep = loadDeployments();
-    const instances = dep?.instances || dep || {};
-    for (const [k, v] of Object.entries(instances)) displayNames[k] = (v && v.display_name) || k;
-  } catch { /* best effort */ }
+  const displayNames = loadDisplayNames();
 
   const targets = [{
     target: "host",
     name: "host",
-    kind: "host",
     title: "The /srv host (this server)",
     description: "The dev server itself — full operator access to every config, compose file, and source repo under /srv. The highest-privilege target.",
     danger: true,
     image: "",
     state: "running",
     status: "",
+    ...categoryFor("host"),
+    kind: "host",
   }];
 
   const out = exec(`docker ps -a --format '{{.Names}}\t{{.Image}}\t{{.State}}\t{{.Status}}\t{{.Label "matrx.template"}}\t{{.Label "matrx.warm_pool"}}'`);
@@ -3054,16 +3095,13 @@ app.get("/api/agent-gw/targets", authMiddleware, requireSuperadmin, (_req, res) 
     for (const line of out.output.split("\n").filter(Boolean)) {
       const [name, image, state, status, tmpl, warm] = line.split("\t");
       if (!name) continue;
-      const d = describeContainer(name, image, tmpl, warm === "1", displayNames);
+      const d = classifyContainer(name, image, tmpl, warm === "1", displayNames);
       targets.push({ target: `container:${name}`, name, image, state, status, ...d });
     }
   }
-  // Stable, useful order: host, then infra (danger) first, then the rest by name.
-  targets.sort((a, b) => {
-    if (a.kind === "host") return -1; if (b.kind === "host") return 1;
-    if (a.danger !== b.danger) return a.danger ? -1 : 1;
-    return a.name.localeCompare(b.name);
-  });
+  // Group order first (server, control plane, infra, …), then danger, then name.
+  targets.sort((a, b) =>
+    (a.order - b.order) || (a.danger === b.danger ? a.name.localeCompare(b.name) : (a.danger ? -1 : 1)));
   res.json({ targets, count: targets.length });
 });
 
