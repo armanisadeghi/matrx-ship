@@ -4,13 +4,12 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   Plus, Loader2, ExternalLink, MoreHorizontal, Rocket,
-  Play, Square, RotateCcw, Trash2,
+  Play, Square, RotateCcw,
 } from "lucide-react";
 import { Button } from "@matrx/admin-ui/ui/button";
-import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@matrx/admin-ui/ui/card";
 import { Badge } from "@matrx/admin-ui/ui/badge";
-import { Table, TableHeader, TableHead, TableBody, TableRow, TableCell } from "@matrx/admin-ui/ui/table";
 import { Input } from "@matrx/admin-ui/ui/input";
+import { DataTable, type Column } from "@/components/admin/data-table";
 import { Label } from "@matrx/admin-ui/ui/label";
 import {
   Dialog, DialogTrigger, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
@@ -89,94 +88,85 @@ export function InstancesTab({
         </Dialog>
       }
     >
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="text-base">{instances.length} instance(s)</CardTitle>
-          <CardDescription>Click an instance name to view details</CardDescription>
-        </CardHeader>
-        <CardContent className="p-0">
-          {instances.length === 0 ? (
-            <div className="p-6 text-center text-muted-foreground">
-              <p className="text-sm">No instances yet. Create one to get started.</p>
-            </div>
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Name</TableHead>
-                  <TableHead>URL</TableHead>
-                  <TableHead>App Status</TableHead>
-                  <TableHead>DB Status</TableHead>
-                  <TableHead>Created</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {instances.map((inst) => (
-                  <TableRow key={inst.name} className="cursor-pointer" onClick={() => router.push(`/instances/${inst.name}`)}>
-                    <TableCell>
-                      <div className="font-medium">{inst.display_name}</div>
-                      <div className="text-xs text-muted-foreground font-mono">{inst.name}</div>
-                    </TableCell>
-                    <TableCell>
-                      <a
-                        href={inst.url}
-                        target="_blank"
-                        rel="noopener"
-                        onClick={(e) => e.stopPropagation()}
-                        className="text-primary text-sm hover:underline flex items-center gap-1"
-                      >
-                        <ExternalLink className="size-3" />
-                        {inst.subdomain}
-                      </a>
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant={inst.container_status === "running" ? "success" : inst.container_status === "stopped" ? "destructive" : "secondary"}>
-                        {inst.container_status || inst.status}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant={inst.db_status === "running" ? "success" : inst.db_status === "stopped" ? "destructive" : "secondary"}>
-                        {inst.db_status || "unknown"}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="text-muted-foreground text-sm">
-                      {new Date(inst.created_at).toLocaleDateString()}
-                    </TableCell>
-                    <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <Button variant="ghost" size="sm" className="h-8 w-8 p-0">
-                            <MoreHorizontal className="size-4" />
-                          </Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end">
-                          <DropdownMenuItem onClick={() => onDeploy(inst.name)} disabled={deploying}>
-                            <Rocket className="size-4" /> Deploy
-                          </DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => onInstanceAction(inst.name, "start")}>
-                            <Play className="size-4" /> Start
-                          </DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => onInstanceAction(inst.name, "stop")}>
-                            <Square className="size-4" /> Stop
-                          </DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => onInstanceAction(inst.name, "restart")}>
-                            <RotateCcw className="size-4" /> Restart
-                          </DropdownMenuItem>
-                          <DropdownMenuSeparator />
-                          <DropdownMenuItem onClick={() => window.open(inst.url, "_blank")}>
-                            <ExternalLink className="size-4" /> Open
-                          </DropdownMenuItem>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
-        </CardContent>
-      </Card>
+      <DataTable
+        rows={instances}
+        getRowKey={(i) => i.name}
+        getSearchText={(i) => `${i.display_name} ${i.name} ${i.subdomain} ${i.container_status || i.status} ${i.db_status || ""}`}
+        onRowClick={(i) => router.push(`/instances/${i.name}`)}
+        initialSort={{ key: "name", dir: "asc" }}
+        searchPlaceholder="Filter instances…"
+        emptyMessage="No instances yet. Create one to get started."
+        columns={instanceColumns({ deploying, onDeploy, onInstanceAction })}
+      />
     </PageShell>
   );
+}
+
+function statusVariant(s?: string): "success" | "destructive" | "secondary" {
+  return s === "running" ? "success" : s === "stopped" ? "destructive" : "secondary";
+}
+
+function instanceColumns({
+  deploying, onDeploy, onInstanceAction,
+}: {
+  deploying: boolean;
+  onDeploy: (name: string) => void;
+  onInstanceAction: (name: string, action: string) => void;
+}): Column<InstanceInfo>[] {
+  return [
+    {
+      key: "name", header: "Name",
+      sortValue: (i) => (i.display_name || i.name).toLowerCase(),
+      render: (i) => (
+        <div>
+          <div className="font-medium">{i.display_name}</div>
+          <div className="text-xs text-muted-foreground font-mono">{i.name}</div>
+        </div>
+      ),
+    },
+    {
+      key: "url", header: "URL", sortable: false, hideBelow: "md",
+      render: (i) => (
+        <a href={i.url} target="_blank" rel="noopener" onClick={(e) => e.stopPropagation()}
+          className="text-primary text-sm hover:underline inline-flex items-center gap-1">
+          <ExternalLink className="size-3" /> {i.subdomain}
+        </a>
+      ),
+    },
+    {
+      key: "app", header: "App",
+      sortValue: (i) => i.container_status || i.status || "",
+      render: (i) => <Badge variant={statusVariant(i.container_status)}>{i.container_status || i.status}</Badge>,
+    },
+    {
+      key: "db", header: "DB", hideBelow: "sm",
+      sortValue: (i) => i.db_status || "",
+      render: (i) => <Badge variant={statusVariant(i.db_status)}>{i.db_status || "unknown"}</Badge>,
+    },
+    {
+      key: "created", header: "Created", hideBelow: "lg",
+      sortValue: (i) => new Date(i.created_at).getTime() || 0,
+      render: (i) => <span className="text-muted-foreground text-sm">{new Date(i.created_at).toLocaleDateString()}</span>,
+    },
+    {
+      key: "actions", header: "", sortable: false, align: "right",
+      render: (i) => (
+        <div onClick={(e) => e.stopPropagation()}>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="sm" className="h-8 w-8 p-0"><MoreHorizontal className="size-4" /></Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={() => onDeploy(i.name)} disabled={deploying}><Rocket className="size-4" /> Deploy</DropdownMenuItem>
+              <DropdownMenuItem onClick={() => onInstanceAction(i.name, "start")}><Play className="size-4" /> Start</DropdownMenuItem>
+              <DropdownMenuItem onClick={() => onInstanceAction(i.name, "stop")}><Square className="size-4" /> Stop</DropdownMenuItem>
+              <DropdownMenuItem onClick={() => onInstanceAction(i.name, "restart")}><RotateCcw className="size-4" /> Restart</DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={() => window.open(i.url, "_blank")}><ExternalLink className="size-4" /> Open</DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      ),
+    },
+  ];
 }

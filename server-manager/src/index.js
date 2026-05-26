@@ -2336,6 +2336,61 @@ async function orchFetch(path, init = {}) {
   return fetch(`${ORCH_URL}${path}`, { ...init, headers });
 }
 
+// ── Tier-aware routing ──────────────────────────────────────────────────────
+// A box's per-box actions (logs/diagnostics/fs/lifecycle/migrate) must hit the
+// orchestrator that actually HOSTS it — the hosted one can't reach ec2
+// containers and vice-versa. The list + detail come from the hosted orchestrator
+// (its store is the shared sandbox_instances DB, so it returns rows for BOTH
+// tiers, each carrying its `tier`). We cache sandbox_id -> tier from those and
+// fall back to a one-shot detail lookup on a miss.
+const EC2_ORCH_KEY = process.env.MATRX_EC2_ORCHESTRATOR_API_KEY || "";
+
+function orchForTier(tier) {
+  if (tier === "ec2") return { url: EC2_ORCH_URL, key: EC2_ORCH_KEY, tier: "ec2" };
+  return { url: ORCH_URL, key: ORCH_KEY, tier: "hosted" };
+}
+
+const _tierCache = new Map(); // sandbox_id -> { tier, ts }
+const TIER_TTL_MS = 5 * 60 * 1000;
+function rememberTier(sandboxId, tier) {
+  if (sandboxId && tier) _tierCache.set(sandboxId, { tier, ts: Date.now() });
+}
+async function resolveTier(sandboxId) {
+  const c = _tierCache.get(sandboxId);
+  if (c && Date.now() - c.ts < TIER_TTL_MS) return c.tier;
+  try {
+    const r = await orchFetch(`/sandboxes/${encodeURIComponent(sandboxId)}`);
+    if (r.ok) {
+      const row = await r.json();
+      const tier = row?.tier || "hosted";
+      rememberTier(sandboxId, tier);
+      return tier;
+    }
+  } catch { /* fall through to default */ }
+  return "hosted";
+}
+
+// Fetch a per-sandbox path against the orchestrator that hosts that box. When
+// that tier's orchestrator isn't wired up (e.g. ec2 key unset), returns a clear
+// 503 instead of a misleading "not running" from the wrong orchestrator.
+async function orchFetchForSandbox(sandboxId, path, init = {}) {
+  const tier = await resolveTier(sandboxId);
+  const { url, key, tier: t } = orchForTier(tier);
+  if (!key) {
+    return new Response(
+      JSON.stringify({
+        error: `This box runs on the '${t}' tier, but the Manager isn't connected to that orchestrator yet `
+          + `(set MATRX_${t.toUpperCase()}_ORCHESTRATOR_API_KEY).`,
+        tier: t, not_connected: true,
+      }),
+      { status: 503, headers: { "content-type": "application/json" } },
+    );
+  }
+  const headers = { ...(init.headers || {}) };
+  headers["X-API-Key"] = key;
+  return fetch(`${url}${path}`, { ...init, headers });
+}
+
 // ── Sandbox image + orchestrator build surface ──────────────────────────────
 // Closes the 2026-04-30 incident gap: there was NO UI to see whether the
 // matrx-sandbox:* image tags exist or to rebuild them / the orchestrator —
@@ -2380,6 +2435,9 @@ app.get("/api/orchestrator-sandboxes", authMiddleware, async (_req, res) => {
     const r = await orchFetch("/sandboxes");
     if (!r.ok) return res.status(r.status).json({ error: `Orchestrator ${r.status}`, body: await r.text() });
     const data = await r.json();
+    // Cache each box's tier so per-box actions route to the right orchestrator
+    // without an extra lookup. The hosted /sandboxes returns BOTH tiers.
+    try { for (const b of (data.sandboxes || [])) rememberTier(b.sandbox_id, b.tier); } catch { /* */ }
     res.json(data);
   } catch (e) { res.status(502).json({ error: `Orchestrator unreachable: ${e.message}` }); }
 });
@@ -2395,7 +2453,7 @@ app.get("/api/orchestrator-sandboxes/:id", authMiddleware, async (req, res) => {
 app.get("/api/orchestrator-sandboxes/:id/diagnostics", authMiddleware, async (req, res) => {
   if (!ORCH_KEY) return res.status(503).json({ error: "Orchestrator API key not configured" });
   try {
-    const r = await orchFetch(`/sandboxes/${encodeURIComponent(req.params.id)}/diagnostics`);
+    const r = await orchFetchForSandbox(req.params.id, `/sandboxes/${encodeURIComponent(req.params.id)}/diagnostics`);
     res.status(r.status).type(r.headers.get("content-type") || "application/json").send(await r.text());
   } catch (e) { res.status(502).json({ error: `Orchestrator unreachable: ${e.message}` }); }
 });
@@ -2405,7 +2463,7 @@ app.get("/api/orchestrator-sandboxes/:id/logs", authMiddleware, async (req, res)
   const source = req.query.source || "all";
   const tail = req.query.tail || 200;
   try {
-    const r = await orchFetch(`/sandboxes/${encodeURIComponent(req.params.id)}/logs?source=${encodeURIComponent(source)}&tail=${tail}`);
+    const r = await orchFetchForSandbox(req.params.id, `/sandboxes/${encodeURIComponent(req.params.id)}/logs?source=${encodeURIComponent(source)}&tail=${tail}`);
     res.status(r.status).type(r.headers.get("content-type") || "text/plain").send(await r.text());
   } catch (e) { res.status(502).json({ error: `Orchestrator unreachable: ${e.message}` }); }
 });
@@ -2415,7 +2473,7 @@ app.post("/api/orchestrator-sandboxes/:id/reset", authMiddleware, async (req, re
   if (!ORCH_KEY) return res.status(503).json({ error: "Orchestrator API key not configured" });
   const wipe = req.query.wipe_volume === "true" ? "true" : "false";
   try {
-    const r = await orchFetch(`/sandboxes/${encodeURIComponent(req.params.id)}/reset?wipe_volume=${wipe}`, { method: "POST" });
+    const r = await orchFetchForSandbox(req.params.id, `/sandboxes/${encodeURIComponent(req.params.id)}/reset?wipe_volume=${wipe}`, { method: "POST" });
     res.status(r.status).type(r.headers.get("content-type") || "application/json").send(await r.text());
   } catch (e) { res.status(502).json({ error: `Orchestrator unreachable: ${e.message}` }); }
 });
@@ -2446,7 +2504,7 @@ app.delete("/api/orchestrator-sandboxes/:id", authMiddleware, requireRole("admin
   if (!ORCH_KEY) return res.status(503).json({ error: "Orchestrator API key not configured" });
   const graceful = req.query.graceful === "false" ? "false" : "true";
   try {
-    const r = await orchFetch(`/sandboxes/${encodeURIComponent(req.params.id)}?graceful=${graceful}`, { method: "DELETE" });
+    const r = await orchFetchForSandbox(req.params.id, `/sandboxes/${encodeURIComponent(req.params.id)}?graceful=${graceful}`, { method: "DELETE" });
     // 204 has no body; pass status through and surface any error text.
     res.status(r.status).type(r.headers.get("content-type") || "application/json").send(await r.text());
   } catch (e) { res.status(502).json({ error: `Orchestrator unreachable: ${e.message}` }); }
@@ -2460,7 +2518,7 @@ app.post("/api/orchestrator-sandboxes/:id/extend", authMiddleware, requireRole("
     return res.status(400).json({ error: "ttl_seconds must be a number between 60 and 86400" });
   }
   try {
-    const r = await orchFetch(`/sandboxes/${encodeURIComponent(req.params.id)}/extend`, {
+    const r = await orchFetchForSandbox(req.params.id, `/sandboxes/${encodeURIComponent(req.params.id)}/extend`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ttl_seconds: ttl }),
@@ -2474,7 +2532,7 @@ app.post("/api/orchestrator-sandboxes/:id/extend", authMiddleware, requireRole("
 app.post("/api/orchestrator-sandboxes/:id/resume", authMiddleware, requireRole("admin", "deployer"), async (req, res) => {
   if (!ORCH_KEY) return res.status(503).json({ error: "Orchestrator API key not configured" });
   try {
-    const r = await orchFetch(`/sandboxes/${encodeURIComponent(req.params.id)}/resume`, { method: "POST" });
+    const r = await orchFetchForSandbox(req.params.id, `/sandboxes/${encodeURIComponent(req.params.id)}/resume`, { method: "POST" });
     res.status(r.status).type(r.headers.get("content-type") || "application/json").send(await r.text());
   } catch (e) { res.status(502).json({ error: `Orchestrator unreachable: ${e.message}` }); }
 });
@@ -2505,7 +2563,7 @@ app.post("/api/orchestrator-sandboxes/:id/migrate", authMiddleware, requireRole(
   if (!ORCH_KEY) return res.status(503).json({ error: "Orchestrator API key not configured" });
   const q = req.query.target_image ? `?target_image=${encodeURIComponent(String(req.query.target_image))}` : "";
   try {
-    const r = await orchFetch(`/sandboxes/${encodeURIComponent(req.params.id)}/migrate${q}`, { method: "POST" });
+    const r = await orchFetchForSandbox(req.params.id, `/sandboxes/${encodeURIComponent(req.params.id)}/migrate${q}`, { method: "POST" });
     res.status(r.status).type(r.headers.get("content-type") || "application/json").send(await r.text());
   } catch (e) { res.status(502).json({ error: `Orchestrator unreachable: ${e.message}` }); }
 });
@@ -2546,7 +2604,7 @@ app.get("/api/orchestrator-sandboxes/:id/stats", authMiddleware, async (req, res
 app.get("/api/orchestrator-sandboxes/:id/agent-env", authMiddleware, requireSuperadmin, async (req, res) => {
   if (!ORCH_KEY) return res.status(503).json({ error: "Orchestrator API key not configured" });
   try {
-    const r = await orchFetch(`/sandboxes/${encodeURIComponent(req.params.id)}/agent-env`);
+    const r = await orchFetchForSandbox(req.params.id, `/sandboxes/${encodeURIComponent(req.params.id)}/agent-env`);
     res.status(r.status).type(r.headers.get("content-type") || "application/json").send(await r.text());
   } catch (e) { res.status(502).json({ error: `Orchestrator unreachable: ${e.message}` }); }
 });
@@ -2557,7 +2615,7 @@ app.get("/api/orchestrator-sandboxes/:id/fs/list", authMiddleware, async (req, r
   const path = String(req.query.path || "/home/agent");
   const depth = String(req.query.depth || "1");
   try {
-    const r = await orchFetch(`/sandboxes/${encodeURIComponent(req.params.id)}/fs/list?path=${encodeURIComponent(path)}&depth=${encodeURIComponent(depth)}`);
+    const r = await orchFetchForSandbox(req.params.id, `/sandboxes/${encodeURIComponent(req.params.id)}/fs/list?path=${encodeURIComponent(path)}&depth=${encodeURIComponent(depth)}`);
     res.status(r.status).type(r.headers.get("content-type") || "application/json").send(await r.text());
   } catch (e) { res.status(502).json({ error: `Orchestrator unreachable: ${e.message}` }); }
 });
@@ -2568,7 +2626,7 @@ app.get("/api/orchestrator-sandboxes/:id/fs/read", authMiddleware, async (req, r
   if (!path) return res.status(400).json({ error: "path query param required" });
   const encoding = req.query.encoding === "base64" ? "base64" : "utf8";
   try {
-    const r = await orchFetch(`/sandboxes/${encodeURIComponent(req.params.id)}/fs/read?path=${encodeURIComponent(path)}&encoding=${encoding}`);
+    const r = await orchFetchForSandbox(req.params.id, `/sandboxes/${encodeURIComponent(req.params.id)}/fs/read?path=${encodeURIComponent(path)}&encoding=${encoding}`);
     res.status(r.status).type(r.headers.get("content-type") || "text/plain").send(await r.text());
   } catch (e) { res.status(502).json({ error: `Orchestrator unreachable: ${e.message}` }); }
 });
