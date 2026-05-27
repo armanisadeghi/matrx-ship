@@ -3,7 +3,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import express from "express";
 import { z } from "zod";
 import { execFileSync, execSync, spawn } from "node:child_process";
-import { readFileSync, writeFileSync, readdirSync, statSync, existsSync, mkdirSync, unlinkSync } from "node:fs";
+import { readFileSync, writeFileSync, readdirSync, statSync, existsSync, mkdirSync, unlinkSync, chmodSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { cpus, totalmem, freemem, uptime as osUptime, hostname } from "node:os";
 import { randomBytes, createHash } from "node:crypto";
@@ -3410,6 +3410,88 @@ app.delete("/api/tokens/:id", authMiddleware, requireSuperadmin, async (req, res
   const removed = store.tokens.splice(idx, 1)[0];
   saveTokens(store);
   res.json({ success: true, removed: { id: removed.id, label: removed.label } });
+});
+
+// ── Secrets / environment variables (distinct from access Tokens) ───────────
+// One place to SEE and SET the environment values across the system: each app's
+// .env plus the key infra .env files (Manager, hosted orchestrator). Values are
+// masked by default; ?reveal=1 returns them (super-admin only, audited). Upsert
+// only — no delete-key via UI — and infra changes need a restart to take effect.
+function secretStores() {
+  const cfg = loadDeployments();
+  const apps = Object.entries(cfg.instances || {}).map(([n, info]) => ({
+    id: `app:${n}`, label: info.display_name || n, kind: "app", path: `${HOST_SRV}/apps/${n}/.env`,
+    note: "Recreate the app to apply.",
+  }));
+  const infra = [
+    { id: "infra:manager", label: "Server Manager", kind: "infra", path: `${HOST_SRV}/apps/server-manager/.env`, note: "Restart the Manager to apply (Deploy server can do it)." },
+    { id: "infra:orchestrator", label: "Sandbox Orchestrator (hosted)", kind: "infra", path: `${HOST_SRV}/apps/sandbox-orchestrator/.env`, note: "Restart the orchestrator to apply." },
+  ];
+  return [...infra, ...apps];
+}
+function findSecretStore(id) { return secretStores().find((s) => s.id === id); }
+function parseEnvFile(path) {
+  const out = [];
+  if (!existsSync(path)) return out;
+  for (const raw of readFileSync(path, "utf-8").split("\n")) {
+    const line = raw.trimEnd();
+    if (!line || line.trimStart().startsWith("#")) continue;
+    const i = line.indexOf("=");
+    if (i <= 0) continue;
+    out.push({ key: line.slice(0, i).trim(), value: line.slice(i + 1) });
+  }
+  return out;
+}
+function maskSecret(v) {
+  const len = (v || "").length;
+  if (len === 0) return "(empty)";
+  return `${"•".repeat(Math.min(len, 12))} · ${len} chars`;
+}
+function upsertEnvKey(path, key, value) {
+  let lines = existsSync(path) ? readFileSync(path, "utf-8").split("\n") : [];
+  let found = false;
+  lines = lines.map((l) => (l.startsWith(`${key}=`) ? (found = true, `${key}=${value}`) : l));
+  if (!found) {
+    if (lines.length && lines[lines.length - 1].trim() === "") lines.splice(lines.length - 1, 0, `${key}=${value}`);
+    else lines.push(`${key}=${value}`);
+  }
+  writeFileSync(path, lines.join("\n"));
+  try { chmodSync(path, 0o600); } catch { /* */ }
+  return found ? "updated" : "added";
+}
+
+app.get("/api/secrets", authMiddleware, requireSuperadmin, (_req, res) => {
+  const stores = secretStores().map((s) => {
+    const exists = existsSync(s.path);
+    let key_count = 0;
+    if (exists) { try { key_count = parseEnvFile(s.path).length; } catch { /* */ } }
+    return { id: s.id, label: s.label, kind: s.kind, exists, key_count, note: s.note || null };
+  });
+  res.json({ stores });
+});
+
+app.get("/api/secrets/entries", authMiddleware, requireSuperadmin, (req, res) => {
+  const s = findSecretStore(String(req.query.id || ""));
+  if (!s) return res.status(404).json({ error: "Unknown secret store" });
+  const reveal = req.query.reveal === "1";
+  if (!existsSync(s.path)) return res.json({ id: s.id, label: s.label, kind: s.kind, note: s.note || null, exists: false, entries: [] });
+  const entries = parseEnvFile(s.path).map(({ key, value }) => ({ key, value: reveal ? value : maskSecret(value), masked: !reveal, length: value.length }));
+  try { auditLog(req.tokenEntry?.label || "admin", reveal ? "secrets_reveal" : "secrets_view", s.id, { keys: entries.length }); } catch { /* */ }
+  res.json({ id: s.id, label: s.label, kind: s.kind, note: s.note || null, exists: true, entries });
+});
+
+app.put("/api/secrets/entries", authMiddleware, requireSuperadmin, (req, res) => {
+  const s = findSecretStore(String(req.query.id || ""));
+  if (!s) return res.status(404).json({ error: "Unknown secret store" });
+  const key = String(req.body?.key || "");
+  const value = req.body?.value;
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) return res.status(400).json({ error: "Invalid key (letters, digits, underscore; not starting with a digit)" });
+  if (typeof value !== "string") return res.status(400).json({ error: "value must be a string" });
+  try {
+    const action = upsertEnvKey(s.path, key, value);
+    try { auditLog(req.tokenEntry?.label || "admin", "secrets_set", s.id, { key, action }); } catch { /* */ }
+    res.json({ ok: true, id: s.id, key, action, note: s.note || null });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // ── Supabase Persistence Endpoints ──────────────────────────────────────────

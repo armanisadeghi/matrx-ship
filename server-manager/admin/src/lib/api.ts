@@ -20,6 +20,8 @@ export const API = {
   SANDBOX_ACTION: (name: string, action: string) => `/api/sandboxes/${name}/${action}`,
   TOKENS: "/api/tokens",
   TOKEN: (id: string) => `/api/tokens/${id}`,
+  SECRETS: "/api/secrets",
+  SECRET_ENTRIES: (id: string, reveal = false) => `/api/secrets/entries?id=${encodeURIComponent(id)}${reveal ? "&reveal=1" : ""}`,
   BUILD_INFO: "/api/build-info",
   BUILD_HISTORY: "/api/build-history",
   REBUILD: "/api/rebuild",

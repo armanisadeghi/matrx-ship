@@ -21,6 +21,7 @@ import {
   ScrollText,
   ShieldAlert,
   ArrowUpCircle,
+  KeySquare,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { AuthProvider, useAuth } from "@/lib/auth-context";
@@ -50,6 +51,7 @@ const navGroups: NavGroup[] = [
       { id: "terminal", href: "/terminal", label: "Terminal", icon: Terminal },
       { id: "agent-access", href: "/agent-access", label: "Agent Access", icon: KeyRound },
       { id: "hosts", href: "/hosts", label: "Hosts (EC2)", icon: Cloud },
+      { id: "secrets", href: "/secrets", label: "Secrets", icon: KeySquare },
       { id: "tokens", href: "/tokens", label: "Tokens", icon: Key },
     ],
   },
@@ -87,7 +89,7 @@ const navGroups: NavGroup[] = [
 // Nav items that expose envs, tokens, or live access — restricted to superadmins
 // (admins.level == super_admin, or break-glass operator tokens). Developer and
 // Senior Admin don't see these. The backend enforces the same gate.
-const SUPERADMIN_ONLY = new Set(["hosts", "terminal", "agent-access", "tokens"]);
+const SUPERADMIN_ONLY = new Set(["hosts", "terminal", "agent-access", "tokens", "secrets"]);
 
 function DashboardContent({ children }: { children: React.ReactNode }) {
   const { authed, loading, role, isSuperadmin, logout } = useAuth();
