@@ -33,6 +33,11 @@ RUN curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "/t
     && /tmp/aws/install \
     && rm -rf /tmp/awscliv2.zip /tmp/aws /var/lib/apt/lists/*
 
+# Session Manager plugin — lets `aws ssm start-session` open an interactive shell
+# on the EC2 boxes (the live EC2 terminal), no inbound SSH / no keys.
+RUN curl -fsSL "https://s3.amazonaws.com/session-manager-downloads/plugin/latest/ubuntu_64bit/session-manager-plugin.deb" -o /tmp/smp.deb \
+    && dpkg -i /tmp/smp.deb && rm -f /tmp/smp.deb
+
 # ── Stage 1: Build the Next.js admin UI (standalone mode) ─────────────
 FROM base AS admin-builder
 RUN corepack enable && corepack prepare pnpm@10.28.2 --activate

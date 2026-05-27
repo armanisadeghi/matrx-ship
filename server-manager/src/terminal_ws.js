@@ -19,6 +19,7 @@
 import { WebSocketServer } from "ws";
 import pty from "node-pty";
 import { parse as parseUrl } from "node:url";
+import { FLEET_HOSTS } from "./aws.js";
 
 const MAX_SESSION_MS = 4 * 60 * 60 * 1000; // hard cap: 4h per terminal.
 
@@ -56,6 +57,21 @@ function spawnForTarget(target, { cols, rows }) {
        "sh", "-c", "command -v bash >/dev/null 2>&1 && exec bash || exec sh"],
       opts,
     );
+  }
+  // ec2:<fleet-id> — a live shell on a remote EC2 box via AWS SSM StartSession
+  // (no inbound SSH, no keys). Uses the matrx-admin creds; the session-manager-
+  // plugin is baked into the image. Runs under the PTY so xterm renders it.
+  const e = /^ec2:([A-Za-z0-9_.-]+)$/.exec(target || "");
+  if (e) {
+    const h = FLEET_HOSTS[e[1]];
+    if (!h) throw new Error(`unknown EC2 host '${e[1]}'`);
+    const env = {
+      ...process.env,
+      AWS_ACCESS_KEY_ID: process.env.MATRX_ADMIN_AWS_ACCESS_KEY_ID || "",
+      AWS_SECRET_ACCESS_KEY: process.env.MATRX_ADMIN_AWS_SECRET_ACCESS_KEY || "",
+      AWS_DEFAULT_REGION: process.env.MATRX_ADMIN_AWS_REGION || "us-east-1",
+    };
+    return pty.spawn("aws", ["ssm", "start-session", "--target", h.instanceId], { ...opts, env });
   }
   throw new Error(`invalid target '${target}'`);
 }

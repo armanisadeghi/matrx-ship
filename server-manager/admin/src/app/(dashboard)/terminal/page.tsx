@@ -50,12 +50,16 @@ function TargetButton({
 export default function TerminalPage() {
   const { authed } = useAuth();
   const [containers, setContainers] = useState<Target[]>([]);
+  const [ec2, setEc2] = useState<{ id: string; role: string; online: boolean }[]>([]);
   const [target, setTarget] = useState("host");
 
   useEffect(() => {
     if (!authed) return;
     api<{ containers: Target[] }>(API.CONTAINERS)
       .then((d) => setContainers((d.containers || []).filter((c) => c.state === "running")))
+      .catch(() => {});
+    api<{ hosts?: { id: string; role: string; online: boolean }[] }>(API.HOSTS)
+      .then((d) => setEc2(d.hosts || []))
       .catch(() => {});
   }, [authed]);
 
@@ -73,7 +77,9 @@ export default function TerminalPage() {
 
   const selected = target === "host"
     ? { title: "This server (/srv)", danger: true }
-    : containers.find((c) => `container:${c.name}` === target);
+    : target.startsWith("ec2:")
+      ? { title: `${target.slice(4)} (EC2 via SSM)`, danger: true }
+      : containers.find((c) => `container:${c.name}` === target);
 
   return (
     <PageShell
@@ -89,6 +95,16 @@ export default function TerminalPage() {
                 <Server className="size-3.5" /> Servers
               </div>
               <TargetButton active={target === "host"} onClick={() => setTarget("host")} title="This server (/srv)" subtitle="the dev host" danger />
+              {ec2.map((h) => (
+                <TargetButton
+                  key={h.id}
+                  active={target === `ec2:${h.id}`}
+                  onClick={() => setTarget(`ec2:${h.id}`)}
+                  title={h.id}
+                  subtitle={`EC2 · ${h.online ? "online" : "offline"} (SSM)`}
+                  danger
+                />
+              ))}
             </div>
             {groups.map((g) => (
               <div key={g.category}>
