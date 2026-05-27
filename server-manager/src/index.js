@@ -2575,6 +2575,118 @@ app.post("/api/orchestrator-sandboxes-migrate-all", authMiddleware, requireRole(
   } catch (e) { res.status(502).json({ error: `Orchestrator unreachable: ${e.message}` }); }
 });
 
+// ── Versions / Updates: is each system on the latest, or behind? ────────────
+// One truthful place that compares what's RUNNING to the LATEST for every
+// system class, and offers a data-safe one-click update where one exists:
+//   • Ship platform — built image vs git HEAD (+ are all apps on that image)
+//   • Orchestrator (hosted) — running container image vs the latest built image
+//   • Orchestrator (EC2) — its reported version vs hosted (GHA-deployed)
+//   • Sandboxes — the zero-drift /drift count (data-safe migrate-all)
+async function buildVersionsReport() {
+  const systems = [];
+
+  // 1) Ship platform + every app deployment.
+  try {
+    const bi = getBuildInfo();
+    const latest = inspectImage("matrx-ship:latest");
+    const cfg = loadDeployments();
+    const apps = [];
+    let behind = 0;
+    for (const [name, info] of Object.entries(cfg.instances || {})) {
+      const img = exec(`docker inspect ${name} --format '{{.Image}}' 2>/dev/null`);
+      const runId = (img.output || "").replace("sha256:", "").slice(0, 12);
+      const onLatest = !!(latest.present && runId && runId === latest.id);
+      if (!onLatest) behind++;
+      apps.push({ name, display_name: info.display_name || name, on_latest: onLatest });
+    }
+    const sourceAhead = !!bi.has_changes;
+    systems.push({
+      id: "ship", name: "Ship platform — apps", kind: "ship",
+      current: `image ${bi.current_image?.id || "?"}${bi.current_image?.age ? ` · ${bi.current_image.age} old` : ""}`,
+      latest: `source @ ${bi.source?.head_commit || "?"}`,
+      status: (sourceAhead || behind > 0) ? "behind" : "ok",
+      detail: sourceAhead
+        ? `Source is ${bi.pending_commits?.length || ""} commit(s) ahead of the built image — rebuild + redeploy needed.`
+        : behind > 0
+          ? `${behind} of ${apps.length} app(s) aren't on the current image — redeploy needed.`
+          : `All ${apps.length} app(s) on the current image; image matches source.`,
+      apps, behind_count: behind,
+      update: (sourceAhead || behind > 0)
+        ? { action: "ship-rebuild", label: "Rebuild & redeploy all apps", data_safe: true,
+            note: "Rebuilds matrx-ship and recreates every app container. Each app's database is a separate volume and is left untouched." }
+        : null,
+    });
+  } catch (e) { systems.push({ id: "ship", name: "Ship platform — apps", kind: "ship", status: "error", detail: String(e.message), update: null }); }
+
+  // 2) Hosted orchestrator — running image vs latest built image.
+  try {
+    const latest = inspectImage(ORCH_IMAGE_TAG);
+    const running = exec(`docker inspect matrx-orchestrator --format '{{.Image}}' 2>/dev/null`);
+    const runId = (running.output || "").replace("sha256:", "").slice(0, 12);
+    let version = null, reachable = false;
+    try { version = (await fetchOrchestratorRoot(ORCH_URL)).version; reachable = true; } catch { /* */ }
+    const onLatest = !!(latest.present && runId && runId === latest.id);
+    systems.push({
+      id: "orch-hosted", name: "Sandbox orchestrator — hosted", kind: "orchestrator",
+      current: `${reachable ? `v${version}` : "unreachable"} · img ${runId || "?"}`,
+      latest: `img ${latest.id || "?"}`,
+      status: !reachable ? "error" : onLatest ? "ok" : "behind",
+      detail: !reachable ? "Orchestrator not responding." : onLatest
+        ? "Running the latest built image." : "A newer orchestrator image is built but not running — restart to apply.",
+      update: (reachable && !onLatest)
+        ? { action: "orch-restart", label: "Restart onto latest image", data_safe: true,
+            note: "The orchestrator holds no user data; restarting recreates it on the latest image. (To pick up new source, rebuild the orchestrator image first on the Sandboxes page.)" }
+        : null,
+    });
+  } catch (e) { systems.push({ id: "orch-hosted", name: "Sandbox orchestrator — hosted", kind: "orchestrator", status: "error", detail: String(e.message), update: null }); }
+
+  // 3) EC2 orchestrator — reported version vs hosted (GHA-deployed, no one-click here).
+  try {
+    let version = null, reachable = false, hosted = null;
+    try { version = (await fetchOrchestratorRoot(EC2_ORCH_URL)).version; reachable = true; } catch { /* */ }
+    try { hosted = (await fetchOrchestratorRoot(ORCH_URL)).version; } catch { /* */ }
+    const drifted = reachable && hosted && version && version !== hosted;
+    systems.push({
+      id: "orch-ec2", name: "Sandbox orchestrator — EC2 tier", kind: "orchestrator-ec2",
+      current: reachable ? `v${version}` : "unreachable",
+      latest: hosted ? `v${hosted} (hosted)` : "?",
+      status: !reachable ? "error" : drifted ? "behind" : "ok",
+      detail: !reachable ? "EC2 orchestrator not responding."
+        : drifted ? `Running v${version} vs hosted v${hosted}. The EC2 tier deploys via GitHub Actions on push to matrx-sandbox main.`
+        : `Running v${version}.`,
+      update: null, // GHA-deployed; surfaced for visibility, not one-click from here.
+    });
+  } catch (e) { systems.push({ id: "orch-ec2", name: "Sandbox orchestrator — EC2 tier", kind: "orchestrator-ec2", status: "error", detail: String(e.message), update: null }); }
+
+  // 4) Sandboxes — zero-drift count.
+  try {
+    const r = await orchFetch("/drift");
+    const d = await r.json();
+    const drifted = d.drifted || 0, total = d.total || 0;
+    systems.push({
+      id: "sandboxes", name: "Sandboxes — running boxes", kind: "sandboxes",
+      current: `${total} box(es) · ${drifted} on an old image`,
+      latest: "current sandbox image",
+      status: drifted > 0 ? "behind" : "ok",
+      detail: drifted > 0 ? `${drifted} of ${total} sandbox(es) are on an outdated image.`
+        : (total > 0 ? `All ${total} sandbox(es) on the current image.` : "No running sandboxes."),
+      update: drifted > 0
+        ? { action: "migrate-all", label: `Migrate ${drifted} sandbox(es) — no data loss`, data_safe: true,
+            note: "Zero-drift swap: same volume + same id, ~40s each; busy boxes are retried. No user data is lost." }
+        : null,
+    });
+  } catch (e) { systems.push({ id: "sandboxes", name: "Sandboxes — running boxes", kind: "sandboxes", status: "error", detail: `Orchestrator unreachable: ${e.message}`, update: null }); }
+
+  const overall = systems.some((s) => s.status === "behind") ? "behind"
+    : systems.some((s) => s.status === "error") ? "error" : "ok";
+  return { overall, systems, generated_at: new Date().toISOString() };
+}
+
+app.get("/api/versions", authMiddleware, async (_req, res) => {
+  try { res.json(await buildVersionsReport()); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // Migrate ONE box onto the current image (same id + volume, no data loss). Role-gated.
 app.post("/api/orchestrator-sandboxes/:id/migrate", authMiddleware, requireRole("admin", "deployer"), async (req, res) => {
   if (!ORCH_KEY) return res.status(503).json({ error: "Orchestrator API key not configured" });

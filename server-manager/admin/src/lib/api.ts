@@ -30,6 +30,7 @@ export const API = {
   BUILD_CLEANUP: "/api/build-cleanup",
   ORCH_STATUS: "/api/orchestrator-sandboxes-status",
   FLEET_HEALTH: "/api/fleet-health",
+  VERSIONS: "/api/versions",
   HOSTS: "/api/hosts",
   HOST_EXEC: (id: string) => `/api/hosts/${encodeURIComponent(id)}/exec`,
   HOST_POWER: (id: string) => `/api/hosts/${encodeURIComponent(id)}/power`,

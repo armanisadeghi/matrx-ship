@@ -20,6 +20,7 @@ import {
   KeyRound,
   ScrollText,
   ShieldAlert,
+  ArrowUpCircle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { AuthProvider, useAuth } from "@/lib/auth-context";
@@ -37,6 +38,7 @@ const navGroups: NavGroup[] = [
     label: "Fleet",
     items: [
       { id: "servers", href: "/servers", label: "Servers", icon: Server },
+      { id: "versions", href: "/versions", label: "Versions & Updates", icon: ArrowUpCircle },
       { id: "instances", href: "/instances", label: "Apps", icon: Layers },
       { id: "orchestrator-sandboxes", href: "/orchestrator-sandboxes", label: "Sandboxes", icon: Boxes },
       { id: "sandboxes", href: "/sandboxes", label: "Starter pool", icon: Terminal },
