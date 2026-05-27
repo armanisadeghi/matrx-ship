@@ -5,8 +5,8 @@ import { Database, CheckCircle2, AlertTriangle, RefreshCw, Loader2, HardDrive } 
 import { Button } from "@matrx/admin-ui/ui/button";
 import { Card, CardContent } from "@matrx/admin-ui/ui/card";
 import { Badge } from "@matrx/admin-ui/ui/badge";
-import { Table, TableHeader, TableHead, TableBody, TableRow, TableCell } from "@matrx/admin-ui/ui/table";
 import { PageShell } from "@matrx/admin-ui/components/page-shell";
+import { DataTable, type Column } from "@/components/admin/data-table";
 
 interface DbHealthResult {
   instance: string;
@@ -82,56 +82,29 @@ export function DbHealthTab({ api }: Props) {
       </div>
 
       {/* Instance table */}
-      <Card>
-        <CardContent className="p-0">
-          {health.length === 0 && !loading ? (
-            <div className="p-6 text-center text-muted-foreground text-sm">No instances found</div>
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Instance</TableHead>
-                  <TableHead>App</TableHead>
-                  <TableHead>Database</TableHead>
-                  <TableHead>Connection</TableHead>
-                  <TableHead className="hidden md:table-cell">Container</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {health.map((item) => (
-                  <TableRow key={item.instance}>
-                    <TableCell>
-                      <div className="flex items-center gap-2">
-                        {item.db_connected ? (
-                          <CheckCircle2 className="size-4 text-green-500 shrink-0" />
-                        ) : (
-                          <AlertTriangle className="size-4 text-red-500 shrink-0" />
-                        )}
-                        <div>
-                          <div className="font-medium">{item.display_name || item.instance}</div>
-                          <div className="text-xs text-muted-foreground font-mono">{item.instance}</div>
-                        </div>
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant={item.app_status === "running" ? "success" : "destructive"}>{item.app_status}</Badge>
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant={item.db_status === "running" ? "success" : "destructive"}>{item.db_status}</Badge>
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant={item.db_connected ? "success" : "destructive"}>
-                        {item.db_connected ? "Connected" : "Disconnected"}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="font-mono text-xs text-muted-foreground hidden md:table-cell">{item.db_container}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
-        </CardContent>
-      </Card>
+      <DataTable
+        rows={health}
+        getRowKey={(i) => i.instance}
+        getSearchText={(i) => `${i.display_name} ${i.instance} ${i.app_status} ${i.db_status} ${i.db_connected ? "connected" : "disconnected"}`}
+        initialSort={{ key: "name", dir: "asc" }}
+        searchPlaceholder="Filter databases…"
+        emptyMessage={loading ? "Loading…" : "No instances found."}
+        columns={[
+          {
+            key: "name", header: "Instance", sortValue: (i) => (i.display_name || i.instance).toLowerCase(),
+            render: (i) => (
+              <div className="flex items-center gap-2">
+                {i.db_connected ? <CheckCircle2 className="size-4 text-green-500 shrink-0" /> : <AlertTriangle className="size-4 text-red-500 shrink-0" />}
+                <div><div className="font-medium">{i.display_name || i.instance}</div><div className="text-xs text-muted-foreground font-mono">{i.instance}</div></div>
+              </div>
+            ),
+          },
+          { key: "app", header: "App", sortValue: (i) => i.app_status, render: (i) => <Badge variant={i.app_status === "running" ? "success" : "destructive"}>{i.app_status}</Badge> },
+          { key: "db", header: "Database", sortValue: (i) => i.db_status, render: (i) => <Badge variant={i.db_status === "running" ? "success" : "destructive"}>{i.db_status}</Badge> },
+          { key: "conn", header: "Connection", sortValue: (i) => (i.db_connected ? 1 : 0), render: (i) => <Badge variant={i.db_connected ? "success" : "destructive"}>{i.db_connected ? "Connected" : "Disconnected"}</Badge> },
+          { key: "container", header: "Container", hideBelow: "md", sortValue: (i) => i.db_container, render: (i) => <span className="font-mono text-xs text-muted-foreground">{i.db_container}</span> },
+        ] as Column<DbHealthResult>[]}
+      />
     </PageShell>
   );
 }
