@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import {
   RefreshCw, CheckCircle2, AlertTriangle, XCircle, Loader2, ArrowUpCircle,
-  ChevronDown, ChevronRight, ScrollText,
+  ChevronDown, ChevronRight, ScrollText, Undo2,
 } from "lucide-react";
 import { Button } from "@matrx/admin-ui/ui/button";
 import { Card, CardContent } from "@matrx/admin-ui/ui/card";
@@ -186,10 +186,18 @@ export default function VersionsPage() {
         );
       })}
 
-      <p className="text-xs text-muted-foreground flex items-center gap-1.5">
-        <ScrollText className="size-3.5" />
-        For live build logs, use <button className="underline" onClick={() => router.push("/builds")}>Builds</button>. EC2-tier deploys run via GitHub Actions on push.
-      </p>
+      <Card className="bg-muted/30">
+        <CardContent className="pt-4 text-xs text-muted-foreground space-y-1.5">
+          <div className="flex items-center gap-1.5">
+            <Undo2 className="size-3.5 shrink-0" />
+            <span><strong>Recover / revert:</strong> every Ship build is tagged and kept. To roll the apps back to a known-good version, go to <button className="underline" onClick={() => router.push("/builds")}>Builds</button> → pick a previous successful build → <strong>Rollback</strong> (re-tags that image and recreates the apps; databases are untouched). Sandbox migrations are zero-data-loss by design, and the orchestrator holds no data, so those are safe to redo.</span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <ScrollText className="size-3.5 shrink-0" />
+            <span>For live build logs, use <button className="underline" onClick={() => router.push("/builds")}>Builds</button>. EC2-tier deploys run via GitHub Actions on push to matrx-sandbox.</span>
+          </div>
+        </CardContent>
+      </Card>
     </PageShell>
   );
 }
