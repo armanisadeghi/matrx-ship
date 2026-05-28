@@ -22,6 +22,7 @@ import {
   ShieldAlert,
   ArrowUpCircle,
   KeySquare,
+  FileSearch,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { AuthProvider, useAuth } from "@/lib/auth-context";
@@ -60,6 +61,7 @@ const navGroups: NavGroup[] = [
     items: [
       { id: "activity", href: "/activity", label: "Activity", icon: ScrollText },
       { id: "fleet-health", href: "/fleet-health", label: "Fleet Health", icon: Activity },
+      { id: "orchestrator-logs", href: "/orchestrator-logs", label: "Orchestrator Logs", icon: FileSearch },
       { id: "system", href: "/system", label: "System", icon: Monitor },
       { id: "db-health", href: "/db-health", label: "DB Health", icon: Database },
       { id: "infrastructure", href: "/infrastructure", label: "Infrastructure", icon: Server },

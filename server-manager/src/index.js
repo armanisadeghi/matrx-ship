@@ -3097,6 +3097,51 @@ app.get("/api/orchestrator/ready", authMiddleware, async (req, res) => {
   res.status(r.ready ? 200 : 504).json({ ...r, target });
 });
 
+// Hosted orchestrator PROCESS logs (the orchestrator's own stdout/stderr).
+// Distinct from per-sandbox-container logs (those go via /sandboxes/{id}/logs).
+// This is what you need when an "auto-provision created the DB row but the
+// container failed to start" — the Docker container-startup error lives here.
+//
+// CAVEAT: logs are scoped to the CURRENT orchestrator container's lifetime.
+// A force-recreate destroys the prior container's log file. We surface
+// `container_started_at` so the caller knows the lookback window.
+app.get("/api/orchestrator/logs", authMiddleware, async (req, res) => {
+  const since = String(req.query.since || "24h"); // e.g. 1h, 30m, 7d
+  const tail = Math.min(5000, Math.max(50, Number(req.query.tail) || 1000));
+  const grep = req.query.grep ? String(req.query.grep) : null;
+  const format = req.query.format === "json" ? "json" : "text";
+
+  // When the container was created — defines the actual lookback floor.
+  const startedAt = exec(`docker inspect matrx-orchestrator --format '{{.State.StartedAt}}'`).output?.trim() || null;
+
+  // `docker compose logs --since` accepts go-style durations (e.g. "1h").
+  const cmd = `docker compose logs --no-color --since ${since} --tail ${tail} orchestrator 2>&1`;
+  const r = exec(cmd, { cwd: ORCH_COMPOSE_DIR, timeout: 30000, maxBuffer: 30 * 1024 * 1024 });
+  let text = r.output || "";
+  // Strip the "matrx-orchestrator  | " prefix that compose adds to each line,
+  // so callers can grep on the JSON payload directly.
+  text = text.split("\n").map((l) => l.replace(/^matrx-orchestrator\s+\|\s?/, "")).join("\n");
+  if (grep) {
+    try {
+      const re = new RegExp(grep, "i");
+      text = text.split("\n").filter((l) => re.test(l)).join("\n");
+    } catch (e) { return res.status(400).json({ error: `Bad grep regex: ${e.message}` }); }
+  }
+
+  if (format === "json") {
+    res.json({
+      container: "matrx-orchestrator",
+      container_started_at: startedAt,
+      since, tail, grep,
+      lines: text.split("\n").filter(Boolean),
+      truncated_note: "Logs are scoped to the current orchestrator container's lifetime. Force-recreate destroys the prior container's log file.",
+    });
+  } else {
+    const header = `# matrx-orchestrator process logs · container started ${startedAt || "?"} · since=${since} · tail=${tail}${grep ? ` · grep=/${grep}/i` : ""}\n`;
+    res.type("text/plain").send(header + text);
+  }
+});
+
 // ── Restart the orchestrator (recreate container, no rebuild) ───────────────
 app.post("/api/orchestrator/restart", authMiddleware, requireRole("admin", "deployer"), async (_req, res) => {
   const r = exec("docker compose up -d --force-recreate", { cwd: ORCH_COMPOSE_DIR, timeout: 120000 });

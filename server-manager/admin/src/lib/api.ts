@@ -52,6 +52,11 @@ export const API = {
   ORCH_PULL_REDEPLOY: "/api/orchestrator/pull-redeploy",
   ORCH_READY: (target: "hosted" | "ec2" = "hosted", waitMs = 30000) =>
     `/api/orchestrator/ready?target=${target}&wait_ms=${waitMs}`,
+  ORCH_LOGS: (since = "24h", tail = 1000, grep = "", format: "text" | "json" = "json") => {
+    const params = new URLSearchParams({ since, tail: String(tail), format });
+    if (grep) params.set("grep", grep);
+    return `/api/orchestrator/logs?${params}`;
+  },
   EC2_TRIGGER_DEPLOY: "/api/ec2/trigger-deploy",
   ORCH_BUILD_STREAM: "/api/orchestrator/build/stream",
   SANDBOX_IMAGE_BUILD_STREAM: (variant: string) => `/api/sandbox-images/build/stream?variant=${encodeURIComponent(variant)}`,
