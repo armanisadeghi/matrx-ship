@@ -64,6 +64,17 @@ export default function VersionsPage() {
         toast.info("Rebuilding + restarting the orchestrator — a minute or so…");
         await api(API.ORCH_REDEPLOY, { method: "POST" });
         toast.success("Orchestrator rebuilt and restarted.");
+      } else if (u.action === "orch-pull-redeploy") {
+        toast.info("Pulling latest + rebuilding the hosted orchestrator — a minute or so…");
+        await api(API.ORCH_PULL_REDEPLOY, { method: "POST" });
+        toast.success("Hosted orchestrator pulled latest, rebuilt, and restarted.");
+      } else if (u.action === "ec2-trigger-deploy") {
+        await api(API.EC2_TRIGGER_DEPLOY, { method: "POST" });
+        toast.success("GitHub Deploy dispatched on main — EC2 updates in ~3–5 min. Watch Builds / GitHub Actions.");
+      } else if (u.action === "sandbox-image-rebuild") {
+        toast.info("Opening Sandboxes — rebuild the image there with live logs.");
+        router.push("/orchestrator-sandboxes");
+        return;
       } else if (u.action === "ship-rebuild") {
         toast.info("Rebuilding & redeploying all apps — this can take a couple of minutes…");
         await api(API.REBUILD, { method: "POST" });

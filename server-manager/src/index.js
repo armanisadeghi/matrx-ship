@@ -2575,13 +2575,50 @@ app.post("/api/orchestrator-sandboxes-migrate-all", authMiddleware, requireRole(
   } catch (e) { res.status(502).json({ error: `Orchestrator unreachable: ${e.message}` }); }
 });
 
+// Truthful freshness for the matrx-sandbox repo, by GIT COMMIT — NOT the version
+// string (which has been reset across commits, e.g. 0.3.0 -> 0.1.2, so version
+// numbers are NOT monotonic and must never be used to judge "newer"). Compares:
+//   • origin/main HEAD sha (GitHub API)
+//   • the EC2 deploy: the latest SUCCESSFUL "Deploy" run's commit (EC2 deploys
+//     via GitHub Actions). EC2 is current when that == main HEAD.
+//   • the hosted orchestrator: the /srv clone's HEAD (it's built from there).
+// Cached 60s (this is hit by Versions + the 30s-refresh Fleet Health).
+let _sbxRepoCache = { ts: 0, data: null };
+async function getSandboxRepoState() {
+  if (_sbxRepoCache.data && Date.now() - _sbxRepoCache.ts < 60000) return _sbxRepoCache.data;
+  const repo = "armanisadeghi/matrx-sandbox";
+  const pat = process.env.GITHUB_PAT || "";
+  const s = {
+    mainSha: null, mainShort: null, hostedHead: null, hostedShort: null, hostedBehind: null,
+    deploySha: null, deployShort: null, deployWhen: null, deployUrl: null, deployFailures: 0,
+    ec2Behind: null, ghError: null,
+  };
+  const h = exec(`git -C ${SANDBOX_PROJECT} rev-parse HEAD 2>/dev/null`);
+  s.hostedHead = (h.output || "").trim() || null;
+  s.hostedShort = s.hostedHead ? s.hostedHead.slice(0, 7) : null;
+  if (pat) {
+    try {
+      const gh = async (p) => {
+        const r = await fetch(`https://api.github.com/repos/${repo}${p}`, { headers: { Authorization: `Bearer ${pat}`, Accept: "application/vnd.github+json" }, signal: AbortSignal.timeout(9000) });
+        if (!r.ok) throw new Error(`GitHub API ${r.status}`);
+        return r.json();
+      };
+      const main = await gh("/commits/main");
+      s.mainSha = main.sha; s.mainShort = (main.sha || "").slice(0, 7);
+      const runs = await gh("/actions/runs?per_page=20");
+      const deploys = (runs.workflow_runs || []).filter((r) => r.name === "Deploy");
+      const lastOk = deploys.find((r) => r.conclusion === "success");
+      if (lastOk) { s.deploySha = lastOk.head_sha; s.deployShort = (lastOk.head_sha || "").slice(0, 7); s.deployWhen = lastOk.created_at; s.deployUrl = lastOk.html_url; }
+      s.deployFailures = deploys.slice(0, 5).filter((r) => r.conclusion === "failure").length;
+      s.ec2Behind = s.mainSha && s.deploySha ? s.deploySha !== s.mainSha : null;
+    } catch (e) { s.ghError = e.message; }
+  }
+  s.hostedBehind = s.mainSha && s.hostedHead ? s.hostedHead !== s.mainSha : null;
+  _sbxRepoCache = { ts: Date.now(), data: s };
+  return s;
+}
+
 // ── Versions / Updates: is each system on the latest, or behind? ────────────
-// One truthful place that compares what's RUNNING to the LATEST for every
-// system class, and offers a data-safe one-click update where one exists:
-//   • Ship platform — built image vs git HEAD (+ are all apps on that image)
-//   • Orchestrator (hosted) — running container image vs the latest built image
-//   • Orchestrator (EC2) — its reported version vs hosted (GHA-deployed)
-//   • Sandboxes — the zero-drift /drift count (data-safe migrate-all)
 async function buildVersionsReport() {
   const systems = [];
 
@@ -2637,43 +2674,54 @@ async function buildVersionsReport() {
     });
   } catch (e) { systems.push({ id: "ship", name: "App portals (matrx-ship image)", kind: "ship", status: "error", detail: String(e.message), update: null }); }
 
-  // 2) Hosted orchestrator — running image vs latest built image.
+  const repo = await getSandboxRepoState();
+
+  // 2) Hosted orchestrator — is the /srv clone it's built from at origin/main?
+  //    (By git commit, NOT version string — see getSandboxRepoState.)
   try {
-    const latest = inspectImage(ORCH_IMAGE_TAG);
-    const running = exec(`docker inspect matrx-orchestrator --format '{{.Image}}' 2>/dev/null`);
-    const runId = (running.output || "").replace("sha256:", "").slice(0, 12);
-    let version = null, reachable = false;
-    try { version = (await fetchOrchestratorRoot(ORCH_URL)).version; reachable = true; } catch { /* */ }
-    const onLatest = !!(latest.present && runId && runId === latest.id);
+    let reachable = false;
+    try { await fetchOrchestratorRoot(ORCH_URL); reachable = true; } catch { /* */ }
+    const behind = repo.hostedBehind === true;
+    const status = !reachable ? "error" : repo.hostedBehind == null ? "unknown" : behind ? "behind" : "ok";
     systems.push({
       id: "orch-hosted", name: "Sandbox orchestrator — hosted", kind: "orchestrator",
-      current: `${reachable ? `v${version}` : "unreachable"} · img ${runId || "?"}`,
-      latest: `img ${latest.id || "?"}`,
-      status: !reachable ? "error" : onLatest ? "ok" : "behind",
-      detail: !reachable ? "Orchestrator not responding." : onLatest
-        ? "Running the latest built image." : "A newer orchestrator image is built but not running — restart to apply.",
-      update: (reachable && !onLatest)
-        ? { action: "orch-redeploy", label: "Rebuild + restart orchestrator", data_safe: true,
-            note: "Rebuilds the orchestrator image from source and recreates the container. No user data lives on the orchestrator, so this is safe." }
+      current: `code @ ${repo.hostedShort || "?"}`,
+      latest: `origin/main @ ${repo.mainShort || "?"}`,
+      status,
+      detail: !reachable ? "Orchestrator not responding."
+        : repo.hostedBehind == null ? "Couldn't compare to origin (GitHub check unavailable)."
+        : behind ? "The /srv source it's built from is behind origin/main — pull latest, rebuild, and restart."
+        : "Built from origin/main — current.",
+      update: behind
+        ? { action: "orch-pull-redeploy", label: "Pull latest + rebuild + restart", data_safe: true,
+            note: "git pull the /srv matrx-sandbox clone, rebuild the orchestrator image, recreate the container. No user data on the orchestrator." }
         : null,
     });
   } catch (e) { systems.push({ id: "orch-hosted", name: "Sandbox orchestrator — hosted", kind: "orchestrator", status: "error", detail: String(e.message), update: null }); }
 
-  // 3) EC2 orchestrator — reported version vs hosted (GHA-deployed, no one-click here).
+  // 3) EC2 orchestrator — deploys via GitHub Actions. Current when the latest
+  //    SUCCESSFUL Deploy run shipped origin/main HEAD (by commit, not version).
   try {
-    let version = null, reachable = false, hosted = null;
-    try { version = (await fetchOrchestratorRoot(EC2_ORCH_URL)).version; reachable = true; } catch { /* */ }
-    try { hosted = (await fetchOrchestratorRoot(ORCH_URL)).version; } catch { /* */ }
-    const drifted = reachable && hosted && version && version !== hosted;
+    let reachable = false; let runningVer = null;
+    try { runningVer = (await fetchOrchestratorRoot(EC2_ORCH_URL)).version; reachable = true; } catch { /* */ }
+    const behind = repo.ec2Behind === true;
+    const status = !reachable ? "error" : repo.ec2Behind == null ? "unknown" : behind ? "behind" : "ok";
+    const when = repo.deployWhen ? new Date(repo.deployWhen).toLocaleString() : "?";
     systems.push({
       id: "orch-ec2", name: "Sandbox orchestrator — EC2 tier", kind: "orchestrator-ec2",
-      current: reachable ? `v${version}` : "unreachable",
-      latest: hosted ? `v${hosted} (hosted)` : "?",
-      status: !reachable ? "error" : drifted ? "behind" : "ok",
-      detail: !reachable ? "EC2 orchestrator not responding."
-        : drifted ? `Running v${version} vs hosted v${hosted}. The EC2 tier deploys via GitHub Actions on push to matrx-sandbox main.`
-        : `Running v${version}.`,
-      update: null, // GHA-deployed; surfaced for visibility, not one-click from here.
+      current: `deployed @ ${repo.deployShort || "?"}${runningVer ? ` (reports v${runningVer})` : ""}`,
+      latest: `origin/main @ ${repo.mainShort || "?"}`,
+      status,
+      detail: (!reachable ? "EC2 orchestrator not responding. " : "")
+        + (repo.ec2Behind == null ? "Couldn't compare to origin (GitHub check unavailable)."
+          : behind ? `The latest deploy (${repo.deployShort}, ${when}) is behind origin/main (${repo.mainShort}) — trigger a deploy.`
+          : `Up to date — latest GitHub Actions deploy shipped origin/main (${repo.deployShort}) on ${when}.`)
+        + (repo.deployFailures ? ` ⚠ ${repo.deployFailures} of the last 5 deploys failed.` : "")
+        + " (Note: the version NUMBER it reports is not a freshness signal — it's been reset across commits.)",
+      update: behind
+        ? { action: "ec2-trigger-deploy", label: "Trigger GitHub deploy", data_safe: true,
+            note: "Dispatches the matrx-sandbox 'Deploy' workflow on main, which rebuilds + redeploys the EC2 orchestrator via SSM." }
+        : null,
     });
   } catch (e) { systems.push({ id: "orch-ec2", name: "Sandbox orchestrator — EC2 tier", kind: "orchestrator-ec2", status: "error", detail: String(e.message), update: null }); }
 
@@ -2696,9 +2744,33 @@ async function buildVersionsReport() {
     });
   } catch (e) { systems.push({ id: "sandboxes", name: "Sandboxes — running boxes", kind: "sandboxes", status: "error", detail: `Orchestrator unreachable: ${e.message}`, update: null }); }
 
+  // 5) Sandbox images — the templates the orchestrator spawns from. A missing
+  //    REQUIRED image means spawning that template fails. Rebuild is heavy +
+  //    streamed, so the action routes to the Sandboxes page (live build logs).
+  try {
+    const variants = Object.entries(SANDBOX_IMAGE_VARIANTS).map(([variant, spec]) => ({ variant, required: spec.required === true, ...inspectImage(spec.tag) }));
+    const missingRequired = variants.filter((v) => v.required && !v.present).map((v) => v.variant);
+    const present = variants.filter((v) => v.present).length;
+    systems.push({
+      id: "sandbox-images", name: "Sandbox images (templates)", kind: "sandbox-images",
+      current: `${present}/${variants.length} built`,
+      latest: `${variants.filter((v) => v.required).length} required`,
+      status: missingRequired.length ? "behind" : "ok",
+      detail: missingRequired.length
+        ? `Missing required image(s): ${missingRequired.join(", ")}. Sandboxes that spawn from these will fail until rebuilt.`
+        : `All required images present (${variants.filter((v) => v.present).map((v) => v.variant).join(", ")}).`,
+      images: variants.map((v) => ({ variant: v.variant, required: v.required, present: v.present })),
+      missing_required: missingRequired,
+      update: missingRequired.length
+        ? { action: "sandbox-image-rebuild", label: `Rebuild image(s): ${missingRequired.join(", ")}`, data_safe: true,
+            note: "Opens the Sandboxes page where each image rebuilds with live logs (the aidream image is large and builds on top of core)." }
+        : null,
+    });
+  } catch (e) { systems.push({ id: "sandbox-images", name: "Sandbox images (templates)", kind: "sandbox-images", status: "error", detail: String(e.message), update: null }); }
+
   const overall = systems.some((s) => s.status === "behind") ? "behind"
     : systems.some((s) => s.status === "error") ? "error" : "ok";
-  return { overall, systems, generated_at: new Date().toISOString() };
+  return { overall, systems, generated_at: new Date().toISOString(), repo };
 }
 
 app.get("/api/versions", authMiddleware, async (_req, res) => {
@@ -2820,35 +2892,39 @@ async function fetchOrchestratorRoot(url) {
 }
 
 async function checkOrchestratorDrift() {
+  // Freshness is judged by GIT COMMIT vs origin/main — NOT the version string
+  // (which has been reset across commits and is therefore meaningless for
+  // "newer/older"). See getSandboxRepoState.
   let hosted, ec2, hErr, eErr;
   try { hosted = await fetchOrchestratorRoot(ORCH_URL); } catch (e) { hErr = e.message; }
   try { ec2 = await fetchOrchestratorRoot(EC2_ORCH_URL); } catch (e) { eErr = e.message; }
-  if (hErr) return { id: "orchestrator-drift", label: "Orchestrator code/config drift", status: "critical", detail: `Hosted orchestrator unreachable: ${hErr}`, hosted, ec2 };
-  if (eErr) return { id: "orchestrator-drift", label: "Orchestrator code/config drift", status: "warning", detail: `EC2 orchestrator unreachable (${eErr}) — can't compare; it may be down or the IP moved.`, hosted, ec2 };
-  // Real code drift between the two orchestrators — the only CRITICAL here
-  // (it means one tier is running a different build). The banner shows criticals.
-  const critical = [];
-  if (hosted.version !== ec2.version) {
-    critical.push(`version mismatch (hosted ${hosted.version} vs ec2 ${ec2.version}) — redeploy the lagging tier`);
-  }
+  const repo = await getSandboxRepoState();
+  if (hErr) return { id: "orchestrator-drift", label: "Orchestrator freshness", status: "critical", detail: `Hosted orchestrator unreachable: ${hErr}`, hosted, ec2, repo };
 
-  // AI Dream secret passthrough is a host-CONFIG difference, NOT a build
-  // difference (versions are compared above). It only affects the EC2
-  // "AI Dream baked-in" (aidream-template) sandboxes — slim sandboxes and the
-  // co-located AI Dream backend are unaffected. So it's a WARNING (visible on
-  // the Fleet Health page) and deliberately NOT critical, so it doesn't raise
-  // the global banner over a known, accepted gap. (To actually run aidream
-  // boxes on EC2, the host needs the populated aidream .env.)
+  const critical = [];
   const warnings = [];
-  if (ec2.passthrough_configured === 0) {
-    warnings.push(`EC2 has no AI Dream secrets loaded — the "AI Dream baked-in" (aidream-template) sandboxes on the EC2 tier can't run yet; slim sandboxes and the co-located AI Dream backend are unaffected`);
-  } else if (hosted.passthrough_total !== ec2.passthrough_total) {
-    warnings.push(`AI Dream secret list differs between hosts (hosted ${hosted.passthrough_total} vs ec2 ${ec2.passthrough_total}) — a host-config difference, not a build difference`);
+
+  // Hosted: built from the /srv clone — flag if that's behind origin/main.
+  if (repo.hostedBehind === true) {
+    warnings.push(`Hosted orchestrator is built from a /srv clone that is behind origin/main (${repo.hostedShort} vs ${repo.mainShort}) — pull + rebuild on the Versions page.`);
+  }
+  // EC2: GHA-deployed — flag if the last successful deploy isn't origin/main.
+  if (eErr) {
+    warnings.push(`EC2 orchestrator unreachable (${eErr}).`);
+  } else if (repo.ec2Behind === true) {
+    warnings.push(`EC2's last successful deploy (${repo.deployShort}) is behind origin/main (${repo.mainShort}) — trigger a deploy.`);
+  }
+  if (repo.deployFailures) {
+    warnings.push(`${repo.deployFailures} of the last 5 matrx-sandbox deploys failed.`);
+  }
+  // AI Dream secret passthrough on EC2 (known, accepted gap) — warning only.
+  if (!eErr && ec2 && ec2.passthrough_configured === 0) {
+    warnings.push(`EC2 has no AI Dream secrets loaded — only the EC2 "AI Dream baked-in" sandboxes are affected; slim + the co-located backend are fine.`);
   }
 
   const status = critical.length ? "critical" : warnings.length ? "warning" : "ok";
-  const detail = [...critical, ...warnings].join("; ") || "Hosted and EC2 orchestrators match.";
-  return { id: "orchestrator-drift", label: "Orchestrator code/config drift", status, detail, hosted, ec2 };
+  const detail = [...critical, ...warnings].join("; ") || "Orchestrators are on origin/main. (Version numbers reported by each tier are not freshness signals.)";
+  return { id: "orchestrator-drift", label: "Orchestrator freshness", status, detail, hosted, ec2, repo };
 }
 
 function checkSandboxImages() {
@@ -2915,6 +2991,37 @@ app.post("/api/orchestrator/redeploy", authMiddleware, requireSuperadmin, async 
   if (!build.success) return res.status(500).json({ success: false, step: "build", error: build.error || build.output });
   const recreate = exec("docker compose up -d --force-recreate", { cwd: ORCH_COMPOSE_DIR, timeout: 120000 });
   res.status(recreate.success ? 200 : 500).json({ success: recreate.success, step: recreate.success ? "done" : "recreate", output: recreate.output || recreate.error });
+});
+
+// Pull the /srv matrx-sandbox clone to origin/main, then rebuild + recreate the
+// hosted orchestrator. Fixes "hosted source behind origin". superadmin.
+app.post("/api/orchestrator/pull-redeploy", authMiddleware, requireSuperadmin, async (req, res) => {
+  const pull = exec(`git -C ${SANDBOX_PROJECT} fetch origin main && git -C ${SANDBOX_PROJECT} reset --hard origin/main`, { timeout: 120000 });
+  if (!pull.success) return res.status(500).json({ success: false, step: "git-pull", error: pull.error || pull.output });
+  _sbxRepoCache = { ts: 0, data: null };
+  const context = join(SANDBOX_PROJECT, "orchestrator");
+  const build = exec(`docker build -t ${ORCH_IMAGE_TAG} ${context}`, { cwd: context, timeout: 300000 });
+  if (!build.success) return res.status(500).json({ success: false, step: "build", error: build.error || build.output });
+  const recreate = exec("docker compose up -d --force-recreate", { cwd: ORCH_COMPOSE_DIR, timeout: 120000 });
+  try { auditLog(req.tokenEntry?.label || "manager", "orch_pull_redeploy", "hosted", {}); } catch { /* */ }
+  res.status(recreate.success ? 200 : 500).json({ success: recreate.success, step: recreate.success ? "done" : "recreate", pulled: pull.output, output: recreate.output || recreate.error });
+});
+
+// Trigger the matrx-sandbox 'Deploy' GitHub Actions workflow on main (redeploys
+// the EC2 orchestrator via SSM). superadmin.
+app.post("/api/ec2/trigger-deploy", authMiddleware, requireSuperadmin, async (req, res) => {
+  const pat = process.env.GITHUB_PAT || "";
+  if (!pat) return res.status(503).json({ error: "GITHUB_PAT not configured on the Manager" });
+  try {
+    const r = await fetch("https://api.github.com/repos/armanisadeghi/matrx-sandbox/actions/workflows/deploy.yml/dispatches", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${pat}`, Accept: "application/vnd.github+json", "Content-Type": "application/json" },
+      body: JSON.stringify({ ref: "main" }),
+    });
+    if (r.status !== 204) { const t = await r.text(); return res.status(502).json({ error: `GitHub dispatch failed: ${r.status} ${t.slice(0, 200)}` }); }
+    try { auditLog(req.tokenEntry?.label || "manager", "ec2_trigger_deploy", "matrx-sandbox", {}); } catch { /* */ }
+    res.json({ ok: true, message: "Deploy workflow dispatched on main. Watch GitHub Actions; the EC2 orchestrator updates in ~3-5 min." });
+  } catch (e) { res.status(502).json({ error: e.message }); }
 });
 
 // ── SSE helper for streamed builds (mirrors /api/rebuild/stream) ────────────
