@@ -26,6 +26,7 @@ export const API = {
   BUILD_INFO: "/api/build-info",
   BUILD_HISTORY: "/api/build-history",
   REBUILD: "/api/rebuild",
+  REBUILD_STALE_ONLY: "/api/rebuild/stale-only",
   REBUILD_STREAM: "/api/rebuild/stream",
   ROLLBACK: "/api/rollback",
   SELF_REBUILD: "/api/self-rebuild",
@@ -49,6 +50,8 @@ export const API = {
   ORCH_RESTART: "/api/orchestrator/restart",
   ORCH_REDEPLOY: "/api/orchestrator/redeploy",
   ORCH_PULL_REDEPLOY: "/api/orchestrator/pull-redeploy",
+  ORCH_READY: (target: "hosted" | "ec2" = "hosted", waitMs = 30000) =>
+    `/api/orchestrator/ready?target=${target}&wait_ms=${waitMs}`,
   EC2_TRIGGER_DEPLOY: "/api/ec2/trigger-deploy",
   ORCH_BUILD_STREAM: "/api/orchestrator/build/stream",
   SANDBOX_IMAGE_BUILD_STREAM: (variant: string) => `/api/sandbox-images/build/stream?variant=${encodeURIComponent(variant)}`,

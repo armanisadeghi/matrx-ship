@@ -14,6 +14,7 @@ import { PageShell } from "@matrx/admin-ui/components/page-shell";
 import { useAuth } from "@/lib/auth-context";
 import { api, API, ApiError } from "@/lib/api";
 import { CopyControls } from "@/components/admin/copy-controls";
+import { useConfirm } from "@matrx/admin-ui/components/confirm-dialog";
 
 interface AppRow { name: string; display_name: string; on_latest: boolean }
 interface Update { action: string; label: string; data_safe: boolean; note?: string }
@@ -36,6 +37,7 @@ function StatusBadge({ status }: { status: string }) {
 export default function VersionsPage() {
   const { authed, isSuperadmin } = useAuth();
   const router = useRouter();
+  const ask = useConfirm();
   const [data, setData] = useState<VersionsResp | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -55,6 +57,8 @@ export default function VersionsPage() {
   async function runUpdate(sys: SystemRow) {
     if (!sys.update || busy) return;
     const u = sys.update;
+    const confirmed = await confirmAction(sys, u);
+    if (!confirmed) return;
     setBusy(sys.id);
     try {
       if (u.action === "migrate-all") {
@@ -76,9 +80,14 @@ export default function VersionsPage() {
         router.push("/orchestrator-sandboxes");
         return;
       } else if (u.action === "ship-rebuild") {
-        toast.info("Rebuilding & redeploying all apps — this can take a couple of minutes…");
+        toast.info("Rebuilding the matrx-ship image and recreating every app — this can take a couple of minutes…");
         await api(API.REBUILD, { method: "POST" });
-        toast.success("Ship rebuilt and all apps redeployed.");
+        toast.success("matrx-ship image rebuilt and all apps redeployed onto it.");
+      } else if (u.action === "ship-redeploy-stale") {
+        toast.info("Recreating stale app(s) onto the current image…");
+        const r = await api<{ instances_recreated?: string[]; failed?: string[] }>(API.REBUILD_STALE_ONLY, { method: "POST" });
+        const okCount = (r.instances_recreated?.length ?? 0) - (r.failed?.length ?? 0);
+        toast.success(`Redeployed ${okCount} app(s)${r.failed?.length ? `; ${r.failed.length} failed` : ""}.`);
       }
       await load();
     } catch (e) {
@@ -88,8 +97,25 @@ export default function VersionsPage() {
     }
   }
 
+  async function confirmAction(sys: SystemRow, u: Update): Promise<boolean> {
+    const variant: "warning" | "default" = u.action === "ship-rebuild" || u.action === "orch-pull-redeploy" || u.action === "orch-redeploy" ? "warning" : "default";
+    return ask({
+      title: u.label,
+      description: `${sys.name} — ${sys.detail}`,
+      variant,
+      confirmLabel: u.label,
+      children: u.note ? <div className="bg-muted/40 rounded px-3 py-2">{u.note}{u.data_safe && <div className="text-xs text-success mt-1">✓ no data loss</div>}</div> : undefined,
+    });
+  }
+
   async function redeployApp(name: string) {
     if (appBusy || busy) return;
+    const ok = await ask({
+      title: `Redeploy ${name}?`,
+      description: "Recreates the app container onto matrx-ship:latest. Brief downtime; the per-app DB volume is untouched.",
+      confirmLabel: "Redeploy",
+    });
+    if (!ok) return;
     setAppBusy(name);
     try {
       toast.info(`Redeploying ${name} onto the current image…`);

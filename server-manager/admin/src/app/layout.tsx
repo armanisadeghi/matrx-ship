@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { ThemeProvider } from "@matrx/admin-ui/components/theme-provider";
+import { ConfirmProvider } from "@matrx/admin-ui/components/confirm-dialog";
 import { Toaster } from "@matrx/admin-ui/ui/sonner";
 import "./globals.css";
 
@@ -19,8 +20,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="en" suppressHydrationWarning>
       <body className="antialiased">
         <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
-          {children}
-          <Toaster position="bottom-right" richColors />
+          <ConfirmProvider>
+            {children}
+            <Toaster position="bottom-right" richColors />
+          </ConfirmProvider>
         </ThemeProvider>
       </body>
     </html>

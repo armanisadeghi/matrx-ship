@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
+import { toast } from "sonner";
 import { RefreshCw, ExternalLink, Power, AlertTriangle, Hammer, Terminal, Loader2, CheckCircle2, Plus } from "lucide-react";
 import { Button } from "@matrx/admin-ui/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@matrx/admin-ui/ui/card";
@@ -9,6 +10,7 @@ import { Badge } from "@matrx/admin-ui/ui/badge";
 import { Input } from "@matrx/admin-ui/ui/input";
 import { Table, TableHeader, TableHead, TableBody, TableRow, TableCell } from "@matrx/admin-ui/ui/table";
 import { PageShell } from "@matrx/admin-ui/components/page-shell";
+import { useConfirm } from "@matrx/admin-ui/components/confirm-dialog";
 import { useAuth } from "@/lib/auth-context";
 import { api, API, ApiError } from "@/lib/api";
 
@@ -113,6 +115,13 @@ function fmtSize(bytes?: number | null): string {
 export default function OrchestratorSandboxesPage() {
   const router = useRouter();
   const { authed } = useAuth();
+  const ask = useConfirm();
+  // While a rebuild/restart is in flight (and during the short post-recreate
+  // window before the orchestrator's `/` answers again), we SUPPRESS the
+  // "Cannot reach orchestrator" error card. Otherwise the rebuild succeeds,
+  // the next poll catches Traefik's 404 page during container boot, and the
+  // page splashes red despite everything working. See `runBuild` + `restartOrchestrator`.
+  const [suppressError, setSuppressError] = useState(false);
   const [sandboxes, setSandboxes] = useState<OrchSandbox[]>([]);
   const [status, setStatus] = useState<OrchStatus | null>(null);
   const [images, setImages] = useState<ImageHealth | null>(null);
@@ -156,26 +165,28 @@ export default function OrchestratorSandboxesPage() {
 
   const handleMigrateAll = useCallback(async () => {
     if (!drift || drift.drifted === 0) return;
-    if (!confirm(
-      `Migrate ${drift.drifted} drifted sandbox(es) to the current image?\n\n` +
-      `The swap preserves each box's per-user volume — no data loss. Busy boxes ` +
-      `defer to the next sweep; calls during a swap transparently retry.`
-    )) return;
+    const ok = await ask({
+      title: `Migrate ${drift.drifted} drifted sandbox(es)?`,
+      description: "Swaps each container onto the current image. The per-user volume is preserved — no data loss. Busy boxes defer to the next sweep; calls during a swap transparently retry.",
+      confirmLabel: `Migrate ${drift.drifted}`,
+    });
+    if (!ok) return;
     setMigrateBusy(true);
     try {
       await api(API.ORCH_SANDBOXES_MIGRATE_ALL, { method: "POST" });
+      toast.success("Migration started.");
       setTimeout(load, 2500);
     } catch (e) {
-      alert(`Migrate-all failed: ${e instanceof Error ? e.message : String(e)}`);
+      toast.error(`Migrate-all failed: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setMigrateBusy(false);
     }
-  }, [drift, load]);
+  }, [drift, load, ask]);
 
   const handleCreate = useCallback(async () => {
     const ttl = Math.round(Number(cTtlMin) * 60);
-    if (!/^[0-9a-f-]{36}$/i.test(cUserId.trim())) { alert("Enter a valid user UUID."); return; }
-    if (!Number.isFinite(ttl) || ttl < 60 || ttl > 86400) { alert("TTL must be 1–1440 minutes."); return; }
+    if (!/^[0-9a-f-]{36}$/i.test(cUserId.trim())) { toast.error("Enter a valid user UUID."); return; }
+    if (!Number.isFinite(ttl) || ttl < 60 || ttl > 86400) { toast.error("TTL must be 1–1440 minutes."); return; }
     setCreating(true);
     try {
       const sb = await api<{ sandbox_id?: string }>(API.ORCH_SANDBOXES, {
@@ -187,32 +198,57 @@ export default function OrchestratorSandboxesPage() {
       if (sb?.sandbox_id) router.push(`/orchestrator-sandboxes/${sb.sandbox_id}`);
       else load();
     } catch (e) {
-      alert(`Create failed: ${e instanceof Error ? e.message : String(e)}`);
+      toast.error(`Create failed: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setCreating(false);
     }
   }, [cUserId, cTemplate, cTtlMin, router, load]);
 
   const restartOrchestrator = useCallback(async () => {
-    if (!confirm("Restart the orchestrator? It recreates the container (brief blip); running sandbox containers are untouched and reconciled on boot.")) {
-      return;
-    }
+    const ok = await ask({
+      title: "Restart the orchestrator?",
+      description: "Recreates the orchestrator container. Brief blip; running sandbox containers are untouched and reconciled on boot.",
+      confirmLabel: "Restart",
+      variant: "warning",
+    });
+    if (!ok) return;
     setRestartBusy(true);
+    setSuppressError(true);
     try {
       await api(API.ORCH_RESTART, { method: "POST" });
-      setTimeout(load, 3000);
+      // Backend already waits for `/` to answer 200 before returning; one more
+      // probe to be safe before we re-poll the rest of the page.
+      try { await api(API.ORCH_READY("hosted", 20000)); } catch { /* */ }
+      toast.success("Orchestrator restarted.");
+      await load();
     } catch (e) {
-      alert(`Restart failed: ${e instanceof Error ? e.message : String(e)}`);
+      toast.error(`Restart failed: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setRestartBusy(false);
+      setSuppressError(false);
     }
-  }, [load]);
+  }, [load, ask]);
 
   // Stream an SSE build (sandbox image variant or orchestrator image) into the
   // log viewer. Mirrors the Builds tab's fetch+getReader consumer.
   const runBuild = useCallback(async (label: string, url: string, confirmMsg?: string) => {
     if (building) return;
-    if (confirmMsg && !confirm(confirmMsg)) return;
+    if (confirmMsg) {
+      const ok = await ask({
+        title: label,
+        description: confirmMsg,
+        confirmLabel: "Rebuild",
+        variant: "warning",
+      });
+      if (!ok) return;
+    }
+    // Whenever we touch the orchestrator container, suppress the "Cannot reach
+    // orchestrator" card — the page polls every 5s and would otherwise flash
+    // red during the brief Traefik-404 window between `force-recreate` and the
+    // new orchestrator answering /. The suppression is cleared in `finally`
+    // after we've waited for `/api/orchestrator/ready` to return 200.
+    const recreatesOrch = url.includes("/orchestrator/build") || url.includes("/orchestrator/restart") || url.includes("/orchestrator/redeploy");
+    if (recreatesOrch) setSuppressError(true);
     setBuilding(label);
     setBuildPhase("starting");
     setBuildLogs([`── Starting ${label} ──`]);
@@ -252,9 +288,19 @@ export default function OrchestratorSandboxesPage() {
       setBuildLogs((p) => [...p, `✗ ${e instanceof Error ? e.message : String(e)}`]);
     } finally {
       setBuilding(null);
-      setTimeout(load, 2000);
+      if (recreatesOrch) {
+        // Wait for the orchestrator's `/` to answer before re-polling and
+        // clearing the suppression. If it never comes back, surface that
+        // honestly via the next poll's error (suppression is time-bounded).
+        try { await api(API.ORCH_READY("hosted", 30000)); toast.success("Orchestrator is back up."); } catch { /* */ }
+        setSuppressError(false);
+      }
+      // Refresh the page state now that the rebuild is complete (and, when
+      // applicable, the orchestrator has answered ready). Was a 2s sleep —
+      // load it immediately so the user sees the new status instead of stale.
+      load();
     }
-  }, [building, load]);
+  }, [building, load, ask]);
 
   useEffect(() => {
     if (!authed) return;
@@ -432,7 +478,7 @@ export default function OrchestratorSandboxesPage() {
         </Card>
       )}
 
-      {error && (
+      {error && !suppressError && (
         <Card className="border-destructive/40">
           <CardContent className="pt-6 text-sm">
             <div className="font-medium text-destructive">Cannot reach orchestrator</div>

@@ -7,6 +7,8 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@matr
 import { Badge } from "@matrx/admin-ui/ui/badge";
 import { Input } from "@matrx/admin-ui/ui/input";
 import { PageShell } from "@matrx/admin-ui/components/page-shell";
+import { useConfirm } from "@matrx/admin-ui/components/confirm-dialog";
+import { toast } from "sonner";
 import { useAuth } from "@/lib/auth-context";
 import { api, API, ApiError } from "@/lib/api";
 
@@ -30,6 +32,7 @@ export default function HostsPage() {
   const { authed, role } = useAuth();
   const canExec = role === "admin" || role === "deployer";
   const canPower = role === "admin";
+  const ask = useConfirm();
 
   const [data, setData] = useState<HostsResp | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -75,13 +78,20 @@ export default function HostsPage() {
 
   async function power(id: string, action: "start" | "stop" | "reboot") {
     if (busy) return;
-    if (!confirm(`${action.toUpperCase()} host ${id}? This affects the live EC2 instance.`)) return;
+    const ok = await ask({
+      title: `${action.toUpperCase()} host ${id}?`,
+      description: `This affects the live EC2 instance${action === "stop" ? " — running workloads will be interrupted" : action === "reboot" ? " — brief downtime" : ""}.`,
+      variant: action === "stop" || action === "reboot" ? "warning" : "default",
+      confirmLabel: action.toUpperCase(),
+    });
+    if (!ok) return;
     setBusy(`${id}:power`);
     try {
       await api(API.HOST_POWER(id), { method: "POST", body: JSON.stringify({ action }) });
+      toast.success(`Host ${id}: ${action} dispatched.`);
       setTimeout(load, 3000);
     } catch (e) {
-      alert(`Power ${action} failed: ${e instanceof Error ? e.message : String(e)}`);
+      toast.error(`Power ${action} failed: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setBusy(null);
     }

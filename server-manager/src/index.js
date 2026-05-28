@@ -1659,6 +1659,33 @@ app.post("/api/rebuild", authMiddleware, requireRole("admin", "deployer"), async
   res.status(result.success ? 200 : 500).json(result);
 });
 
+// Redeploy ONLY app containers that aren't on matrx-ship:latest. No image
+// rebuild — just recreate the lagging ones onto the current image. Backs the
+// Versions "Redeploy N stale app(s)" button.
+app.post("/api/rebuild/stale-only", authMiddleware, requireRole("admin", "deployer"), async (req, res) => {
+  const latest = inspectImage("matrx-ship:latest");
+  if (!latest.present) return res.status(409).json({ error: "matrx-ship:latest image is not present — rebuild the image first." });
+  const cfg = loadDeployments();
+  const stale = [];
+  for (const [n] of Object.entries(cfg.instances || {})) {
+    const img = exec(`docker inspect ${n} --format '{{.Image}}' 2>/dev/null`);
+    const runId = (img.output || "").replace("sha256:", "").slice(0, 12);
+    if (!runId || runId !== latest.id) stale.push(n);
+  }
+  if (stale.length === 0) return res.json({ success: true, message: "All apps already on the current image — nothing to do.", instances_recreated: [] });
+  const results = {};
+  for (const n of stale) {
+    results[n] = exec("docker compose up -d --force-recreate app", { cwd: join(APPS_DIR, n), timeout: 60000 });
+  }
+  const failed = Object.entries(results).filter(([, r]) => !r.success).map(([k]) => k);
+  res.status(failed.length ? 500 : 200).json({
+    success: failed.length === 0,
+    instances_recreated: stale,
+    failed,
+    results,
+  });
+});
+
 // Streaming rebuild — sends real-time build logs via Server-Sent Events
 app.post("/api/rebuild/stream", authMiddleware, requireRole("admin", "deployer"), async (req, res) => {
   const name = req.query.name || req.body?.name || undefined;
@@ -2641,6 +2668,16 @@ async function buildVersionsReport() {
   } catch { /* */ }
 
   // 1) Ship platform + every app deployment.
+  //
+  //    Two distinct drift signals here — each gets its OWN row so the button
+  //    matches the actual problem (the old single-row presentation was
+  //    self-contradicting: "behind" header + "Rebuild all" while all sub-apps
+  //    showed green, because the *source* was ahead but the apps were correctly
+  //    on the built image):
+  //      (a) "matrx-ship image" — source git HEAD vs the built image (`bi.has_changes`).
+  //          Fix = rebuild the image (then apps + recreate).
+  //      (b) "App portals" — does each app container actually run the current
+  //          image id? Fix = recreate the lagging apps onto the current image.
   try {
     const bi = getBuildInfo();
     const latest = inspectImage("matrx-ship:latest");
@@ -2655,24 +2692,39 @@ async function buildVersionsReport() {
       apps.push({ name, display_name: info.display_name || name, on_latest: onLatest });
     }
     const sourceAhead = !!bi.has_changes;
+    const pendingCount = bi.pending_commits?.length || 0;
+
+    // 1a) The image itself — is it built from current source?
     systems.push({
-      id: "ship", name: "App portals (matrx-ship image)", kind: "ship",
+      id: "ship-image", name: "matrx-ship image (shared)", kind: "ship-image",
       current: `image ${bi.current_image?.id || "?"}${bi.current_image?.age ? ` · ${bi.current_image.age} old` : ""}`,
       latest: `source @ ${bi.source?.head_commit || "?"}`,
-      status: (sourceAhead || behind > 0) ? "behind" : "ok",
-      detail: (sourceAhead
-        ? `The shared matrx-ship image is ${bi.pending_commits?.length || ""} commit(s) behind source — rebuild + redeploy to refresh all app portals.`
-        : behind > 0
-          ? `${behind} of ${apps.length} app(s) aren't on the current image — redeploy them.`
-          : `All ${apps.length} app(s) on the current image; image matches source.`)
-        + " (This is the image powering the per-project app portals — NOT the Server Manager you're using, which is a separate image kept current on every deploy.)",
-      apps, behind_count: behind,
-      update: (sourceAhead || behind > 0)
-        ? { action: "ship-rebuild", label: "Rebuild & redeploy all apps", data_safe: true,
-            note: "Rebuilds matrx-ship and recreates every app container. Each app's database is a separate volume and is left untouched. (You can also redeploy apps individually below.)" }
+      status: sourceAhead ? "behind" : "ok",
+      detail: sourceAhead
+        ? `The matrx-ship image is ${pendingCount || "some"} commit(s) behind source. Rebuild it, then recreate the apps onto the new image. (Per-app DBs are separate volumes — untouched.)`
+        : "Image is built from the current source commit.",
+      update: sourceAhead
+        ? { action: "ship-rebuild", label: "Rebuild image + redeploy all apps", data_safe: true,
+            note: "docker build matrx-ship:latest from current source, then recreate every app container onto it. App DB volumes are untouched." }
         : null,
     });
-  } catch (e) { systems.push({ id: "ship", name: "App portals (matrx-ship image)", kind: "ship", status: "error", detail: String(e.message), update: null }); }
+
+    // 1b) Per-app rollout — are apps actually running the image we just built?
+    systems.push({
+      id: "ship-apps", name: "App portals — running image", kind: "ship-apps",
+      current: behind === 0 ? `${apps.length}/${apps.length} on current image` : `${apps.length - behind}/${apps.length} on current image`,
+      latest: `matrx-ship:latest (${latest.id || "?"})`,
+      status: behind > 0 ? "behind" : "ok",
+      detail: behind > 0
+        ? `${behind} of ${apps.length} app(s) are running an older image and need to be recreated onto matrx-ship:latest. Each app's DB volume is untouched.`
+        : `All ${apps.length} app(s) are running matrx-ship:latest.`,
+      apps, behind_count: behind,
+      update: behind > 0
+        ? { action: "ship-redeploy-stale", label: `Redeploy ${behind} stale app(s)`, data_safe: true,
+            note: "Recreates only the app containers that aren't on matrx-ship:latest. Each app's DB volume is untouched. (Per-app Redeploy buttons below also work.)" }
+        : null,
+    });
+  } catch (e) { systems.push({ id: "ship-apps", name: "App portals — running image", kind: "ship-apps", status: "error", detail: String(e.message), update: null }); }
 
   const repo = await getSandboxRepoState();
 
@@ -2899,20 +2951,33 @@ async function checkOrchestratorDrift() {
   try { hosted = await fetchOrchestratorRoot(ORCH_URL); } catch (e) { hErr = e.message; }
   try { ec2 = await fetchOrchestratorRoot(EC2_ORCH_URL); } catch (e) { eErr = e.message; }
   const repo = await getSandboxRepoState();
-  if (hErr) return { id: "orchestrator-drift", label: "Orchestrator freshness", status: "critical", detail: `Hosted orchestrator unreachable: ${hErr}`, hosted, ec2, repo };
+  const actions = [];
+  if (hErr) {
+    return {
+      id: "orchestrator-drift", label: "Orchestrator freshness", status: "critical",
+      detail: `Hosted orchestrator unreachable: ${hErr}`,
+      hosted, ec2, repo,
+      actions: [
+        { label: "Restart hosted orchestrator", action: "orch-restart", data_safe: true, note: "Recreates the matrx-orchestrator container. No user data on it." },
+        { label: "Pull + rebuild + restart", action: "orch-pull-redeploy", data_safe: true, note: "git pull /srv clone to origin/main, rebuild image, recreate container." },
+      ],
+    };
+  }
 
-  const critical = [];
   const warnings = [];
 
   // Hosted: built from the /srv clone — flag if that's behind origin/main.
   if (repo.hostedBehind === true) {
-    warnings.push(`Hosted orchestrator is built from a /srv clone that is behind origin/main (${repo.hostedShort} vs ${repo.mainShort}) — pull + rebuild on the Versions page.`);
+    warnings.push(`Hosted orchestrator is built from a /srv clone that is behind origin/main (${repo.hostedShort} vs ${repo.mainShort}).`);
+    actions.push({ label: "Pull + rebuild hosted orchestrator", action: "orch-pull-redeploy", data_safe: true, note: "git pull /srv clone to origin/main, rebuild image, recreate container. No user data on the orchestrator." });
   }
   // EC2: GHA-deployed — flag if the last successful deploy isn't origin/main.
   if (eErr) {
     warnings.push(`EC2 orchestrator unreachable (${eErr}).`);
+    actions.push({ label: "Trigger GitHub Deploy (EC2)", action: "ec2-trigger-deploy", data_safe: true, note: "Dispatches the matrx-sandbox 'Deploy' workflow on main; redeploys EC2 in ~3-5 min via SSM." });
   } else if (repo.ec2Behind === true) {
-    warnings.push(`EC2's last successful deploy (${repo.deployShort}) is behind origin/main (${repo.mainShort}) — trigger a deploy.`);
+    warnings.push(`EC2's last successful deploy (${repo.deployShort}) is behind origin/main (${repo.mainShort}).`);
+    actions.push({ label: "Trigger GitHub Deploy (EC2)", action: "ec2-trigger-deploy", data_safe: true, note: "Dispatches the matrx-sandbox 'Deploy' workflow on main; redeploys EC2 in ~3-5 min via SSM." });
   }
   if (repo.deployFailures) {
     warnings.push(`${repo.deployFailures} of the last 5 matrx-sandbox deploys failed.`);
@@ -2922,9 +2987,9 @@ async function checkOrchestratorDrift() {
     warnings.push(`EC2 has no AI Dream secrets loaded — only the EC2 "AI Dream baked-in" sandboxes are affected; slim + the co-located backend are fine.`);
   }
 
-  const status = critical.length ? "critical" : warnings.length ? "warning" : "ok";
-  const detail = [...critical, ...warnings].join("; ") || "Orchestrators are on origin/main. (Version numbers reported by each tier are not freshness signals.)";
-  return { id: "orchestrator-drift", label: "Orchestrator freshness", status, detail, hosted, ec2, repo };
+  const status = warnings.length ? "warning" : "ok";
+  const detail = warnings.join("; ") || "Orchestrators are on origin/main. (Version numbers reported by each tier are not freshness signals.)";
+  return { id: "orchestrator-drift", label: "Orchestrator freshness", status, detail, hosted, ec2, repo, actions };
 }
 
 function checkSandboxImages() {
@@ -2939,30 +3004,60 @@ function checkSandboxImages() {
   if (!orch.present) missingRequired.push("orchestrator");
   const staleRequired = imgs.filter((i) => i.required && i.present && i.age_days != null && i.age_days > IMAGE_STALE_DAYS).map((i) => `${i.variant} (${i.age_days}d)`);
   let status = "ok", detail = "All required images present and fresh.";
-  if (missingRequired.length) { status = "critical"; detail = `Missing required image(s): ${missingRequired.join(", ")}.`; }
-  else if (staleRequired.length) { status = "warning"; detail = `Stale required image(s) older than ${IMAGE_STALE_DAYS}d: ${staleRequired.join(", ")} — consider rebuilding.`; }
-  return { id: "sandbox-images", label: "Sandbox image freshness", status, detail, images: imgs };
+  const actions = [];
+  if (missingRequired.length) {
+    status = "critical";
+    detail = `Missing required image(s): ${missingRequired.join(", ")}. Sandboxes that spawn from these will fail until rebuilt.`;
+    // One button per missing variant — each takes the user to the live-log
+    // rebuild page (the build is heavy + streamed; one-shot wouldn't give
+    // useful feedback).
+    for (const v of missingRequired) {
+      actions.push({
+        label: `Rebuild ${v} image`,
+        action: "sandbox-image-rebuild",
+        variant: v,
+        data_safe: true,
+        note: `Opens the Sandboxes page where ${v} rebuilds with live build logs.`,
+      });
+    }
+  } else if (staleRequired.length) {
+    status = "warning";
+    detail = `Stale required image(s) older than ${IMAGE_STALE_DAYS}d: ${staleRequired.join(", ")} — consider rebuilding.`;
+    for (const entry of staleRequired) {
+      const v = entry.split(" ")[0];
+      actions.push({ label: `Rebuild ${v} image`, action: "sandbox-image-rebuild", variant: v, data_safe: true, note: `Opens the Sandboxes page where ${v} rebuilds with live logs.` });
+    }
+  }
+  return { id: "sandbox-images", label: "Sandbox image freshness", status, detail, images: imgs, actions };
 }
 
 async function checkRecentDeploys() {
   const token = process.env.GITHUB_PAT || process.env.GH_TOKEN || "";
-  if (!token) return { id: "deploys", label: "Recent deploys (matrx-sandbox)", status: "unknown", detail: "GITHUB_PAT not set in the Manager env — deploy-status check disabled." };
+  if (!token) return { id: "deploys", label: "Recent deploys (matrx-sandbox)", status: "unknown", detail: "GITHUB_PAT not set in the Manager env — deploy-status check disabled.", actions: [] };
   try {
     const r = await fetch("https://api.github.com/repos/armanisadeghi/matrx-sandbox/actions/workflows/deploy.yml/runs?per_page=5", {
       headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", "User-Agent": "matrx-manager" },
       signal: AbortSignal.timeout(8000),
     });
-    if (!r.ok) return { id: "deploys", label: "Recent deploys (matrx-sandbox)", status: "warning", detail: `GitHub API ${r.status}` };
+    if (!r.ok) return { id: "deploys", label: "Recent deploys (matrx-sandbox)", status: "warning", detail: `GitHub API ${r.status}`, actions: [] };
     const runs = ((await r.json()).workflow_runs || []).filter((x) => x.status === "completed");
-    if (!runs.length) return { id: "deploys", label: "Recent deploys (matrx-sandbox)", status: "ok", detail: "No completed deploy runs found." };
+    if (!runs.length) return { id: "deploys", label: "Recent deploys (matrx-sandbox)", status: "ok", detail: "No completed deploy runs found.", actions: [] };
     const latest = runs[0];
     const failures = runs.filter((x) => x.conclusion === "failure").length;
     let status = "ok", detail = `Latest deploy ${latest.conclusion} (${(latest.head_sha || "").slice(0, 7)}, ${latest.created_at?.slice(0, 16)}).`;
-    if (latest.conclusion === "failure") { status = "critical"; detail = `Latest deploy FAILED (${(latest.head_sha || "").slice(0, 7)}, ${latest.created_at?.slice(0, 16)}) — EC2 may be running older code.`; }
-    else if (failures) { status = "warning"; detail = `Latest deploy ok, but ${failures} of last ${runs.length} failed.`; }
-    return { id: "deploys", label: "Recent deploys (matrx-sandbox)", status, detail, runs: runs.map((x) => ({ conclusion: x.conclusion, sha: (x.head_sha || "").slice(0, 7), at: x.created_at })) };
+    const actions = [];
+    if (latest.conclusion === "failure") {
+      status = "critical";
+      detail = `Latest deploy FAILED (${(latest.head_sha || "").slice(0, 7)}, ${latest.created_at?.slice(0, 16)}) — EC2 may be running older code.`;
+      actions.push({ label: "Trigger new GitHub Deploy", action: "ec2-trigger-deploy", data_safe: true, note: "Dispatches the matrx-sandbox 'Deploy' workflow on main; redeploys EC2 in ~3-5 min via SSM." });
+      if (latest.html_url) actions.push({ label: "View failed run on GitHub", action: "open-url", url: latest.html_url });
+    } else if (failures) {
+      status = "warning";
+      detail = `Latest deploy ok, but ${failures} of last ${runs.length} failed.`;
+    }
+    return { id: "deploys", label: "Recent deploys (matrx-sandbox)", status, detail, runs: runs.map((x) => ({ conclusion: x.conclusion, sha: (x.head_sha || "").slice(0, 7), at: x.created_at, url: x.html_url })), actions };
   } catch (e) {
-    return { id: "deploys", label: "Recent deploys (matrx-sandbox)", status: "warning", detail: `Deploy check failed: ${e.message}` };
+    return { id: "deploys", label: "Recent deploys (matrx-sandbox)", status: "warning", detail: `Deploy check failed: ${e.message}`, actions: [] };
   }
 }
 
@@ -2976,10 +3071,38 @@ app.get("/api/fleet-health", authMiddleware, async (_req, res) => {
   res.json({ overall, checks, checked_at: new Date().toISOString() });
 });
 
+// Wait for the hosted orchestrator's `/` to respond 200. The Manager hits this
+// after a recreate so the UI sees "ready" before it tries the next call (and
+// stops surfacing the brief Traefik 404 / connection-refused window).
+async function waitForOrchestratorReady(url = ORCH_URL, totalMs = 30000, stepMs = 1000) {
+  const start = Date.now();
+  while (Date.now() - start < totalMs) {
+    try {
+      const r = await fetch(`${url}/`, { signal: AbortSignal.timeout(3000) });
+      if (r.ok) return { ready: true, waited_ms: Date.now() - start };
+    } catch { /* still booting */ }
+    await new Promise((r) => setTimeout(r, stepMs));
+  }
+  return { ready: false, waited_ms: Date.now() - start };
+}
+
+// Public readiness probe — the UI calls this AFTER a rebuild/recreate to know
+// when it's safe to refresh the rest of the page without hitting the brief
+// post-recreate "Orchestrator 404 page not found" (which is just Traefik
+// returning its default 404 before the new container is registered).
+app.get("/api/orchestrator/ready", authMiddleware, async (req, res) => {
+  const target = req.query.target === "ec2" ? EC2_ORCH_URL : ORCH_URL;
+  const totalMs = Math.min(60000, Math.max(1000, Number(req.query.wait_ms) || 30000));
+  const r = await waitForOrchestratorReady(target, totalMs);
+  res.status(r.ready ? 200 : 504).json({ ...r, target });
+});
+
 // ── Restart the orchestrator (recreate container, no rebuild) ───────────────
 app.post("/api/orchestrator/restart", authMiddleware, requireRole("admin", "deployer"), async (_req, res) => {
   const r = exec("docker compose up -d --force-recreate", { cwd: ORCH_COMPOSE_DIR, timeout: 120000 });
-  res.status(r.success ? 200 : 500).json(r);
+  _sbxRepoCache = { ts: 0, data: null };
+  const ready = await waitForOrchestratorReady();
+  res.status(r.success ? 200 : 500).json({ ...r, ready });
 });
 
 // ── Redeploy the orchestrator: rebuild image from source + recreate (one-shot,
@@ -2990,7 +3113,9 @@ app.post("/api/orchestrator/redeploy", authMiddleware, requireSuperadmin, async 
   const build = exec(`docker build -t ${ORCH_IMAGE_TAG} ${context}`, { cwd: context, timeout: 300000 });
   if (!build.success) return res.status(500).json({ success: false, step: "build", error: build.error || build.output });
   const recreate = exec("docker compose up -d --force-recreate", { cwd: ORCH_COMPOSE_DIR, timeout: 120000 });
-  res.status(recreate.success ? 200 : 500).json({ success: recreate.success, step: recreate.success ? "done" : "recreate", output: recreate.output || recreate.error });
+  _sbxRepoCache = { ts: 0, data: null };
+  const ready = await waitForOrchestratorReady();
+  res.status(recreate.success ? 200 : 500).json({ success: recreate.success, step: recreate.success ? "done" : "recreate", output: recreate.output || recreate.error, ready });
 });
 
 // Pull the /srv matrx-sandbox clone to origin/main, then rebuild + recreate the
@@ -3003,8 +3128,10 @@ app.post("/api/orchestrator/pull-redeploy", authMiddleware, requireSuperadmin, a
   const build = exec(`docker build -t ${ORCH_IMAGE_TAG} ${context}`, { cwd: context, timeout: 300000 });
   if (!build.success) return res.status(500).json({ success: false, step: "build", error: build.error || build.output });
   const recreate = exec("docker compose up -d --force-recreate", { cwd: ORCH_COMPOSE_DIR, timeout: 120000 });
+  _sbxRepoCache = { ts: 0, data: null };
+  const ready = await waitForOrchestratorReady();
   try { auditLog(req.tokenEntry?.label || "manager", "orch_pull_redeploy", "hosted", {}); } catch { /* */ }
-  res.status(recreate.success ? 200 : 500).json({ success: recreate.success, step: recreate.success ? "done" : "recreate", pulled: pull.output, output: recreate.output || recreate.error });
+  res.status(recreate.success ? 200 : 500).json({ success: recreate.success, step: recreate.success ? "done" : "recreate", pulled: pull.output, output: recreate.output || recreate.error, ready });
 });
 
 // Trigger the matrx-sandbox 'Deploy' GitHub Actions workflow on main (redeploys
@@ -3019,6 +3146,7 @@ app.post("/api/ec2/trigger-deploy", authMiddleware, requireSuperadmin, async (re
       body: JSON.stringify({ ref: "main" }),
     });
     if (r.status !== 204) { const t = await r.text(); return res.status(502).json({ error: `GitHub dispatch failed: ${r.status} ${t.slice(0, 200)}` }); }
+    _sbxRepoCache = { ts: 0, data: null };
     try { auditLog(req.tokenEntry?.label || "manager", "ec2_trigger_deploy", "matrx-sandbox", {}); } catch { /* */ }
     res.json({ ok: true, message: "Deploy workflow dispatched on main. Watch GitHub Actions; the EC2 orchestrator updates in ~3-5 min." });
   } catch (e) { res.status(502).json({ error: e.message }); }

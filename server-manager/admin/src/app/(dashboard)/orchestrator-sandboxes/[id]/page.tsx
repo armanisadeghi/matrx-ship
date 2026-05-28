@@ -8,6 +8,8 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@matr
 import { Badge } from "@matrx/admin-ui/ui/badge";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@matrx/admin-ui/ui/tabs";
 import { Input } from "@matrx/admin-ui/ui/input";
+import { toast } from "sonner";
+import { useConfirm } from "@matrx/admin-ui/components/confirm-dialog";
 import { useAuth } from "@/lib/auth-context";
 import { api, apiText, API, ApiError } from "@/lib/api";
 import { WebTerminal } from "@/components/web-terminal";
@@ -176,6 +178,7 @@ export default function OrchestratorSandboxDetailPage() {
   const searchParams = useSearchParams();
   const initialTab = searchParams.get("tab") || "overview";
   const { authed } = useAuth();
+  const ask = useConfirm();
 
   const [sandbox, setSandbox] = useState<OrchSandbox | null>(null);
   const [diag, setDiag] = useState<DiagResponse | null>(null);
@@ -256,51 +259,62 @@ export default function OrchestratorSandboxDetailPage() {
   // Reset handler — destroy + recreate. Returns the new sandbox_id; we
   // navigate to the new detail page so the operator continues seamlessly.
   const handleReset = useCallback(async () => {
-    if (!confirm(`Reset sandbox ${id}?${resetWipe ? " This WILL WIPE the persistent volume — user data will be lost." : " The persistent volume will be preserved."}`)) {
-      return;
-    }
+    const ok = await ask({
+      title: `Reset sandbox ${id}?`,
+      description: resetWipe
+        ? "This WILL WIPE the persistent volume — user data will be lost."
+        : "Destroys and recreates the container; the persistent volume is preserved.",
+      variant: resetWipe ? "destructive" : "warning",
+      confirmLabel: resetWipe ? "Reset and WIPE" : "Reset",
+    });
+    if (!ok) return;
     setResetBusy(true);
     try {
       const r = await fetch(API.ORCH_SANDBOX_RESET(id, resetWipe), { method: "POST", headers: { Authorization: `Bearer ${typeof window !== "undefined" ? localStorage.getItem("manager_token") : ""}` } });
       if (!r.ok) {
         const body = await r.text();
-        alert(`Reset failed (HTTP ${r.status}): ${body.slice(0, 300)}`);
+        toast.error(`Reset failed (HTTP ${r.status}): ${body.slice(0, 300)}`);
         return;
       }
       const newSandbox = await r.json();
-      // Orchestrator returned a new sandbox_id — navigate to the new detail page.
+      toast.success("Sandbox reset.");
       if (newSandbox?.sandbox_id && newSandbox.sandbox_id !== id) {
         router.push(`/orchestrator-sandboxes/${newSandbox.sandbox_id}`);
       } else {
         await loadSummary();
       }
     } catch (e) {
-      alert(`Reset error: ${e instanceof Error ? e.message : String(e)}`);
+      toast.error(`Reset error: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setResetBusy(false);
     }
-  }, [id, resetWipe, router, loadSummary]);
+  }, [id, resetWipe, router, loadSummary, ask]);
 
   // Destroy = graceful stop + remove container; per-user volume is preserved,
   // so the sandbox is resumable. This is the "force stop a stuck/unwanted box".
   const handleDestroy = useCallback(async () => {
-    if (!confirm(`Destroy sandbox ${id}? The container stops and is removed; the persistent volume is preserved (resumable). Active work in the container is lost.`)) {
-      return;
-    }
+    const ok = await ask({
+      title: `Destroy sandbox ${id}?`,
+      description: "The container stops and is removed; the persistent volume is preserved (resumable). Active work in the container is lost.",
+      variant: "destructive",
+      confirmLabel: "Destroy",
+    });
+    if (!ok) return;
     setActionBusy("destroy");
     try {
       const r = await fetch(API.ORCH_SANDBOX(id), { method: "DELETE", headers: authHeader() });
       if (!r.ok && r.status !== 204) {
-        alert(`Destroy failed (HTTP ${r.status}): ${(await r.text()).slice(0, 300)}`);
+        toast.error(`Destroy failed (HTTP ${r.status}): ${(await r.text()).slice(0, 300)}`);
         return;
       }
+      toast.success("Sandbox destroyed (volume preserved).");
       await loadSummary();
     } catch (e) {
-      alert(`Destroy error: ${e instanceof Error ? e.message : String(e)}`);
+      toast.error(`Destroy error: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setActionBusy(null);
     }
-  }, [id, loadSummary]);
+  }, [id, loadSummary, ask]);
 
   // Extend TTL — prompts for minutes, posts seconds to the orchestrator.
   const handleExtend = useCallback(async () => {
@@ -308,7 +322,7 @@ export default function OrchestratorSandboxDetailPage() {
     if (mins === null) return;
     const seconds = Math.round(Number(mins) * 60);
     if (!Number.isFinite(seconds) || seconds < 60 || seconds > 86400) {
-      alert("Enter a number of minutes between 1 and 1440.");
+      toast.error("Enter a number of minutes between 1 and 1440.");
       return;
     }
     setActionBusy("extend");
@@ -319,12 +333,13 @@ export default function OrchestratorSandboxDetailPage() {
         body: JSON.stringify({ ttl_seconds: seconds }),
       });
       if (!r.ok) {
-        alert(`Extend failed (HTTP ${r.status}): ${(await r.text()).slice(0, 300)}`);
+        toast.error(`Extend failed (HTTP ${r.status}): ${(await r.text()).slice(0, 300)}`);
         return;
       }
+      toast.success(`Extended by ${Math.round(seconds / 60)} min.`);
       await loadSummary();
     } catch (e) {
-      alert(`Extend error: ${e instanceof Error ? e.message : String(e)}`);
+      toast.error(`Extend error: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setActionBusy(null);
     }
@@ -333,28 +348,32 @@ export default function OrchestratorSandboxDetailPage() {
   // Resume — spawn a fresh container on the preserved volume for a
   // stopped/expired sandbox. Orchestrator returns a NEW sandbox_id.
   const handleResume = useCallback(async () => {
-    if (!confirm(`Resume sandbox ${id}? A fresh container is spawned on its preserved volume.`)) {
-      return;
-    }
+    const ok = await ask({
+      title: `Resume sandbox ${id}?`,
+      description: "A fresh container is spawned on its preserved volume.",
+      confirmLabel: "Resume",
+    });
+    if (!ok) return;
     setActionBusy("resume");
     try {
       const r = await fetch(API.ORCH_SANDBOX_RESUME(id), { method: "POST", headers: authHeader() });
       if (!r.ok) {
-        alert(`Resume failed (HTTP ${r.status}): ${(await r.text()).slice(0, 300)}`);
+        toast.error(`Resume failed (HTTP ${r.status}): ${(await r.text()).slice(0, 300)}`);
         return;
       }
       const newSandbox = await r.json();
+      toast.success("Sandbox resumed.");
       if (newSandbox?.sandbox_id && newSandbox.sandbox_id !== id) {
         router.push(`/orchestrator-sandboxes/${newSandbox.sandbox_id}`);
       } else {
         await loadSummary();
       }
     } catch (e) {
-      alert(`Resume error: ${e instanceof Error ? e.message : String(e)}`);
+      toast.error(`Resume error: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setActionBusy(null);
     }
-  }, [id, router, loadSummary]);
+  }, [id, router, loadSummary, ask]);
 
   // Filesystem tree
   const loadDir = useCallback(async (path: string): Promise<FsNode[]> => {

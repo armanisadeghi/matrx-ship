@@ -2,6 +2,7 @@
 
 import { useState, useCallback } from "react";
 import { toast } from "sonner";
+import { useConfirm } from "@matrx/admin-ui/components/confirm-dialog";
 import { api, apiText, API } from "@/lib/api";
 
 interface UseAdminActionsOpts {
@@ -19,6 +20,7 @@ export function useAdminActions({
   loadBuildInfo,
   loadAll,
 }: UseAdminActionsOpts) {
+  const ask = useConfirm();
   const [deploying, setDeploying] = useState(false);
   const [deployingMgr, setDeployingMgr] = useState(false);
   const [rollingBack, setRollingBack] = useState<string | null>(null);
@@ -217,7 +219,13 @@ export function useAdminActions({
   }
 
   async function handleRemoveInstance(name: string): Promise<boolean> {
-    if (!confirm(`Remove instance "${name}"? This will destroy all data.`)) return false;
+    const ok = await ask({
+      title: `Remove instance "${name}"?`,
+      description: "This destroys the container AND its database volume. All data for this app will be lost. Make a backup first if you need it.",
+      variant: "destructive",
+      confirmLabel: "Remove permanently",
+    });
+    if (!ok) return false;
     const toastId = toast.loading(`Removing ${name}...`);
     try {
       await api(API.INSTANCE(name), { method: "DELETE" });
@@ -301,7 +309,13 @@ export function useAdminActions({
   }
 
   async function handleDeleteToken(id: string) {
-    if (!confirm("Delete this token?")) return;
+    const ok = await ask({
+      title: "Delete this token?",
+      description: "Anything currently authenticating with this token (CLI, MCP agents, automation) will start failing immediately.",
+      variant: "destructive",
+      confirmLabel: "Delete token",
+    });
+    if (!ok) return;
     try {
       await api(API.TOKEN(id), { method: "DELETE" });
       toast.success("Token deleted");

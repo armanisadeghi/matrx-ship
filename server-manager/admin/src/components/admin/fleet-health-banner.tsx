@@ -39,7 +39,7 @@ export function FleetHealthBanner() {
         <span className="font-medium text-destructive">Fleet health: {bad.length} critical issue{bad.length > 1 ? "s" : ""}.</span>{" "}
         <span className="text-muted-foreground">{bad.map((c) => c.label).join(" · ")}</span>
       </div>
-      <Link href="/fleet-health" className="whitespace-nowrap font-medium text-destructive underline">Details →</Link>
+      <Link href="/fleet-health" className="whitespace-nowrap font-medium text-destructive underline">Fix it →</Link>
     </div>
   );
 }
