@@ -67,6 +67,9 @@ export function TokensTab({ tokens, onCreateToken, onDeleteToken }: TokensTabPro
         initialSort={{ key: "label", dir: "asc" }}
         searchPlaceholder="Filter tokens…"
         emptyMessage="No tokens yet."
+        copyView="Access Tokens"
+        copyDescription="Manager API tokens (the secret values are never stored — only hashes)."
+        getRowData={(t) => ({ id: t.id, label: t.label, role: t.role, created_at: t.created_at, last_used_at: t.last_used_at })}
         columns={[
           { key: "label", header: "Label", sortValue: (t) => t.label, render: (t) => <span className="font-medium">{t.label}</span> },
           { key: "role", header: "Role", sortValue: (t) => t.role, render: (t) => <Badge variant={t.role === "admin" ? "default" : "secondary"}>{t.role}</Badge> },

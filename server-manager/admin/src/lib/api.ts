@@ -22,6 +22,7 @@ export const API = {
   TOKEN: (id: string) => `/api/tokens/${id}`,
   SECRETS: "/api/secrets",
   SECRET_ENTRIES: (id: string, reveal = false) => `/api/secrets/entries?id=${encodeURIComponent(id)}${reveal ? "&reveal=1" : ""}`,
+  SECRET_BULK: (id: string) => `/api/secrets/bulk?id=${encodeURIComponent(id)}`,
   BUILD_INFO: "/api/build-info",
   BUILD_HISTORY: "/api/build-history",
   REBUILD: "/api/rebuild",

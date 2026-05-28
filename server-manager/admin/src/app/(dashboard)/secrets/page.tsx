@@ -3,8 +3,9 @@
 import { useEffect, useState, useCallback } from "react";
 import { toast } from "sonner";
 import {
-  KeySquare, Server, Layers, Eye, EyeOff, Loader2, Check, X, Plus, Pencil, RefreshCw, ShieldAlert,
+  KeySquare, Server, Layers, Eye, EyeOff, Loader2, Check, X, Plus, Pencil, RefreshCw, ShieldAlert, Code,
 } from "lucide-react";
+import { CopyControls } from "@/components/admin/copy-controls";
 import { Button } from "@matrx/admin-ui/ui/button";
 import { Card, CardContent } from "@matrx/admin-ui/ui/card";
 import { Badge } from "@matrx/admin-ui/ui/badge";
@@ -35,6 +36,16 @@ export default function SecretsPage() {
   const [adding, setAdding] = useState(false);
   const [newKey, setNewKey] = useState("");
   const [newVal, setNewVal] = useState("");
+  const [devView, setDevView] = useState(false);
+  const [devText, setDevText] = useState("");
+  const [devSaving, setDevSaving] = useState(false);
+
+  // Vercel-style: pasting/typing "KEY=value" into the key field auto-splits it.
+  function onNewKeyChange(v: string) {
+    const i = v.indexOf("=");
+    if (i > 0) { setNewKey(v.slice(0, i).trim().replace(/^export\s+/, "")); setNewVal(v.slice(i + 1).trim().replace(/^["']|["']$/g, "")); }
+    else setNewKey(v);
+  }
 
   const loadStores = useCallback(async () => {
     setLoading(true);
@@ -69,6 +80,31 @@ export default function SecretsPage() {
     } catch (e) { toast.error(`Save failed: ${e instanceof Error ? e.message : String(e)}`); }
     finally { setSaving(false); }
   }
+
+  // Developer view = the whole store as a .env blob (needs revealed values).
+  function openDevView() {
+    if (!revealed) { setRevealed(true); toast.info("Revealing values for the developer view."); }
+    setDevView(true);
+  }
+  // Keep the textarea in sync with the (revealed) entries when entering dev view.
+  useEffect(() => {
+    if (devView) setDevText((data?.entries || []).map((e) => `${e.key}=${e.value}`).join("\n"));
+  }, [devView, data]);
+
+  async function saveDev() {
+    if (!selected) return;
+    setDevSaving(true);
+    try {
+      const r = await api<{ applied: string[]; skipped: string[] }>(API.SECRET_BULK(selected), { method: "PUT", body: JSON.stringify({ text: devText }) });
+      toast.success(`Applied ${r.applied.length} key(s)${r.skipped.length ? `, skipped ${r.skipped.length}` : ""}.${data?.note ? " " + data.note : ""}`);
+      setDevView(false);
+      await loadEntries(selected, revealed);
+      await loadStores();
+    } catch (e) { toast.error(`Save failed: ${e instanceof Error ? e.message : String(e)}`); }
+    finally { setDevSaving(false); }
+  }
+
+  const envText = (data?.entries || []).map((e) => `${e.key}=${e.value}`).join("\n");
 
   if (!isSuperadmin) return null; // layout shows the super-admin gate
 
@@ -115,7 +151,11 @@ export default function SecretsPage() {
               <KeySquare className="size-4 text-muted-foreground" />
               <span className="font-semibold">{data?.label || "…"}</span>
               {data && <Badge variant="secondary" className="text-[10px]">{data.entries.length} keys</Badge>}
+              {revealed && data?.exists && <CopyControls plain={envText} />}
               <div className="flex-1" />
+              <Button size="sm" variant={devView ? "default" : "outline"} onClick={() => (devView ? setDevView(false) : openDevView())}>
+                <Code className="size-4" /> Developer view
+              </Button>
               <Button size="sm" variant="outline" onClick={() => setRevealed((v) => !v)}>
                 {revealed ? <EyeOff className="size-4" /> : <Eye className="size-4" />} {revealed ? "Hide" : "Reveal"} values
               </Button>
@@ -134,38 +174,58 @@ export default function SecretsPage() {
 
             {adding && (
               <div className="flex items-center gap-2 rounded-md border border-primary/40 bg-primary/5 p-2">
-                <Input className="h-8 text-xs font-mono w-48" placeholder="NEW_KEY" value={newKey} onChange={(e) => setNewKey(e.target.value)} />
+                <Input className="h-8 text-xs font-mono w-48" placeholder="NEW_KEY (or paste KEY=value)" value={newKey} onChange={(e) => onNewKeyChange(e.target.value)} />
                 <Input className="h-8 text-xs font-mono flex-1" placeholder="value" value={newVal} onChange={(e) => setNewVal(e.target.value)} />
                 <Button size="sm" disabled={saving || !newKey.trim()} onClick={() => save(newKey.trim(), newVal)}>{saving ? <Loader2 className="size-4 animate-spin" /> : <Check className="size-4" />}</Button>
                 <Button size="sm" variant="ghost" onClick={() => { setAdding(false); setNewKey(""); setNewVal(""); }}><X className="size-4" /></Button>
               </div>
             )}
 
-            <div className="rounded-lg border divide-y">
-              {entriesLoading ? (
-                <div className="p-6 text-center text-sm text-muted-foreground">Loading…</div>
-              ) : shown.length === 0 ? (
-                <div className="p-6 text-center text-sm text-muted-foreground">{data?.exists === false ? "No .env file for this store yet — Add a key to create it." : "No keys match."}</div>
-              ) : shown.map((e) => (
-                <div key={e.key} className="flex items-center gap-3 px-3 py-1.5 text-sm">
-                  <span className="font-mono text-xs w-56 shrink-0 truncate" title={e.key}>{e.key}</span>
-                  {editKey === e.key ? (
-                    <>
-                      <Input className="h-8 text-xs font-mono flex-1" value={editVal} onChange={(ev) => setEditVal(ev.target.value)} autoFocus />
-                      <Button size="sm" disabled={saving} onClick={() => save(e.key, editVal)}>{saving ? <Loader2 className="size-4 animate-spin" /> : <Check className="size-4" />}</Button>
-                      <Button size="sm" variant="ghost" onClick={() => setEditKey(null)}><X className="size-4" /></Button>
-                    </>
-                  ) : (
-                    <>
-                      <span className={`flex-1 truncate ${e.masked ? "text-muted-foreground" : "font-mono text-xs"}`}>{e.value}</span>
-                      <Button size="sm" variant="ghost" className="h-7 px-2" onClick={() => { setEditKey(e.key); setEditVal(e.masked ? "" : e.value); if (e.masked) toast.info("Reveal values to edit in place, or type a new value to overwrite."); }}>
-                        <Pencil className="size-3.5" />
-                      </Button>
-                    </>
-                  )}
+            {devView ? (
+              <div className="space-y-2">
+                <p className="text-xs text-muted-foreground">
+                  Edit as a raw <span className="font-mono">.env</span>. Saving <strong>upserts</strong> every <span className="font-mono">KEY=value</span> line; lines you remove here are <strong>not</strong> deleted (safety). {data?.note}
+                </p>
+                <textarea
+                  className="w-full h-[55vh] rounded-md border bg-muted/30 p-3 font-mono text-xs leading-relaxed"
+                  value={devText}
+                  onChange={(e) => setDevText(e.target.value)}
+                  spellCheck={false}
+                />
+                <div className="flex items-center gap-2">
+                  <Button size="sm" disabled={devSaving} onClick={saveDev}>{devSaving ? <Loader2 className="size-4 animate-spin" /> : <Check className="size-4" />} Save .env</Button>
+                  <Button size="sm" variant="ghost" onClick={() => setDevView(false)}>Cancel</Button>
+                  <CopyControls plain={devText} />
                 </div>
-              ))}
-            </div>
+              </div>
+            ) : (
+              <div className="rounded-lg border divide-y">
+                {entriesLoading ? (
+                  <div className="p-6 text-center text-sm text-muted-foreground">Loading…</div>
+                ) : shown.length === 0 ? (
+                  <div className="p-6 text-center text-sm text-muted-foreground">{data?.exists === false ? "No .env file for this store yet — Add a key to create it." : "No keys match."}</div>
+                ) : shown.map((e) => (
+                  <div key={e.key} className="flex items-center gap-3 px-3 py-1.5 text-sm group">
+                    <span className="font-mono text-xs w-56 shrink-0 truncate" title={e.key}>{e.key}</span>
+                    {editKey === e.key ? (
+                      <>
+                        <Input className="h-8 text-xs font-mono flex-1" value={editVal} onChange={(ev) => setEditVal(ev.target.value)} autoFocus />
+                        <Button size="sm" disabled={saving} onClick={() => save(e.key, editVal)}>{saving ? <Loader2 className="size-4 animate-spin" /> : <Check className="size-4" />}</Button>
+                        <Button size="sm" variant="ghost" onClick={() => setEditKey(null)}><X className="size-4" /></Button>
+                      </>
+                    ) : (
+                      <>
+                        <span className={`flex-1 truncate ${e.masked ? "text-muted-foreground" : "font-mono text-xs"}`}>{e.value}</span>
+                        {!e.masked && <CopyControls plain={e.value} />}
+                        <Button size="sm" variant="ghost" className="h-7 px-2" onClick={() => { setEditKey(e.key); setEditVal(e.masked ? "" : e.value); if (e.masked) toast.info("Reveal values to edit in place, or type a new value to overwrite."); }}>
+                          <Pencil className="size-3.5" />
+                        </Button>
+                      </>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
           </CardContent>
         </Card>
       </div>

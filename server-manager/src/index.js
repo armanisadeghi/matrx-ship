@@ -3524,6 +3524,32 @@ app.put("/api/secrets/entries", authMiddleware, requireSuperadmin, (req, res) =>
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// PUT /api/secrets/bulk — Developer View save: parse a .env-style blob and UPSERT
+// every KEY=value line (no deletes — keys absent from the text are left as-is, a
+// safety choice so a paste can't wipe critical infra keys). superadmin.
+app.put("/api/secrets/bulk", authMiddleware, requireSuperadmin, (req, res) => {
+  const s = findSecretStore(String(req.query.id || ""));
+  if (!s) return res.status(404).json({ error: "Unknown secret store" });
+  const text = String(req.body?.text ?? "");
+  const applied = [];
+  const skipped = [];
+  for (const raw of text.split("\n")) {
+    const line = raw.trim();
+    if (!line || line.startsWith("#")) continue;
+    const i = line.indexOf("=");
+    if (i <= 0) { skipped.push(line.slice(0, 40)); continue; }
+    let key = line.slice(0, i).trim();
+    if (key.startsWith("export ")) key = key.slice(7).trim();
+    let value = line.slice(i + 1);
+    // strip matching surrounding quotes
+    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) value = value.slice(1, -1);
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) { skipped.push(key); continue; }
+    try { upsertEnvKey(s.path, key, value); applied.push(key); } catch { skipped.push(key); }
+  }
+  try { auditLog(req.tokenEntry?.label || "admin", "secrets_bulk_set", s.id, { applied: applied.length, skipped: skipped.length }); } catch { /* */ }
+  res.json({ ok: true, id: s.id, applied, skipped, note: s.note || null });
+});
+
 // ── Supabase Persistence Endpoints ──────────────────────────────────────────
 
 app.get("/api/supabase/status", authMiddleware, async (_req, res) => {

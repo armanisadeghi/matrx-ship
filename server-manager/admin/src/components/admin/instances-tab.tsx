@@ -96,6 +96,9 @@ export function InstancesTab({
         initialSort={{ key: "name", dir: "asc" }}
         searchPlaceholder="Filter instances…"
         emptyMessage="No instances yet. Create one to get started."
+        copyView="Apps"
+        copyDescription="Deployed per-project apps, each at its own subdomain with its own database."
+        getRowData={(i) => ({ name: i.name, display_name: i.display_name, url: i.url, app_status: i.container_status || i.status, db_status: i.db_status, created_at: i.created_at })}
         columns={instanceColumns({ deploying, onDeploy, onInstanceAction })}
       />
     </PageShell>

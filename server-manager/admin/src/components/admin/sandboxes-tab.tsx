@@ -30,6 +30,9 @@ export function SandboxesTab({ sandboxes, onSandboxAction }: SandboxesTabProps) 
         initialSort={{ key: "name", dir: "asc" }}
         searchPlaceholder="Filter…"
         emptyMessage="No starter-pool sandboxes."
+        copyView="Starter-pool sandboxes"
+        copyDescription="The deprecated static sandbox-1..5 containers."
+        getRowData={(s) => ({ name: s.name, sandbox_id: s.sandbox_id, image: s.image, status: s.status })}
         columns={[
           { key: "name", header: "Name", sortValue: (s) => s.name, render: (s) => <span className="font-medium">{s.name}</span> },
           { key: "status", header: "Status", sortValue: (s) => s.status, render: (s) => <Badge variant={s.status === "running" ? "success" : "destructive"}>{s.status}</Badge> },

@@ -22,6 +22,7 @@
 import { useMemo, useState, type ReactNode } from "react";
 import { ChevronUp, ChevronDown, ChevronsUpDown, Search } from "lucide-react";
 import { Input } from "@matrx/admin-ui/ui/input";
+import { CopyControls } from "@/components/admin/copy-controls";
 
 export interface Column<T> {
   key: string;
@@ -60,6 +61,10 @@ export function DataTable<T>({
   searchPlaceholder = "Filter…",
   emptyMessage = "Nothing here yet.",
   toolbar,
+  copyView,
+  copyDescription,
+  copyGuidance,
+  getRowData,
 }: {
   rows: T[];
   columns: Column<T>[];
@@ -71,11 +76,32 @@ export function DataTable<T>({
   emptyMessage?: string;
   /** Extra controls rendered on the right of the filter bar. */
   toolbar?: ReactNode;
+  /** When set (with getRowData), each row gets copy / copy-for-AI buttons and the
+   *  toolbar gets a "copy all (filtered)" pair. copyView labels the source. */
+  copyView?: string;
+  copyDescription?: string;
+  copyGuidance?: string;
+  getRowData?: (row: T) => Record<string, unknown>;
 }) {
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<{ key: string; dir: SortDir } | null>(initialSort ?? null);
 
-  const colByKey = useMemo(() => Object.fromEntries(columns.map((c) => [c.key, c])), [columns]);
+  // When copy is enabled, append a trailing copy column.
+  const allColumns: Column<T>[] = useMemo(() => {
+    if (!getRowData || !copyView) return columns;
+    const copyCol: Column<T> = {
+      key: "__copy", header: "", sortable: false, align: "right", className: "w-px",
+      render: (row) => (
+        <CopyControls
+          plain={JSON.stringify(getRowData(row), null, 2)}
+          ai={{ view: copyView, description: copyDescription, guidance: copyGuidance, data: getRowData(row) }}
+        />
+      ),
+    };
+    return [...columns, copyCol];
+  }, [columns, getRowData, copyView, copyDescription, copyGuidance]);
+
+  const colByKey = useMemo(() => Object.fromEntries(allColumns.map((c) => [c.key, c])), [allColumns]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -109,7 +135,7 @@ export function DataTable<T>({
 
   return (
     <div className="space-y-2">
-      {(getSearchText || toolbar) && (
+      {(getSearchText || toolbar || (copyView && getRowData)) && (
         <div className="flex items-center gap-2">
           {getSearchText && (
             <div className="relative flex-1 min-w-40 max-w-sm">
@@ -124,6 +150,13 @@ export function DataTable<T>({
           )}
           <div className="flex-1" />
           {toolbar}
+          {copyView && getRowData && (
+            <CopyControls
+              plain={JSON.stringify(sorted.map(getRowData), null, 2)}
+              ai={{ view: copyView, description: copyDescription, guidance: (copyGuidance ? copyGuidance + " " : "") + `This is the full ${copyView} list (${sorted.length} rows${sorted.length !== rows.length ? ` filtered from ${rows.length}` : ""}).`, data: sorted.map(getRowData) }}
+              size={15}
+            />
+          )}
           <span className="text-xs text-muted-foreground tabular-nums shrink-0">
             {sorted.length}{sorted.length !== rows.length ? ` / ${rows.length}` : ""}
           </span>
@@ -134,7 +167,7 @@ export function DataTable<T>({
         <table className="w-full text-sm border-collapse">
           <thead className="sticky top-0 z-10 bg-muted/95 backdrop-blur supports-[backdrop-filter]:bg-muted/80">
             <tr className="border-b">
-              {columns.map((col) => {
+              {allColumns.map((col) => {
                 const canSort = col.sortable !== false && !!col.sortValue;
                 const active = sort?.key === col.key;
                 return (
@@ -156,7 +189,7 @@ export function DataTable<T>({
           </thead>
           <tbody>
             {sorted.length === 0 ? (
-              <tr><td colSpan={columns.length} className="px-3 py-10 text-center text-sm text-muted-foreground">
+              <tr><td colSpan={allColumns.length} className="px-3 py-10 text-center text-sm text-muted-foreground">
                 {query ? "Nothing matches that filter." : emptyMessage}
               </td></tr>
             ) : sorted.map((row) => (
@@ -165,7 +198,7 @@ export function DataTable<T>({
                 onClick={onRowClick ? () => onRowClick(row) : undefined}
                 className={`border-b last:border-0 ${onRowClick ? "cursor-pointer hover:bg-muted/40" : ""}`}
               >
-                {columns.map((col) => (
+                {allColumns.map((col) => (
                   <td key={col.key} className={`px-3 py-1.5 align-middle ${alignClass(col.align)} ${hideClass(col.hideBelow)} ${col.className || ""}`}>
                     {col.render(row)}
                   </td>

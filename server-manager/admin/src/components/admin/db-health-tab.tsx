@@ -89,6 +89,9 @@ export function DbHealthTab({ api }: Props) {
         initialSort={{ key: "name", dir: "asc" }}
         searchPlaceholder="Filter databases…"
         emptyMessage={loading ? "Loading…" : "No instances found."}
+        copyView="Database Health"
+        copyDescription="Per-app Postgres status: app container, db container, and live connectivity."
+        getRowData={(i) => ({ instance: i.instance, display_name: i.display_name, app_status: i.app_status, db_status: i.db_status, db_connected: i.db_connected, db_container: i.db_container })}
         columns={[
           {
             key: "name", header: "Instance", sortValue: (i) => (i.display_name || i.instance).toLowerCase(),

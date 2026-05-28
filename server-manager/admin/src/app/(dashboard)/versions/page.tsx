@@ -13,6 +13,7 @@ import { Badge } from "@matrx/admin-ui/ui/badge";
 import { PageShell } from "@matrx/admin-ui/components/page-shell";
 import { useAuth } from "@/lib/auth-context";
 import { api, API, ApiError } from "@/lib/api";
+import { CopyControls } from "@/components/admin/copy-controls";
 
 interface AppRow { name: string; display_name: string; on_latest: boolean }
 interface Update { action: string; label: string; data_safe: boolean; note?: string }
@@ -97,7 +98,12 @@ export default function VersionsPage() {
     <PageShell
       title="Versions & Updates"
       description="What's running vs the latest, for every system. Anything BEHIND is red — click Update to bring it current. Updates that touch user data (sandboxes) are zero-loss by design."
-      actions={<Button variant="outline" size="sm" onClick={load} disabled={loading}><RefreshCw className={`size-4 ${loading ? "animate-spin" : ""}`} /> Refresh</Button>}
+      actions={
+        <>
+          {data && <CopyControls size={16} ai={{ view: "Versions & Updates", description: "Which systems are on the latest build vs behind.", guidance: "Each entry has status ok|behind|error, what's running vs latest, and the update action available. Use it to decide what to rebuild/redeploy.", data: data.systems }} />}
+          <Button variant="outline" size="sm" onClick={load} disabled={loading}><RefreshCw className={`size-4 ${loading ? "animate-spin" : ""}`} /> Refresh</Button>
+        </>
+      }
     >
       {error && (
         <Card className="border-destructive/40"><CardContent className="pt-5 text-sm font-mono text-destructive break-all">{error}</CardContent></Card>
@@ -127,6 +133,7 @@ export default function VersionsPage() {
                   <div className="flex items-center gap-2">
                     <span className="font-semibold">{sys.name}</span>
                     <StatusBadge status={sys.status} />
+                    <CopyControls ai={{ view: "Versions & Updates", description: `Version status for: ${sys.name}`, data: sys }} />
                   </div>
                   <div className="text-sm text-muted-foreground">{sys.detail}</div>
                   <div className="flex flex-wrap gap-x-6 gap-y-0.5 text-xs text-muted-foreground font-mono pt-1">

@@ -12,6 +12,7 @@ import { Badge } from "@matrx/admin-ui/ui/badge";
 import { PageShell } from "@matrx/admin-ui/components/page-shell";
 import { useAuth } from "@/lib/auth-context";
 import { api, API, ApiError } from "@/lib/api";
+import { CopyControls } from "@/components/admin/copy-controls";
 
 interface SystemInfo {
   hostname: string; cpus: number; uptime_hours: string;
@@ -66,7 +67,12 @@ export default function ServersPage() {
     <PageShell
       title="Servers"
       description="The physical machines we run on. Everything else (apps, sandboxes, databases, services) runs on top of these. Start here, then drill down."
-      actions={<Button variant="outline" size="sm" onClick={load} disabled={loading}><RefreshCw className={`size-4 ${loading ? "animate-spin" : ""}`} /> Refresh</Button>}
+      actions={
+        <>
+          <CopyControls size={16} ai={{ view: "Servers", description: "The physical machines: this /srv host + the EC2 boxes.", guidance: "system = this Hostinger /srv host (live stats); ec2 = the AWS EC2 boxes reachable via SSM.", data: { this_server: sys, ec2_boxes: ec2 } }} />
+          <Button variant="outline" size="sm" onClick={load} disabled={loading}><RefreshCw className={`size-4 ${loading ? "animate-spin" : ""}`} /> Refresh</Button>
+        </>
+      }
     >
       {/* This server (/srv) */}
       <Card>
