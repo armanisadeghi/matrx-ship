@@ -3223,7 +3223,27 @@ app.post("/api/sandbox-images/build/stream", authMiddleware, requireRole("admin"
 // it), then any other required variant that's absent. Streams every step
 // into ONE SSE stream so the operator sees a single linear progress log
 // instead of having to chain button-clicks themselves.
+//
+// LOCK: only one rebuild-missing chain can run at a time per Manager process.
+// Two concurrent runs (e.g. a stale browser tab + a fresh click) race the
+// build-aidream.sh staging dir (rm -rf scripts-local; mkdir; cp ...) and one
+// dies with "cp: File exists". Module-scoped flag refused as 409.
+let _imgRebuildInFlight = null; // { variant, started_at }
 app.post("/api/sandbox-images/rebuild-missing/stream", authMiddleware, requireRole("admin", "deployer"), async (req, res) => {
+  if (_imgRebuildInFlight) {
+    res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive", "X-Accel-Buffering": "no" });
+    res.write(`event: error\ndata: ${JSON.stringify({ success: false, message: `Another sandbox-image rebuild is already running (variant=${_imgRebuildInFlight.variant || "all"}, started ${_imgRebuildInFlight.started_at}). Wait for it to finish.` })}\n\n`);
+    return res.end();
+  }
+  // Lock is held by the SUBPROCESS, not the response. We track the running
+  // child via _imgRebuildInFlight.proc so client disconnects don't orphan the
+  // build (the subprocess keeps running) and concurrent calls are still
+  // refused until that subprocess actually exits.
+  _imgRebuildInFlight = { variant: String(req.query.variant || "").trim() || "all", started_at: new Date().toISOString(), proc: null };
+  // If the client aborts, kill the running docker build so the lock can
+  // release promptly and we don't have orphan builds chewing CPU.
+  const onClientGone = () => { try { _imgRebuildInFlight?.proc?.kill("SIGTERM"); } catch { /* */ } };
+  res.on("close", onClientGone);
   res.writeHead(200, {
     "Content-Type": "text/event-stream",
     "Cache-Control": "no-cache",
@@ -3247,6 +3267,7 @@ app.post("/api/sandbox-images/rebuild-missing/stream", authMiddleware, requireRo
   const queue = orderAll.filter((v) => wantedSet.has(v));
   if (queue.length === 0) {
     send("done", { success: true, message: "Nothing to build — all required images present." });
+    _imgRebuildInFlight = null;
     return res.end();
   }
   send("phase", { phase: "plan", message: `Will build: ${queue.join(", ")}` });
@@ -3277,10 +3298,14 @@ app.post("/api/sandbox-images/rebuild-missing/stream", authMiddleware, requireRo
         cwd = spec.context;
       }
       const proc = spawn(cmd, args, { cwd, env: { ...process.env, DOCKER_BUILDKIT: "1" } });
+      // Expose the subprocess on the lock so client-disconnect can kill it
+      // (and so concurrent callers stay refused until the build truly ends).
+      if (_imgRebuildInFlight) _imgRebuildInFlight.proc = proc;
       const relay = (chunk) => { for (const line of chunk.toString().split("\n").filter(Boolean)) send("log", { message: line }); };
       proc.stdout.on("data", relay);
       proc.stderr.on("data", relay);
       proc.on("close", (code) => {
+        if (_imgRebuildInFlight) _imgRebuildInFlight.proc = null;
         if (code === 0) { send("log", { message: `✓ Built ${spec.tag}` }); resolve(true); }
         else { send("log", { message: `✗ ${spec.tag} build failed with exit ${code}` }); resolve(false); }
       });
@@ -3290,6 +3315,10 @@ app.post("/api/sandbox-images/rebuild-missing/stream", authMiddleware, requireRo
   }
   if (overallOk) send("done", { success: true, message: `All required images built: ${queue.join(", ")}.` });
   else send("error", { success: false, message: "Build chain stopped — see logs above." });
+  // Release the lock now that the LAST subprocess in the chain has exited.
+  // (Subscribers that already disconnected won't see the final event, but
+  // the next /api/sandbox-images/health poll will reflect the new state.)
+  _imgRebuildInFlight = null;
   res.end();
 });
 
