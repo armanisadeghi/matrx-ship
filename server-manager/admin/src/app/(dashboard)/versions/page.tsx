@@ -39,6 +39,7 @@ export default function VersionsPage() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
+  const [appBusy, setAppBusy] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -58,9 +59,10 @@ export default function VersionsPage() {
       if (u.action === "migrate-all") {
         const r = await api<{ migrated?: string[]; deferred?: string[]; failed?: string[] }>(API.ORCH_SANDBOXES_MIGRATE_ALL, { method: "POST" });
         toast.success(`Migrated ${r.migrated?.length ?? 0}, deferred ${r.deferred?.length ?? 0}, failed ${r.failed?.length ?? 0}.`);
-      } else if (u.action === "orch-restart") {
-        await api(API.ORCH_RESTART, { method: "POST" });
-        toast.success("Orchestrator restarted onto the latest image.");
+      } else if (u.action === "orch-redeploy") {
+        toast.info("Rebuilding + restarting the orchestrator — a minute or so…");
+        await api(API.ORCH_REDEPLOY, { method: "POST" });
+        toast.success("Orchestrator rebuilt and restarted.");
       } else if (u.action === "ship-rebuild") {
         toast.info("Rebuilding & redeploying all apps — this can take a couple of minutes…");
         await api(API.REBUILD, { method: "POST" });
@@ -71,6 +73,21 @@ export default function VersionsPage() {
       toast.error(`Update failed: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setBusy(null);
+    }
+  }
+
+  async function redeployApp(name: string) {
+    if (appBusy || busy) return;
+    setAppBusy(name);
+    try {
+      toast.info(`Redeploying ${name} onto the current image…`);
+      await api(API.REBUILD, { method: "POST", body: JSON.stringify({ name, skip_build: true }) });
+      toast.success(`${name} redeployed.`);
+      await load();
+    } catch (e) {
+      toast.error(`Redeploy failed: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setAppBusy(null);
     }
   }
 
@@ -139,11 +156,18 @@ export default function VersionsPage() {
                     {sys.behind_count ? `${sys.behind_count} of ${sys.apps!.length} apps behind` : `all ${sys.apps!.length} apps current`}
                   </button>
                   {isOpen && (
-                    <div className="mt-2 grid grid-cols-2 sm:grid-cols-3 gap-1.5">
+                    <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-1.5">
                       {sys.apps!.map((a) => (
                         <div key={a.name} className="flex items-center gap-1.5 text-xs">
                           {a.on_latest ? <CheckCircle2 className="size-3 text-green-500 shrink-0" /> : <AlertTriangle className="size-3 text-destructive shrink-0" />}
                           <span className={a.on_latest ? "text-muted-foreground" : "text-foreground font-medium"}>{a.display_name}</span>
+                          <span className="font-mono text-muted-foreground/60">{a.name}</span>
+                          <div className="flex-1" />
+                          {!a.on_latest && (
+                            <Button size="sm" variant="outline" className="h-6 px-2 text-[11px]" disabled={!isSuperadmin || !!busy || appBusy === a.name} onClick={() => redeployApp(a.name)}>
+                              {appBusy === a.name ? <Loader2 className="size-3 animate-spin" /> : <ArrowUpCircle className="size-3" />} Redeploy
+                            </Button>
+                          )}
                         </div>
                       ))}
                     </div>

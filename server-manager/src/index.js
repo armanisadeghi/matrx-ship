@@ -2585,6 +2585,24 @@ app.post("/api/orchestrator-sandboxes-migrate-all", authMiddleware, requireRole(
 async function buildVersionsReport() {
   const systems = [];
 
+  // 0) The Server Manager itself (THIS admin UI). It's a separate image
+  //    (matrx-ship-manager) that's rebuilt + redeployed on every change, so it's
+  //    current by construction. Shown first so it's clear the tool you're using
+  //    is NOT the same thing as the app-portal image below.
+  try {
+    const mgr = inspectImage("matrx-ship-manager:latest");
+    const ageH = mgr.created ? Math.floor((Date.now() - new Date(mgr.created).getTime()) / 3600000) : null;
+    const age = ageH == null ? "" : ageH < 24 ? `${ageH}h old` : `${Math.floor(ageH / 24)}d old`;
+    systems.push({
+      id: "manager", name: "Server Manager (this admin UI)", kind: "manager",
+      current: `image ${mgr.id || "?"}${age ? ` · ${age}` : ""}`,
+      latest: "rebuilt on every deploy",
+      status: "ok",
+      detail: "This very app. It's its own image and is rebuilt + redeployed whenever a change ships, so it's always current — it is NOT the 'app portals' image below.",
+      update: null,
+    });
+  } catch { /* */ }
+
   // 1) Ship platform + every app deployment.
   try {
     const bi = getBuildInfo();
@@ -2601,22 +2619,23 @@ async function buildVersionsReport() {
     }
     const sourceAhead = !!bi.has_changes;
     systems.push({
-      id: "ship", name: "Ship platform — apps", kind: "ship",
+      id: "ship", name: "App portals (matrx-ship image)", kind: "ship",
       current: `image ${bi.current_image?.id || "?"}${bi.current_image?.age ? ` · ${bi.current_image.age} old` : ""}`,
       latest: `source @ ${bi.source?.head_commit || "?"}`,
       status: (sourceAhead || behind > 0) ? "behind" : "ok",
-      detail: sourceAhead
-        ? `Source is ${bi.pending_commits?.length || ""} commit(s) ahead of the built image — rebuild + redeploy needed.`
+      detail: (sourceAhead
+        ? `The shared matrx-ship image is ${bi.pending_commits?.length || ""} commit(s) behind source — rebuild + redeploy to refresh all app portals.`
         : behind > 0
-          ? `${behind} of ${apps.length} app(s) aren't on the current image — redeploy needed.`
-          : `All ${apps.length} app(s) on the current image; image matches source.`,
+          ? `${behind} of ${apps.length} app(s) aren't on the current image — redeploy them.`
+          : `All ${apps.length} app(s) on the current image; image matches source.`)
+        + " (This is the image powering the per-project app portals — NOT the Server Manager you're using, which is a separate image kept current on every deploy.)",
       apps, behind_count: behind,
       update: (sourceAhead || behind > 0)
         ? { action: "ship-rebuild", label: "Rebuild & redeploy all apps", data_safe: true,
-            note: "Rebuilds matrx-ship and recreates every app container. Each app's database is a separate volume and is left untouched." }
+            note: "Rebuilds matrx-ship and recreates every app container. Each app's database is a separate volume and is left untouched. (You can also redeploy apps individually below.)" }
         : null,
     });
-  } catch (e) { systems.push({ id: "ship", name: "Ship platform — apps", kind: "ship", status: "error", detail: String(e.message), update: null }); }
+  } catch (e) { systems.push({ id: "ship", name: "App portals (matrx-ship image)", kind: "ship", status: "error", detail: String(e.message), update: null }); }
 
   // 2) Hosted orchestrator — running image vs latest built image.
   try {
@@ -2634,8 +2653,8 @@ async function buildVersionsReport() {
       detail: !reachable ? "Orchestrator not responding." : onLatest
         ? "Running the latest built image." : "A newer orchestrator image is built but not running — restart to apply.",
       update: (reachable && !onLatest)
-        ? { action: "orch-restart", label: "Restart onto latest image", data_safe: true,
-            note: "The orchestrator holds no user data; restarting recreates it on the latest image. (To pick up new source, rebuild the orchestrator image first on the Sandboxes page.)" }
+        ? { action: "orch-redeploy", label: "Rebuild + restart orchestrator", data_safe: true,
+            note: "Rebuilds the orchestrator image from source and recreates the container. No user data lives on the orchestrator, so this is safe." }
         : null,
     });
   } catch (e) { systems.push({ id: "orch-hosted", name: "Sandbox orchestrator — hosted", kind: "orchestrator", status: "error", detail: String(e.message), update: null }); }
@@ -2885,6 +2904,17 @@ app.get("/api/fleet-health", authMiddleware, async (_req, res) => {
 app.post("/api/orchestrator/restart", authMiddleware, requireRole("admin", "deployer"), async (_req, res) => {
   const r = exec("docker compose up -d --force-recreate", { cwd: ORCH_COMPOSE_DIR, timeout: 120000 });
   res.status(r.success ? 200 : 500).json(r);
+});
+
+// ── Redeploy the orchestrator: rebuild image from source + recreate (one-shot,
+// non-streamed — used by the Versions "Update" button). No user data on the
+// orchestrator, so this is safe. ────────────────────────────────────────────
+app.post("/api/orchestrator/redeploy", authMiddleware, requireSuperadmin, async (_req, res) => {
+  const context = join(SANDBOX_PROJECT, "orchestrator");
+  const build = exec(`docker build -t ${ORCH_IMAGE_TAG} ${context}`, { cwd: context, timeout: 300000 });
+  if (!build.success) return res.status(500).json({ success: false, step: "build", error: build.error || build.output });
+  const recreate = exec("docker compose up -d --force-recreate", { cwd: ORCH_COMPOSE_DIR, timeout: 120000 });
+  res.status(recreate.success ? 200 : 500).json({ success: recreate.success, step: recreate.success ? "done" : "recreate", output: recreate.output || recreate.error });
 });
 
 // ── SSE helper for streamed builds (mirrors /api/rebuild/stream) ────────────

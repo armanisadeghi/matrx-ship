@@ -46,6 +46,7 @@ export const API = {
   AUDIT: (limit = 200) => `/api/audit?limit=${limit}`,
   SANDBOX_IMAGES_HEALTH: "/api/sandbox-images/health",
   ORCH_RESTART: "/api/orchestrator/restart",
+  ORCH_REDEPLOY: "/api/orchestrator/redeploy",
   ORCH_BUILD_STREAM: "/api/orchestrator/build/stream",
   SANDBOX_IMAGE_BUILD_STREAM: (variant: string) => `/api/sandbox-images/build/stream?variant=${encodeURIComponent(variant)}`,
   ORCH_SANDBOXES: "/api/orchestrator-sandboxes",
