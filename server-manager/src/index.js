@@ -3217,6 +3217,82 @@ app.post("/api/sandbox-images/build/stream", authMiddleware, requireRole("admin"
   streamSpawn(res, { cmd: "docker", args, onDoneLog: `Built ${spec.tag}` });
 });
 
+// ── Rebuild EVERY missing required sandbox image, in dependency order (SSE) ──
+// This is what the "Rebuild now" banner + "Rebuild aidream image" Fleet Health
+// button actually call. Builds matrx-sandbox:core first (aidream depends on
+// it), then any other required variant that's absent. Streams every step
+// into ONE SSE stream so the operator sees a single linear progress log
+// instead of having to chain button-clicks themselves.
+app.post("/api/sandbox-images/rebuild-missing/stream", authMiddleware, requireRole("admin", "deployer"), async (req, res) => {
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache",
+    Connection: "keep-alive",
+    "X-Accel-Buffering": "no",
+  });
+  const send = (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+
+  // Figure out what to build. `variant` (optional query param) lets the caller
+  // request a specific image; if omitted we build EVERY missing required one.
+  const requested = String(req.query.variant || "").trim();
+  const orderAll = ["core", "slim", "aidream", "local"]; // dependency-correct order
+  const wantedSet = requested ? new Set([requested]) : new Set(orderAll.filter((v) => {
+    const s = SANDBOX_IMAGE_VARIANTS[v];
+    return s && (s.required || (requested === "" && false));
+  }));
+  // aidream NEEDS core — add it to the queue if we're building aidream and core is missing.
+  if (wantedSet.has("aidream") && !inspectImage(SANDBOX_IMAGE_VARIANTS.core.tag).present) {
+    wantedSet.add("core");
+  }
+  const queue = orderAll.filter((v) => wantedSet.has(v));
+  if (queue.length === 0) {
+    send("done", { success: true, message: "Nothing to build — all required images present." });
+    return res.end();
+  }
+  send("phase", { phase: "plan", message: `Will build: ${queue.join(", ")}` });
+
+  // Run each build sequentially, capturing exit codes. If any step fails we
+  // stop the chain and report the failing variant so the operator can see it.
+  let overallOk = true;
+  for (const v of queue) {
+    const spec = SANDBOX_IMAGE_VARIANTS[v];
+    if (!spec) { send("log", { message: `(skip unknown variant: ${v})` }); continue; }
+    // Skip if already present and the caller didn't explicitly ask for this variant.
+    if (!requested && inspectImage(spec.tag).present) {
+      send("log", { message: `✓ ${spec.tag} already present — skipping.` });
+      continue;
+    }
+    send("phase", { phase: "build", message: `── Building ${spec.tag} ──` });
+    const ok = await new Promise((resolve) => {
+      let cmd, args, cwd;
+      if (spec.script) {
+        cmd = "bash";
+        args = [spec.script];
+        cwd = dirname(spec.script);
+      } else {
+        cmd = "docker";
+        args = ["build", "--progress=plain", "-t", spec.tag];
+        if (spec.dockerfile) args.push("-f", join(spec.context, spec.dockerfile));
+        args.push(spec.context);
+        cwd = spec.context;
+      }
+      const proc = spawn(cmd, args, { cwd, env: { ...process.env, DOCKER_BUILDKIT: "1" } });
+      const relay = (chunk) => { for (const line of chunk.toString().split("\n").filter(Boolean)) send("log", { message: line }); };
+      proc.stdout.on("data", relay);
+      proc.stderr.on("data", relay);
+      proc.on("close", (code) => {
+        if (code === 0) { send("log", { message: `✓ Built ${spec.tag}` }); resolve(true); }
+        else { send("log", { message: `✗ ${spec.tag} build failed with exit ${code}` }); resolve(false); }
+      });
+      proc.on("error", (err) => { send("log", { message: `✗ ${err.message}` }); resolve(false); });
+    });
+    if (!ok) { overallOk = false; break; }
+  }
+  if (overallOk) send("done", { success: true, message: `All required images built: ${queue.join(", ")}.` });
+  else send("error", { success: false, message: "Build chain stopped — see logs above." });
+  res.end();
+});
+
 // ── Fleet hosts (AWS/SSM control plane) ─────────────────────────────────────
 // The remote EC2 boxes the Manager can reach via SSM. "this" is the local /srv
 // host (managed directly via the docker socket + shell_exec, not SSM). A1 ships

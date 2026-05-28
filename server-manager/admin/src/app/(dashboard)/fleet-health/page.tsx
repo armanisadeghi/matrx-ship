@@ -12,6 +12,7 @@ import { useConfirm } from "@matrx/admin-ui/components/confirm-dialog";
 import { useAuth } from "@/lib/auth-context";
 import { api, API, ApiError } from "@/lib/api";
 import { CopyControls } from "@/components/admin/copy-controls";
+import { BuildStreamDialog } from "@/components/admin/build-stream-dialog";
 
 interface ActionDef {
   action: string;
@@ -52,6 +53,11 @@ export default function FleetHealthPage() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null); // `${checkId}:${actionIdx}`
+  // Inline streaming-build dialog state (used by sandbox-image-rebuild actions
+  // so the operator clicks ONE button and watches it build right here, in
+  // dependency order — no navigating to another page and guessing which button).
+  const [buildOpen, setBuildOpen] = useState(false);
+  const [buildVariant, setBuildVariant] = useState<string | undefined>(undefined);
 
   const load = useCallback(async () => {
     try {
@@ -78,10 +84,12 @@ export default function FleetHealthPage() {
       window.open(action.url, "_blank", "noopener,noreferrer");
       return;
     }
-    // Sandbox image rebuild — route to the live-log page (streamed builds).
+    // Sandbox image rebuild — open the streaming-build dialog right here.
+    // The backend handles dependency order (e.g. core → aidream), so the
+    // operator just clicks once and watches it work.
     if (action.action === "sandbox-image-rebuild") {
-      toast.info(`Opening Sandboxes — rebuild ${action.variant || "image"} there with live logs.`);
-      router.push("/orchestrator-sandboxes");
+      setBuildVariant(action.variant);
+      setBuildOpen(true);
       return;
     }
     // Everything else: confirm modal then one-shot POST + refresh.
@@ -207,6 +215,19 @@ export default function FleetHealthPage() {
             </Card>
           );
         })
+      )}
+
+      {buildOpen && (
+        <BuildStreamDialog
+          open={buildOpen}
+          onOpenChange={setBuildOpen}
+          url={API.SANDBOX_IMAGES_REBUILD_MISSING_STREAM(buildVariant)}
+          title={buildVariant ? `Rebuilding ${buildVariant} sandbox image` : "Rebuilding missing sandbox images"}
+          description={buildVariant === "aidream"
+            ? "Builds matrx-sandbox:core first if needed, then matrx-sandbox:aidream. The aidream build is large — expect several minutes."
+            : "Builds the missing required sandbox image(s) in dependency order."}
+          onComplete={() => load()}
+        />
       )}
     </PageShell>
   );

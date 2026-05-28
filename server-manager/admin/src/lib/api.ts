@@ -55,6 +55,10 @@ export const API = {
   EC2_TRIGGER_DEPLOY: "/api/ec2/trigger-deploy",
   ORCH_BUILD_STREAM: "/api/orchestrator/build/stream",
   SANDBOX_IMAGE_BUILD_STREAM: (variant: string) => `/api/sandbox-images/build/stream?variant=${encodeURIComponent(variant)}`,
+  SANDBOX_IMAGES_REBUILD_MISSING_STREAM: (variant?: string) =>
+    variant
+      ? `/api/sandbox-images/rebuild-missing/stream?variant=${encodeURIComponent(variant)}`
+      : `/api/sandbox-images/rebuild-missing/stream`,
   ORCH_SANDBOXES: "/api/orchestrator-sandboxes",
   ORCH_SANDBOX: (id: string) => `/api/orchestrator-sandboxes/${id}`,
   ORCH_SANDBOX_DIAG: (id: string) => `/api/orchestrator-sandboxes/${id}/diagnostics`,

@@ -330,7 +330,7 @@ export default function OrchestratorSandboxesPage() {
           <CardDescription>
             {status ? (
               <span className="font-mono text-xs">
-                {status.service ?? "orchestrator"} · v{status.version ?? "?"} · tier=<b>{status.tier ?? "?"}</b> · {status.status ?? "?"}
+                {status.service ?? "orchestrator"} · v{status.version ?? "?"} · tier=<b>{status.tier ?? "?"}</b> · <span className="text-success">reachable</span>
               </span>
             ) : (
               "Connecting..."
@@ -365,44 +365,66 @@ export default function OrchestratorSandboxesPage() {
               )}
             </div>
             <div className="flex items-center gap-2">
-              <Button variant="outline" size="sm" onClick={restartOrchestrator} disabled={restartBusy || building !== null}>
+              <Button variant="outline" size="sm" onClick={restartOrchestrator} disabled={restartBusy || building !== null}
+                title="Recreates the matrx-orchestrator container (no rebuild). Brief blip; running sandbox containers are untouched and reconciled on boot.">
                 <Power className={`size-4 ${restartBusy ? "animate-pulse" : ""}`} /> Restart orchestrator
               </Button>
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => runBuild("orchestrator image rebuild", API.ORCH_BUILD_STREAM, "Rebuild the orchestrator image and recreate the container? Brief blip; sandbox containers are untouched.")}
+                title="Rebuilds matrx-orchestrator:latest (the orchestrator PROCESS image) from /srv/projects/matrx-sandbox/orchestrator and recreates its container. Does NOT touch the sandbox-image variants (core/slim/aidream) — those live below."
+                onClick={() => runBuild("orchestrator process image rebuild", API.ORCH_BUILD_STREAM, "Rebuild matrx-orchestrator:latest from source and recreate the orchestrator container? This is the orchestrator process itself — it does NOT rebuild the sandbox images (aidream/core/slim).")}
                 disabled={building !== null}
               >
-                <Hammer className={`size-4 ${building === "orchestrator image rebuild" ? "animate-pulse" : ""}`} /> Rebuild orchestrator
+                <Hammer className={`size-4 ${building === "orchestrator process image rebuild" ? "animate-pulse" : ""}`} /> Rebuild orchestrator process
               </Button>
             </div>
           </div>
 
-          {/* Per-variant image rebuilds (SSE streamed into the log viewer below) */}
+          {/* Per-variant sandbox-image rebuilds (SSE streamed). Distinct from
+              the "Rebuild orchestrator process" button above. The aidream
+              build needs :core first; we route it through the dependency-aware
+              endpoint so the operator never sees the "matrx-sandbox:core not
+              built" failure again. */}
           <div className="mt-3 flex flex-wrap items-center gap-2">
-            <span className="text-xs text-muted-foreground mr-1">Rebuild image:</span>
-            {(["core", "slim", "local", "aidream"] as const).map((v) => (
-              <Button
-                key={v}
-                variant="outline"
-                size="sm"
-                className="h-7 px-2 text-xs"
-                onClick={() => runBuild(`${v} image build`, API.SANDBOX_IMAGE_BUILD_STREAM(v), `Rebuild matrx-sandbox:${v}? This can take several minutes${v === "aidream" ? " (requires :core first)" : ""}.`)}
-                disabled={building !== null}
-              >
-                <Hammer className={`size-3 ${building === `${v} image build` ? "animate-pulse" : ""}`} /> {v}
-              </Button>
-            ))}
+            <span className="text-xs text-muted-foreground mr-1">Rebuild sandbox image:</span>
+            {(["core", "slim", "local", "aidream"] as const).map((v) => {
+              const url = v === "aidream" ? API.SANDBOX_IMAGES_REBUILD_MISSING_STREAM("aidream") : API.SANDBOX_IMAGE_BUILD_STREAM(v);
+              const title = v === "aidream"
+                ? "Rebuilds matrx-sandbox:aidream — and matrx-sandbox:core first if it's missing (aidream is built on top of core)."
+                : `Rebuilds matrx-sandbox:${v}.`;
+              return (
+                <Button
+                  key={v}
+                  variant="outline"
+                  size="sm"
+                  className="h-7 px-2 text-xs"
+                  title={title}
+                  onClick={() => runBuild(`${v} sandbox-image build`, url, `Rebuild matrx-sandbox:${v}? This can take several minutes${v === "aidream" ? " (matrx-sandbox:core is built first if it's missing)" : ""}.`)}
+                  disabled={building !== null}
+                >
+                  <Hammer className={`size-3 ${building === `${v} sandbox-image build` ? "animate-pulse" : ""}`} /> {v}
+                </Button>
+              );
+            })}
           </div>
 
           {images && images.missing_required.length > 0 && (
             <div className="mt-3 flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/5 p-2 text-xs">
               <AlertTriangle className="size-4 text-destructive shrink-0 mt-0.5" />
-              <span>
+              <span className="flex-1">
                 Missing <b>required</b> image(s): <b>{images.missing_required.join(", ")}</b>. Sandboxes that
                 spawn from these will fail (the orchestrator falls through to a registry pull). Rebuild before launching.
               </span>
+              <Button
+                size="sm"
+                variant="destructive"
+                className="h-7"
+                onClick={() => runBuild("rebuild missing sandbox images", API.SANDBOX_IMAGES_REBUILD_MISSING_STREAM())}
+                disabled={building !== null}
+              >
+                <Hammer className="size-3" /> Rebuild all missing
+              </Button>
             </div>
           )}
 
