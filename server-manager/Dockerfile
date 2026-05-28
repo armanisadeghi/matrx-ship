@@ -4,7 +4,10 @@
 
 FROM node:22-slim AS base
 
-# Install system tools + prerequisites for Docker CLI + git
+# Install system tools + prerequisites for Docker CLI + git.
+# rsync is needed by /srv/projects/matrx-sandbox/sandbox-image/build-aidream.sh
+# (which the Manager invokes via the rebuild-missing endpoint) — without it the
+# aidream image build dies with "rsync: command not found" at the staging step.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
@@ -14,6 +17,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     dnsutils \
     net-tools \
     git \
+    rsync \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Docker CLI (not the daemon — just the client to talk to the host's Docker socket)

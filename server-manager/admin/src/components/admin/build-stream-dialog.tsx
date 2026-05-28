@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { Loader2, CheckCircle2, AlertTriangle, Terminal } from "lucide-react";
+import { useEffect, useRef, useState, useCallback } from "react";
+import { Loader2, CheckCircle2, AlertTriangle, Terminal, Copy, Check } from "lucide-react";
+import { toast } from "sonner";
 import {
   Dialog,
   DialogContent,
@@ -37,8 +38,39 @@ interface Props {
 export function BuildStreamDialog({ open, onOpenChange, url, title, description, onComplete }: Props) {
   const [logs, setLogs] = useState<string[]>([]);
   const [phase, setPhase] = useState<"idle" | "running" | "done" | "error">("idle");
+  const [copied, setCopied] = useState(false);
   const logRef = useRef<HTMLDivElement | null>(null);
   const startedRef = useRef(false);
+
+  // Copy the entire log buffer to the clipboard. Errors are most useful when
+  // the operator can paste them somewhere — into a ticket, a chat with an
+  // agent, etc. The user explicitly asked for this after a build failure
+  // they couldn't easily share.
+  const copyLogs = useCallback(async () => {
+    try {
+      const text = logs.join("\n");
+      // Prefer the async clipboard API; fall back to a hidden textarea for
+      // environments where the secure context isn't satisfied (shouldn't
+      // happen behind HTTPS but harmless).
+      if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        const ta = document.createElement("textarea");
+        ta.value = text;
+        ta.style.position = "fixed";
+        ta.style.left = "-9999px";
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand("copy");
+        document.body.removeChild(ta);
+      }
+      setCopied(true);
+      toast.success(`Copied ${logs.length} log line(s) to clipboard.`);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (e) {
+      toast.error(`Copy failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }, [logs]);
 
   useEffect(() => {
     // Auto-scroll to bottom on every new line.
@@ -50,6 +82,7 @@ export function BuildStreamDialog({ open, onOpenChange, url, title, description,
       // Reset state when closed so the next open starts clean.
       setLogs([]);
       setPhase("idle");
+      setCopied(false);
       startedRef.current = false;
       return;
     }
@@ -140,6 +173,16 @@ export function BuildStreamDialog({ open, onOpenChange, url, title, description,
           <div className="text-xs text-muted-foreground mr-auto">
             {running ? "Build in progress — close disabled until it finishes." : phase === "done" ? "Build finished successfully." : phase === "error" ? "Build failed — see logs above." : ""}
           </div>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={copyLogs}
+            disabled={logs.length === 0}
+            title="Copy the entire log output to your clipboard"
+          >
+            {copied ? <Check className="size-4 text-success" /> : <Copy className="size-4" />}
+            {copied ? "Copied" : "Copy logs"}
+          </Button>
           <Button variant="outline" disabled={running} onClick={() => onOpenChange(false)}>
             {phase === "error" ? "Close" : "Done"}
           </Button>
