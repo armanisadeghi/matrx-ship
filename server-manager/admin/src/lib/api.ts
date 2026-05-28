@@ -65,6 +65,7 @@ export const API = {
       ? `/api/sandbox-images/rebuild-missing/stream?variant=${encodeURIComponent(variant)}`
       : `/api/sandbox-images/rebuild-missing/stream`,
   ORCH_SANDBOXES: "/api/orchestrator-sandboxes",
+  ORCH_SANDBOXES_BULK_DESTROY: "/api/orchestrator-sandboxes/bulk-destroy",
   ORCH_SANDBOX: (id: string) => `/api/orchestrator-sandboxes/${id}`,
   ORCH_SANDBOX_DIAG: (id: string) => `/api/orchestrator-sandboxes/${id}/diagnostics`,
   ORCH_SANDBOX_LOGS: (id: string, source = "orchestrator", tail = 500) =>

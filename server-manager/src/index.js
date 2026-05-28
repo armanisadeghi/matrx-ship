@@ -2554,6 +2554,42 @@ app.delete("/api/orchestrator-sandboxes/:id", authMiddleware, requireRole("admin
   } catch (e) { res.status(502).json({ error: `Orchestrator unreachable: ${e.message}` }); }
 });
 
+// Bulk destroy: pass {sandbox_ids: [...]} and we proxy a DELETE per id to the
+// tier-correct orchestrator. Optional `graceful` (default true). Returns a
+// per-id result map plus a summary count. Doesn't short-circuit on errors —
+// each id is attempted independently so one failure doesn't block the rest.
+//
+// Use for cleaning up many stopped/failed/old sandboxes at once. Volumes
+// follow whatever the orchestrator's DELETE policy is (currently: volume
+// preserved on destroy unless the orchestrator was given wipe semantics).
+app.post("/api/orchestrator-sandboxes/bulk-destroy", authMiddleware, requireRole("admin", "deployer"), async (req, res) => {
+  if (!ORCH_KEY) return res.status(503).json({ error: "Orchestrator API key not configured" });
+  const ids = Array.isArray(req.body?.sandbox_ids) ? req.body.sandbox_ids.filter((x) => typeof x === "string" && x) : [];
+  if (ids.length === 0) return res.status(400).json({ error: "Provide a non-empty sandbox_ids array" });
+  if (ids.length > 200) return res.status(400).json({ error: "Refuse to destroy >200 in one call — split the request" });
+  const graceful = req.body?.graceful === false ? "false" : "true";
+  // Run up to 4 in parallel so 50 ids don't take 50 sequential round-trips,
+  // but don't fully fan out — the orchestrator + docker daemon are shared.
+  const concurrency = 4;
+  const results = {};
+  let cursor = 0;
+  async function worker() {
+    while (cursor < ids.length) {
+      const i = cursor++;
+      const id = ids[i];
+      try {
+        const r = await orchFetchForSandbox(id, `/sandboxes/${encodeURIComponent(id)}?graceful=${graceful}`, { method: "DELETE" });
+        const ok = r.status >= 200 && r.status < 300;
+        results[id] = { status: r.status, ok, body: ok ? null : (await r.text()).slice(0, 400) };
+      } catch (e) { results[id] = { status: 0, ok: false, body: e.message }; }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(concurrency, ids.length) }, worker));
+  const okCount = Object.values(results).filter((r) => r.ok).length;
+  try { auditLog(req.tokenEntry?.label || "manager", "bulk_destroy_sandboxes", "orchestrator", { requested: ids.length, ok: okCount, failed: ids.length - okCount }); } catch { /* */ }
+  res.json({ requested: ids.length, ok: okCount, failed: ids.length - okCount, results });
+});
+
 // Extend TTL — proxies to POST /sandboxes/{id}/extend with {ttl_seconds}.
 app.post("/api/orchestrator-sandboxes/:id/extend", authMiddleware, requireRole("admin", "deployer"), async (req, res) => {
   if (!ORCH_KEY) return res.status(503).json({ error: "Orchestrator API key not configured" });

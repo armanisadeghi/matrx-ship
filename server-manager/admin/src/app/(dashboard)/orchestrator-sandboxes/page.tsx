@@ -1,18 +1,18 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { RefreshCw, ExternalLink, Power, AlertTriangle, Hammer, Terminal, Loader2, CheckCircle2, Plus } from "lucide-react";
+import { RefreshCw, ExternalLink, Power, AlertTriangle, Hammer, Terminal, Loader2, CheckCircle2, Plus, Trash2 } from "lucide-react";
 import { Button } from "@matrx/admin-ui/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@matrx/admin-ui/ui/card";
 import { Badge } from "@matrx/admin-ui/ui/badge";
 import { Input } from "@matrx/admin-ui/ui/input";
-import { Table, TableHeader, TableHead, TableBody, TableRow, TableCell } from "@matrx/admin-ui/ui/table";
 import { PageShell } from "@matrx/admin-ui/components/page-shell";
 import { useConfirm } from "@matrx/admin-ui/components/confirm-dialog";
 import { useAuth } from "@/lib/auth-context";
 import { api, API, ApiError } from "@/lib/api";
+import { DataTable, type Column } from "@/components/admin/data-table";
 
 interface OrchSandbox {
   sandbox_id: string;
@@ -141,6 +141,13 @@ export default function OrchestratorSandboxesPage() {
   // Zero-drift state
   const [drift, setDrift] = useState<DriftResponse | null>(null);
   const [migrateBusy, setMigrateBusy] = useState(false);
+  // ── Sandbox table: quick-filter chips + row selection for bulk actions ──
+  // status filter: live (any LIVE_STATUSES), stopped, failed, expired, all
+  const [statusFilter, setStatusFilter] = useState<"all" | "live" | "stopped" | "failed" | "expired">("all");
+  const [tierFilter, setTierFilter] = useState<"all" | "hosted" | "ec2">("all");
+  const [olderThan, setOlderThan] = useState<"any" | "1h" | "1d" | "7d" | "30d">("any");
+  const [selectedSbx, setSelectedSbx] = useState<Set<string>>(new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -308,6 +315,91 @@ export default function OrchestratorSandboxesPage() {
     const t = setInterval(load, POLL_MS);
     return () => clearInterval(t);
   }, [authed, load]);
+
+  // ── Quick-filter pipeline (chips above the DataTable). The DataTable's own
+  //    global filter still works on top of this — these chips just narrow the
+  //    candidate set so the operator can do "stopped > 7d" with one click.
+  const visibleSandboxes = useMemo(() => {
+    const now = Date.now();
+    const olderThanMs = olderThan === "1h" ? 3600000 : olderThan === "1d" ? 86400000 : olderThan === "7d" ? 7 * 86400000 : olderThan === "30d" ? 30 * 86400000 : 0;
+    return sandboxes.filter((s) => {
+      if (statusFilter === "live" && !LIVE_STATUSES.has(s.status)) return false;
+      if (statusFilter === "stopped" && s.status !== "stopped") return false;
+      if (statusFilter === "failed" && s.status !== "failed") return false;
+      if (statusFilter === "expired" && s.status !== "expired") return false;
+      if (tierFilter !== "all" && (s.tier ?? "hosted") !== tierFilter) return false;
+      if (olderThanMs) {
+        const created = s.created_at ? new Date(s.created_at).getTime() : 0;
+        if (!created || now - created < olderThanMs) return false;
+      }
+      return true;
+    });
+  }, [sandboxes, statusFilter, tierFilter, olderThan]);
+
+  // Selecting a destroyed/already-gone row makes no sense; only live + dormant
+  // rows are bulk-destroyable.
+  function isUnselectableForBulk(s: OrchSandbox): boolean {
+    return false; // any row state is destroyable (DELETE is idempotent on the orchestrator)
+  }
+
+  const bulkDestroy = useCallback(async () => {
+    const ids = Array.from(selectedSbx);
+    if (ids.length === 0) return;
+    const ok = await ask({
+      title: `Destroy ${ids.length} sandbox(es)?`,
+      description: "Each container is stopped + removed. Per-user volumes are preserved (resumable). Use 'Wipe pool' below to also delete idle stopped/failed rows from the registry.",
+      variant: "destructive",
+      confirmLabel: `Destroy ${ids.length}`,
+    });
+    if (!ok) return;
+    setBulkBusy(true);
+    try {
+      const r = await api<{ requested: number; ok: number; failed: number }>(
+        API.ORCH_SANDBOXES_BULK_DESTROY,
+        { method: "POST", body: JSON.stringify({ sandbox_ids: ids, graceful: true }) },
+      );
+      toast.success(`Destroyed ${r.ok} of ${r.requested} sandbox(es)${r.failed ? `; ${r.failed} failed` : ""}.`);
+      setSelectedSbx(new Set());
+      await load();
+    } catch (e) {
+      toast.error(`Bulk destroy failed: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setBulkBusy(false);
+    }
+  }, [selectedSbx, load, ask]);
+
+  // "Cleanup": select all NON-LIVE rows that are older than X and bulk-destroy.
+  // The common ops use-case — "delete the stopped/failed rows older than a day".
+  const cleanupOlder = useCallback(async () => {
+    const candidates = sandboxes.filter((s) => {
+      const dead = s.status === "stopped" || s.status === "failed" || s.status === "expired";
+      if (!dead) return false;
+      const created = s.created_at ? new Date(s.created_at).getTime() : 0;
+      return created && (Date.now() - created) > 86400000; // >1d
+    }).map((s) => s.sandbox_id);
+    if (candidates.length === 0) { toast.info("Nothing to clean — no stopped/failed sandboxes older than 24h."); return; }
+    const ok = await ask({
+      title: `Cleanup ${candidates.length} dead sandbox(es) older than 24h?`,
+      description: "Selects every stopped/failed/expired sandbox created >24h ago and destroys it. Per-user volumes are preserved by the orchestrator.",
+      variant: "destructive",
+      confirmLabel: `Cleanup ${candidates.length}`,
+    });
+    if (!ok) return;
+    setBulkBusy(true);
+    try {
+      const r = await api<{ requested: number; ok: number; failed: number }>(
+        API.ORCH_SANDBOXES_BULK_DESTROY,
+        { method: "POST", body: JSON.stringify({ sandbox_ids: candidates, graceful: true }) },
+      );
+      toast.success(`Cleaned up ${r.ok} of ${r.requested} dead sandbox(es)${r.failed ? `; ${r.failed} failed` : ""}.`);
+      setSelectedSbx(new Set());
+      await load();
+    } catch (e) {
+      toast.error(`Cleanup failed: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setBulkBusy(false);
+    }
+  }, [sandboxes, load, ask]);
 
   return (
     <PageShell
@@ -545,93 +637,149 @@ export default function OrchestratorSandboxesPage() {
         </Card>
       )}
 
+      {/* ── Quick-filter chips: status / tier / created-age ───────────────
+          These narrow the DataTable's candidate set *before* the global
+          filter input runs. Common ops flow: "show me failed > 1d on hosted
+          tier" → select all (filtered) → Bulk destroy. */}
       <Card>
-        <CardContent className="p-0">
-          {loading && sandboxes.length === 0 ? (
-            <div className="p-6 text-center text-muted-foreground text-sm">Loading...</div>
-          ) : sandboxes.length === 0 ? (
-            <div className="p-6 text-center text-muted-foreground text-sm">
-              No sandboxes spawned by the orchestrator yet.
-            </div>
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Sandbox ID</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead className="hidden md:table-cell">Tier / Template</TableHead>
-                  <TableHead className="hidden md:table-cell">User</TableHead>
-                  <TableHead>Last updated</TableHead>
-                  <TableHead className="hidden lg:table-cell">Created</TableHead>
-                  <TableHead className="hidden lg:table-cell">Expires</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {sandboxes.map((sbx) => (
-                  <TableRow
-                    key={sbx.sandbox_id}
-                    className="cursor-pointer"
-                    onClick={() => router.push(`/orchestrator-sandboxes/${sbx.sandbox_id}`)}
-                  >
-                    <TableCell className="font-mono text-xs">{sbx.sandbox_id}</TableCell>
-                    <TableCell>
-                      <Badge variant={sbx.status === "running" ? "success" : sbx.status === "creating" ? "secondary" : "destructive"}>
-                        {sbx.status}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="hidden md:table-cell text-xs">
-                      <span className="font-mono">{sbx.tier ?? "—"}</span>{" "}
-                      <span className="text-muted-foreground">/ {sbx.template ?? "bare"}</span>
-                    </TableCell>
-                    <TableCell className="hidden md:table-cell font-mono text-xs text-muted-foreground">
-                      {sbx.user_id?.slice(0, 8) ?? "—"}
-                    </TableCell>
-                    <TableCell className="text-xs">
-                      {isStale(sbx) ? (
-                        <Badge variant="destructive" title="Live status but not refreshed recently — the orchestrator may have lost track of this sandbox.">
-                          stale · {relativeAge(sbx.updated_at)}
-                        </Badge>
-                      ) : (
-                        <span className="text-muted-foreground" title={sbx.updated_at ?? undefined}>
-                          {relativeAge(sbx.updated_at)}
-                        </span>
-                      )}
-                    </TableCell>
-                    <TableCell className="hidden lg:table-cell text-xs text-muted-foreground">
-                      {sbx.created_at ? new Date(sbx.created_at).toLocaleString() : "—"}
-                    </TableCell>
-                    <TableCell className="hidden lg:table-cell text-xs text-muted-foreground">
-                      {sbx.expires_at ? new Date(sbx.expires_at).toLocaleString() : "—"}
-                    </TableCell>
-                    <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
-                      <div className="flex items-center justify-end gap-1.5">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          title="Open a live shell inside this box"
-                          disabled={sbx.status !== "running" || (sbx.tier ?? "hosted") === "ec2"}
-                          onClick={() => router.push(`/orchestrator-sandboxes/${sbx.sandbox_id}?tab=terminal`)}
-                        >
-                          <Terminal className="size-3.5" /> Terminal
-                        </Button>
-                        <Button
-                          variant="default"
-                          size="sm"
-                          title="Open this box — health, files, logs, terminal"
-                          onClick={() => router.push(`/orchestrator-sandboxes/${sbx.sandbox_id}`)}
-                        >
-                          <ExternalLink className="size-3.5" /> Look inside
-                        </Button>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
+        <CardContent className="pt-4 pb-4 flex items-center gap-2 flex-wrap text-sm">
+          <span className="text-xs text-muted-foreground mr-1">Filters:</span>
+          {(["all", "live", "stopped", "failed", "expired"] as const).map((s) => (
+            <Button key={s} size="sm" variant={statusFilter === s ? "default" : "outline"} className="h-7 px-2 text-xs" onClick={() => setStatusFilter(s)}>{s}</Button>
+          ))}
+          <span className="text-muted-foreground/40">·</span>
+          {(["all", "hosted", "ec2"] as const).map((t) => (
+            <Button key={t} size="sm" variant={tierFilter === t ? "default" : "outline"} className="h-7 px-2 text-xs" onClick={() => setTierFilter(t)}>{t}</Button>
+          ))}
+          <span className="text-muted-foreground/40">·</span>
+          <span className="text-xs text-muted-foreground">older than:</span>
+          {(["any", "1h", "1d", "7d", "30d"] as const).map((o) => (
+            <Button key={o} size="sm" variant={olderThan === o ? "default" : "outline"} className="h-7 px-2 text-xs" onClick={() => setOlderThan(o)}>{o}</Button>
+          ))}
+          <div className="flex-1" />
+          <span className="text-xs text-muted-foreground tabular-nums">
+            {visibleSandboxes.length} of {sandboxes.length}
+          </span>
+          <Button
+            size="sm"
+            variant="destructive"
+            disabled={bulkBusy || sandboxes.filter((s) => (s.status === "stopped" || s.status === "failed" || s.status === "expired") && s.created_at && (Date.now() - new Date(s.created_at).getTime()) > 86400000).length === 0}
+            onClick={cleanupOlder}
+            title="Destroy every stopped/failed/expired sandbox created more than 24h ago. Per-user volumes are preserved."
+          >
+            {bulkBusy ? <Loader2 className="size-4 animate-spin" /> : <Trash2 className="size-4" />}
+            Cleanup dead &gt;24h
+          </Button>
         </CardContent>
       </Card>
+
+      <DataTable<OrchSandbox>
+        rows={visibleSandboxes}
+        getRowKey={(s) => s.sandbox_id}
+        getSearchText={(s) => `${s.sandbox_id} ${s.user_id ?? ""} ${s.status} ${s.tier ?? ""} ${s.template ?? ""} ${s.stop_reason ?? ""}`}
+        searchPlaceholder="Filter by id / user / status / template…"
+        onRowClick={(s) => router.push(`/orchestrator-sandboxes/${s.sandbox_id}`)}
+        initialSort={{ key: "created", dir: "desc" }}
+        emptyMessage={loading ? "Loading…" : "No sandboxes match the current filter."}
+        copyView="Sandboxes"
+        copyDescription="Orchestrator-managed sandboxes (hosted + ec2). Each row is one container the orchestrator has spawned."
+        copyGuidance="Use status + stop_reason to diagnose failed boxes; cross-reference sandbox_id with /admin/orchestrator-logs for the container-start error."
+        getRowData={(s) => ({ ...s })}
+        selection={{
+          selected: selectedSbx,
+          onChange: setSelectedSbx,
+          isDisabled: (k) => isUnselectableForBulk(sandboxes.find((s) => s.sandbox_id === k)!),
+          renderBulkBar: ({ selectedKeys, clear }) => (
+            <div className="flex items-center gap-2">
+              <Button size="sm" variant="ghost" onClick={clear} disabled={bulkBusy}>Clear</Button>
+              <Button
+                size="sm"
+                variant="destructive"
+                disabled={bulkBusy || selectedKeys.length === 0}
+                onClick={bulkDestroy}
+              >
+                {bulkBusy ? <Loader2 className="size-4 animate-spin" /> : <Trash2 className="size-4" />}
+                Destroy {selectedKeys.length} (volume preserved)
+              </Button>
+            </div>
+          ),
+        }}
+        columns={[
+          {
+            key: "sandbox_id", header: "Sandbox ID",
+            sortValue: (s) => s.sandbox_id,
+            render: (s) => <span className="font-mono text-xs">{s.sandbox_id}</span>,
+            className: "max-w-[280px] truncate",
+          },
+          {
+            key: "status", header: "Status",
+            sortValue: (s) => s.status,
+            render: (s) => (
+              <Badge variant={s.status === "running" || s.status === "ready" ? "success" : s.status === "creating" || s.status === "starting" ? "secondary" : "destructive"}>
+                {s.status}
+              </Badge>
+            ),
+          },
+          {
+            key: "tier", header: "Tier / Template",
+            sortValue: (s) => `${s.tier ?? ""} ${s.template ?? ""}`,
+            render: (s) => (
+              <span className="text-xs">
+                <span className="font-mono">{s.tier ?? "—"}</span>{" "}
+                <span className="text-muted-foreground">/ {s.template ?? "bare"}</span>
+              </span>
+            ),
+            hideBelow: "md",
+          },
+          {
+            key: "user", header: "User",
+            sortValue: (s) => s.user_id ?? "",
+            render: (s) => <span className="font-mono text-xs text-muted-foreground">{s.user_id?.slice(0, 8) ?? "—"}</span>,
+            hideBelow: "md",
+          },
+          {
+            key: "updated", header: "Last updated",
+            sortValue: (s) => s.updated_at ? new Date(s.updated_at).getTime() : 0,
+            render: (s) => isStale(s)
+              ? <Badge variant="destructive" title="Live status but not refreshed recently — the orchestrator may have lost track of this sandbox.">stale · {relativeAge(s.updated_at)}</Badge>
+              : <span className="text-muted-foreground text-xs" title={s.updated_at ?? undefined}>{relativeAge(s.updated_at)}</span>,
+          },
+          {
+            key: "created", header: "Created",
+            sortValue: (s) => s.created_at ? new Date(s.created_at).getTime() : 0,
+            render: (s) => <span className="text-xs text-muted-foreground" title={s.created_at ?? undefined}>{s.created_at ? new Date(s.created_at).toLocaleString() : "—"}</span>,
+            hideBelow: "lg",
+          },
+          {
+            key: "expires", header: "Expires",
+            sortValue: (s) => s.expires_at ? new Date(s.expires_at).getTime() : 0,
+            render: (s) => <span className="text-xs text-muted-foreground">{s.expires_at ? new Date(s.expires_at).toLocaleString() : "—"}</span>,
+            hideBelow: "lg",
+          },
+          {
+            key: "actions", header: "", sortable: false, align: "right",
+            render: (s) => (
+              <div className="flex items-center justify-end gap-1.5" onClick={(e) => e.stopPropagation()}>
+                <Button
+                  variant="outline" size="sm"
+                  title="Open a live shell inside this box"
+                  disabled={s.status !== "running" || (s.tier ?? "hosted") === "ec2"}
+                  onClick={() => router.push(`/orchestrator-sandboxes/${s.sandbox_id}?tab=terminal`)}
+                >
+                  <Terminal className="size-3.5" /> Terminal
+                </Button>
+                <Button
+                  variant="default" size="sm"
+                  title="Open this box — health, files, logs, terminal"
+                  onClick={() => router.push(`/orchestrator-sandboxes/${s.sandbox_id}`)}
+                >
+                  <ExternalLink className="size-3.5" /> Look inside
+                </Button>
+              </div>
+            ),
+          },
+        ] as Column<OrchSandbox>[]}
+      />
     </PageShell>
   );
 }

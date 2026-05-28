@@ -24,6 +24,18 @@ import { ChevronUp, ChevronDown, ChevronsUpDown, Search } from "lucide-react";
 import { Input } from "@matrx/admin-ui/ui/input";
 import { CopyControls } from "@/components/admin/copy-controls";
 
+type Selection = {
+  /** Selected row keys (Set of getRowKey values). */
+  selected: Set<string>;
+  /** Called when the user clicks a checkbox or the header's select-all box. */
+  onChange: (next: Set<string>) => void;
+  /** Rendered ABOVE the table when at least one row is selected. Receives the
+   *  selected keys + a quick clear() helper. Use for bulk-action buttons. */
+  renderBulkBar?: (ctx: { selectedKeys: string[]; clear: () => void; filteredKeys: string[] }) => ReactNode;
+  /** Optional helper: row keys that aren't selectable (e.g. running/protected). */
+  isDisabled?: (key: string) => boolean;
+};
+
 export interface Column<T> {
   key: string;
   header: ReactNode;
@@ -65,6 +77,7 @@ export function DataTable<T>({
   copyDescription,
   copyGuidance,
   getRowData,
+  selection,
 }: {
   rows: T[];
   columns: Column<T>[];
@@ -82,6 +95,9 @@ export function DataTable<T>({
   copyDescription?: string;
   copyGuidance?: string;
   getRowData?: (row: T) => Record<string, unknown>;
+  /** Opt-in row selection + bulk-action bar. Backward compatible: omit to keep
+   *  the previous read-only behaviour. */
+  selection?: Selection;
 }) {
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<{ key: string; dir: SortDir } | null>(initialSort ?? null);
@@ -133,6 +149,30 @@ export function DataTable<T>({
     });
   }
 
+  // ── Selection helpers ────────────────────────────────────────────────────
+  const selectableFilteredKeys = useMemo(() => {
+    if (!selection) return [] as string[];
+    return sorted.map(getRowKey).filter((k) => !selection.isDisabled?.(k));
+  }, [selection, sorted, getRowKey]);
+  const allFilteredSelected = selection && selectableFilteredKeys.length > 0 && selectableFilteredKeys.every((k) => selection.selected.has(k));
+  const someFilteredSelected = selection && selectableFilteredKeys.some((k) => selection.selected.has(k)) && !allFilteredSelected;
+  function toggleAllFiltered() {
+    if (!selection) return;
+    const next = new Set(selection.selected);
+    if (allFilteredSelected) {
+      for (const k of selectableFilteredKeys) next.delete(k);
+    } else {
+      for (const k of selectableFilteredKeys) next.add(k);
+    }
+    selection.onChange(next);
+  }
+  function toggleOne(key: string) {
+    if (!selection) return;
+    const next = new Set(selection.selected);
+    if (next.has(key)) next.delete(key); else next.add(key);
+    selection.onChange(next);
+  }
+
   return (
     <div className="space-y-2">
       {(getSearchText || toolbar || (copyView && getRowData)) && (
@@ -163,10 +203,39 @@ export function DataTable<T>({
         </div>
       )}
 
+      {selection && selection.selected.size > 0 && selection.renderBulkBar && (
+        <div className="rounded-md border border-primary/40 bg-primary/5 px-3 py-2 flex items-center gap-2 flex-wrap">
+          <span className="text-sm font-medium">
+            {selection.selected.size} selected
+          </span>
+          <span className="text-xs text-muted-foreground">
+            · click rows or the header checkbox to change
+          </span>
+          <div className="flex-1" />
+          {selection.renderBulkBar({
+            selectedKeys: Array.from(selection.selected),
+            clear: () => selection.onChange(new Set()),
+            filteredKeys: selectableFilteredKeys,
+          })}
+        </div>
+      )}
+
       <div className="rounded-lg border overflow-x-auto">
         <table className="w-full text-sm border-collapse">
           <thead className="sticky top-0 z-10 bg-muted/95 backdrop-blur supports-[backdrop-filter]:bg-muted/80">
             <tr className="border-b">
+              {selection && (
+                <th className="px-3 py-2 w-px">
+                  <input
+                    type="checkbox"
+                    aria-label={allFilteredSelected ? "Deselect all filtered" : "Select all filtered"}
+                    checked={!!allFilteredSelected}
+                    ref={(el) => { if (el) el.indeterminate = !!someFilteredSelected; }}
+                    onChange={toggleAllFiltered}
+                    className="size-4 cursor-pointer"
+                  />
+                </th>
+              )}
               {allColumns.map((col) => {
                 const canSort = col.sortable !== false && !!col.sortValue;
                 const active = sort?.key === col.key;
@@ -189,22 +258,39 @@ export function DataTable<T>({
           </thead>
           <tbody>
             {sorted.length === 0 ? (
-              <tr><td colSpan={allColumns.length} className="px-3 py-10 text-center text-sm text-muted-foreground">
+              <tr><td colSpan={allColumns.length + (selection ? 1 : 0)} className="px-3 py-10 text-center text-sm text-muted-foreground">
                 {query ? "Nothing matches that filter." : emptyMessage}
               </td></tr>
-            ) : sorted.map((row) => (
-              <tr
-                key={getRowKey(row)}
-                onClick={onRowClick ? () => onRowClick(row) : undefined}
-                className={`border-b last:border-0 ${onRowClick ? "cursor-pointer hover:bg-muted/40" : ""}`}
-              >
-                {allColumns.map((col) => (
-                  <td key={col.key} className={`px-3 py-1.5 align-middle ${alignClass(col.align)} ${hideClass(col.hideBelow)} ${col.className || ""}`}>
-                    {col.render(row)}
-                  </td>
-                ))}
-              </tr>
-            ))}
+            ) : sorted.map((row) => {
+              const key = getRowKey(row);
+              const isSelected = selection?.selected.has(key) ?? false;
+              const isDisabled = selection?.isDisabled?.(key) ?? false;
+              return (
+                <tr
+                  key={key}
+                  onClick={onRowClick ? () => onRowClick(row) : undefined}
+                  className={`border-b last:border-0 ${onRowClick ? "cursor-pointer hover:bg-muted/40" : ""} ${isSelected ? "bg-primary/5" : ""}`}
+                >
+                  {selection && (
+                    <td className="px-3 py-1.5 align-middle w-px" onClick={(e) => e.stopPropagation()}>
+                      <input
+                        type="checkbox"
+                        aria-label={`Select ${key}`}
+                        checked={isSelected}
+                        disabled={isDisabled}
+                        onChange={() => toggleOne(key)}
+                        className="size-4 cursor-pointer disabled:cursor-not-allowed disabled:opacity-40"
+                      />
+                    </td>
+                  )}
+                  {allColumns.map((col) => (
+                    <td key={col.key} className={`px-3 py-1.5 align-middle ${alignClass(col.align)} ${hideClass(col.hideBelow)} ${col.className || ""}`}>
+                      {col.render(row)}
+                    </td>
+                  ))}
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
