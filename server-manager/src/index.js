@@ -2473,6 +2473,39 @@ function inspectImage(tag) {
   };
 }
 
+// ── Sandbox-image build markers ─────────────────────────────────────────────
+// Both deploy-hosted.sh (host-side, on every deploy) and the Manager's own UI
+// rebuild endpoints drop a marker file here WHILE an image variant builds, and
+// remove it when done. Fleet Health + the image-health banner read it so a
+// "missing required image" reads as "rebuilding…" (not a false critical) during
+// the multi-minute aidream build. Path matches deploy-hosted.sh's
+// IMAGE_BUILD_STATUS_DIR (=/srv/apps/image-build-status). A marker older than
+// the TTL is treated as stale (the build process died) and ignored.
+const IMAGE_BUILD_STATUS_DIR = join(APPS_DIR, "image-build-status");
+const IMAGE_BUILD_MARKER_TTL_MS = 30 * 60 * 1000;
+
+function imageBuildInProgress(variant) {
+  try {
+    const f = join(IMAGE_BUILD_STATUS_DIR, `${variant}.json`);
+    if (!existsSync(f)) return null;
+    const ageMs = Date.now() - statSync(f).mtimeMs;
+    if (ageMs > IMAGE_BUILD_MARKER_TTL_MS) return null; // stale → build died
+    let info = {};
+    try { info = JSON.parse(readFileSync(f, "utf-8")); } catch { /* tolerate partial write */ }
+    return { variant, started_at: info.started_at || null, source: info.source || "unknown", age_seconds: Math.round(ageMs / 1000) };
+  } catch { return null; }
+}
+
+function markImageBuild(variant, source) {
+  try {
+    mkdirSync(IMAGE_BUILD_STATUS_DIR, { recursive: true });
+    writeFileSync(join(IMAGE_BUILD_STATUS_DIR, `${variant}.json`), JSON.stringify({ variant, started_at: new Date().toISOString(), source }));
+  } catch { /* non-fatal — marker is advisory */ }
+}
+function clearImageBuild(variant) {
+  try { unlinkSync(join(IMAGE_BUILD_STATUS_DIR, `${variant}.json`)); } catch { /* already gone */ }
+}
+
 app.get("/api/orchestrator-sandboxes", authMiddleware, async (_req, res) => {
   if (!ORCH_KEY) return res.status(503).json({ error: "Orchestrator API key not configured (set MATRX_HOSTED_ORCHESTRATOR_API_KEY)" });
   try {
@@ -2959,9 +2992,16 @@ app.get("/api/sandbox-images/health", authMiddleware, async (_req, res) => {
   // absent variants the orchestrator actually spawns from (+ the orchestrator
   // image) — this is the real "spawning is/'ll-be broken" alarm the banner uses.
   const missing = images.filter((i) => !i.present).map((i) => i.variant);
-  const missing_required = images.filter((i) => i.required && !i.present).map((i) => i.variant);
-  if (!orchestrator.present) missing_required.push("orchestrator");
-  res.json({ images, orchestrator, missing, missing_required, checked_at: new Date().toISOString() });
+  // A variant that's missing BUT currently rebuilding shouldn't count as a
+  // "required missing" alarm — it's mid-fix. Surface those separately as
+  // `rebuilding` so the banner can say "rebuilding…" instead of "missing".
+  const rebuilding = [];
+  const missing_required = images
+    .filter((i) => i.required && !i.present)
+    .filter((i) => { const b = imageBuildInProgress(i.variant); if (b) { rebuilding.push(b); return false; } return true; })
+    .map((i) => i.variant);
+  if (!orchestrator.present && !imageBuildInProgress("orchestrator")) missing_required.push("orchestrator");
+  res.json({ images, orchestrator, missing, missing_required, rebuilding, checked_at: new Date().toISOString() });
 });
 
 // ── Fleet Health (read-only monitor) ────────────────────────────────────────
@@ -3036,14 +3076,23 @@ function checkSandboxImages() {
     return { variant, required: spec.required === true, present: info.present, age_days: ageDays };
   });
   const orch = inspectImage(ORCH_IMAGE_TAG);
-  const missingRequired = imgs.filter((i) => i.required && !i.present).map((i) => i.variant);
-  if (!orch.present) missingRequired.push("orchestrator");
+  // Split missing-required into "actually missing" vs "missing but rebuilding
+  // right now" (a deploy-hosted run or a UI rebuild left a fresh build marker).
+  // A rebuilding image is mid-fix, NOT a critical alarm — show progress instead.
+  const rebuilding = [];
+  const missingRequired = [];
+  for (const i of imgs.filter((x) => x.required && !x.present)) {
+    const b = imageBuildInProgress(i.variant);
+    if (b) rebuilding.push(b); else missingRequired.push(i.variant);
+  }
+  if (!orch.present) { const b = imageBuildInProgress("orchestrator"); if (b) rebuilding.push(b); else missingRequired.push("orchestrator"); }
   const staleRequired = imgs.filter((i) => i.required && i.present && i.age_days != null && i.age_days > IMAGE_STALE_DAYS).map((i) => `${i.variant} (${i.age_days}d)`);
   let status = "ok", detail = "All required images present and fresh.";
   const actions = [];
   if (missingRequired.length) {
     status = "critical";
     detail = `Missing required image(s): ${missingRequired.join(", ")}. Sandboxes that spawn from these will fail until rebuilt.`;
+    if (rebuilding.length) detail += ` (Also rebuilding now: ${rebuilding.map((b) => `${b.variant} ${b.age_seconds}s`).join(", ")}.)`;
     // One button per missing variant — each takes the user to the live-log
     // rebuild page (the build is heavy + streamed; one-shot wouldn't give
     // useful feedback).
@@ -3056,6 +3105,11 @@ function checkSandboxImages() {
         note: `Opens the Sandboxes page where ${v} rebuilds with live build logs.`,
       });
     }
+  } else if (rebuilding.length) {
+    // Nothing permanently missing — just builds in flight. Surface as a calm
+    // "in progress" warning so the banner shows movement, not a red alarm.
+    status = "warning";
+    detail = `Rebuilding sandbox image(s): ${rebuilding.map((b) => `${b.variant} (${b.age_seconds}s, via ${b.source})`).join(", ")}. This clears automatically when the build finishes.`;
   } else if (staleRequired.length) {
     status = "warning";
     detail = `Stale required image(s) older than ${IMAGE_STALE_DAYS}d: ${staleRequired.join(", ")} — consider rebuilding.`;
@@ -3064,7 +3118,7 @@ function checkSandboxImages() {
       actions.push({ label: `Rebuild ${v} image`, action: "sandbox-image-rebuild", variant: v, data_safe: true, note: `Opens the Sandboxes page where ${v} rebuilds with live logs.` });
     }
   }
-  return { id: "sandbox-images", label: "Sandbox image freshness", status, detail, images: imgs, actions };
+  return { id: "sandbox-images", label: "Sandbox image freshness", status, detail, images: imgs, rebuilding, actions };
 }
 
 async function checkRecentDeploys() {
@@ -3365,6 +3419,9 @@ app.post("/api/sandbox-images/rebuild-missing/stream", authMiddleware, requireRo
       continue;
     }
     send("phase", { phase: "build", message: `── Building ${spec.tag} ──` });
+    // Drop a build marker so Fleet Health shows "rebuilding…" (not a false
+    // "missing" critical) for the whole duration of this UI-triggered build.
+    markImageBuild(v, "manager-ui");
     const ok = await new Promise((resolve) => {
       let cmd, args, cwd;
       if (spec.script) {
@@ -3387,10 +3444,11 @@ app.post("/api/sandbox-images/rebuild-missing/stream", authMiddleware, requireRo
       proc.stderr.on("data", relay);
       proc.on("close", (code) => {
         if (_imgRebuildInFlight) _imgRebuildInFlight.proc = null;
+        clearImageBuild(v);
         if (code === 0) { send("log", { message: `✓ Built ${spec.tag}` }); resolve(true); }
         else { send("log", { message: `✗ ${spec.tag} build failed with exit ${code}` }); resolve(false); }
       });
-      proc.on("error", (err) => { send("log", { message: `✗ ${err.message}` }); resolve(false); });
+      proc.on("error", (err) => { clearImageBuild(v); send("log", { message: `✗ ${err.message}` }); resolve(false); });
     });
     if (!ok) { overallOk = false; break; }
   }
