@@ -20,25 +20,27 @@ export async function POST(request: Request) {
   try {
     const body = await request.text();
 
-    // Verify webhook signature
+    // Verify webhook signature. Fail closed: if a secret is configured, a valid
+    // signature is REQUIRED (previously a request with no signature header
+    // skipped verification entirely, letting anyone forge version records).
     const signature = request.headers.get("x-hub-signature-256");
     const webhookSecret = process.env.GITHUB_WEBHOOK_SECRET;
 
-    if (webhookSecret && signature) {
+    if (webhookSecret) {
       const expectedSignature =
         "sha256=" +
-        crypto
-          .createHmac("sha256", webhookSecret)
-          .update(body)
-          .digest("hex");
-
-      if (signature !== expectedSignature) {
-        logger.error("[webhook/github] Invalid signature");
-        return NextResponse.json(
-          { error: "Invalid signature" },
-          { status: 401 },
-        );
+        crypto.createHmac("sha256", webhookSecret).update(body).digest("hex");
+      const sigBuf = Buffer.from(signature || "");
+      const expBuf = Buffer.from(expectedSignature);
+      const valid =
+        sigBuf.length === expBuf.length && crypto.timingSafeEqual(sigBuf, expBuf);
+      if (!valid) {
+        logger.error("[webhook/github] Invalid or missing signature");
+        return NextResponse.json({ error: "Invalid signature" }, { status: 401 });
       }
+    } else if (process.env.NODE_ENV === "production") {
+      logger.error("[webhook/github] GITHUB_WEBHOOK_SECRET not configured — rejecting in production");
+      return NextResponse.json({ error: "Webhook secret not configured" }, { status: 503 });
     }
 
     const payload = JSON.parse(body);

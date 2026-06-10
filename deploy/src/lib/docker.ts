@@ -1,7 +1,8 @@
+import { NextResponse } from "next/server";
 import { execSync, spawn } from "node:child_process";
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
 import { join, dirname } from "node:path";
-import { randomBytes } from "node:crypto";
+import { randomBytes, createHash, timingSafeEqual } from "node:crypto";
 import { cpus, totalmem, freemem, uptime as osUptime, hostname } from "node:os";
 import { recordBuildInSupabase, auditLog } from "./supabase";
 
@@ -77,12 +78,22 @@ function loadTokens(): { tokens: TokenEntry[] } {
   }
 }
 
+// Constant-time string compare (hashes both sides to a fixed-length digest so
+// the comparison cost is independent of where the inputs diverge).
+function safeEqual(a: string, b: string): boolean {
+  if (typeof a !== "string" || typeof b !== "string") return false;
+  const ha = createHash("sha256").update(a).digest();
+  const hb = createHash("sha256").update(b).digest();
+  return timingSafeEqual(ha, hb);
+}
+
 export function verifyToken(bearerToken: string): TokenEntry | null {
   if (!bearerToken) return null;
-  
-  // Check environment variable tokens first (for dev and production)
+
+  // Check environment variable tokens first (for dev and production).
+  // Timing-safe compare so token bytes can't be recovered via response timing.
   const envTokens = process.env.DEPLOY_TOKENS?.split(',').map(t => t.trim()).filter(Boolean) || [];
-  if (envTokens.includes(bearerToken)) {
+  if (envTokens.some((t) => safeEqual(t, bearerToken))) {
     return {
       id: 'env_token',
       token_hash: '',
@@ -92,14 +103,23 @@ export function verifyToken(bearerToken: string): TokenEntry | null {
       last_used_at: new Date().toISOString(),
     };
   }
-  
-  // Fall back to tokens.json file (for managed tokens)
-  const { createHash } = require("node:crypto");
+
+  // Fall back to tokens.json file (for managed tokens). Lookup is by SHA-256 of
+  // the presented token, so the compared value isn't attacker-tunable.
   const hash = createHash("sha256").update(bearerToken).digest("hex");
   const store = loadTokens();
   const entry = store.tokens.find((t) => t.token_hash === hash);
   if (!entry) return null;
   return entry;
+}
+
+// Shared route guard: returns null if authorized, or a 401 Response otherwise.
+export function requireAuth(req: Request): NextResponse | null {
+  const token = req.headers.get("authorization")?.replace("Bearer ", "");
+  if (!token || !verifyToken(token)) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+  return null;
 }
 
 // ── Deployments ─────────────────────────────────────────────────────────────

@@ -22,23 +22,27 @@ export async function POST(request: Request) {
     const body = await request.text();
     const payload = JSON.parse(body);
 
-    // Verify webhook signature if secret is configured
+    // Verify webhook signature. Fail closed: a configured secret makes a valid
+    // signature mandatory (an unsigned request used to bypass verification).
     const signature = request.headers.get("x-vercel-signature");
     const webhookSecret = process.env.VERCEL_WEBHOOK_SECRET;
 
-    if (webhookSecret && signature) {
+    if (webhookSecret) {
       const expectedSignature = crypto
         .createHmac("sha1", webhookSecret)
         .update(body)
         .digest("hex");
-
-      if (signature !== expectedSignature) {
-        logger.error("[webhook/vercel] Invalid signature");
-        return NextResponse.json(
-          { error: "Invalid signature" },
-          { status: 401 },
-        );
+      const sigBuf = Buffer.from(signature || "");
+      const expBuf = Buffer.from(expectedSignature);
+      const valid =
+        sigBuf.length === expBuf.length && crypto.timingSafeEqual(sigBuf, expBuf);
+      if (!valid) {
+        logger.error("[webhook/vercel] Invalid or missing signature");
+        return NextResponse.json({ error: "Invalid signature" }, { status: 401 });
       }
+    } else if (process.env.NODE_ENV === "production") {
+      logger.error("[webhook/vercel] VERCEL_WEBHOOK_SECRET not configured — rejecting in production");
+      return NextResponse.json({ error: "Webhook secret not configured" }, { status: 503 });
     }
 
     const { type, payload: eventPayload } = payload;

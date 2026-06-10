@@ -17,6 +17,7 @@ import {
   type ActorInfo,
 } from "@/lib/services/tickets";
 import { logger } from "@/lib/logger";
+import { safeEqual } from "@/lib/auth/api-key";
 
 // ─── Auth validation ────────────────────────────
 function validateAuth(request: Request): boolean {
@@ -25,10 +26,10 @@ function validateAuth(request: Request): boolean {
 
   const token = authHeader.slice(7);
   const apiKey = process.env.MATRX_SHIP_API_KEY;
-  if (apiKey && token === apiKey) return true;
+  if (apiKey && safeEqual(token, apiKey)) return true;
 
   const adminSecret = process.env.MATRX_SHIP_ADMIN_SECRET;
-  if (adminSecret && token === adminSecret) return true;
+  if (adminSecret && safeEqual(token, adminSecret)) return true;
 
   return false;
 }

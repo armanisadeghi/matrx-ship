@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { safeEqual } from "@/lib/auth/api-key";
 
 /**
  * Validate a reporter token for user-facing ticket submissions.
@@ -28,7 +29,7 @@ export function validateReporterToken(
     return null;
   }
 
-  if (token !== expectedToken) {
+  if (!safeEqual(token, expectedToken)) {
     return NextResponse.json(
       { error: "Invalid reporter token" },
       { status: 401 },

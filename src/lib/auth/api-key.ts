@@ -3,6 +3,19 @@ import { db } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { apiKeys } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
+import { createHash, timingSafeEqual } from "node:crypto";
+
+/**
+ * Constant-time string comparison for secrets. Hashes both inputs to a
+ * fixed-length digest so the comparison never short-circuits on length or
+ * leaks where two values diverge via response timing.
+ */
+export function safeEqual(a: string, b: string): boolean {
+  if (typeof a !== "string" || typeof b !== "string") return false;
+  const ha = createHash("sha256").update(a).digest();
+  const hb = createHash("sha256").update(b).digest();
+  return timingSafeEqual(ha, hb);
+}
 
 /**
  * Validate an API key from the request headers.
@@ -26,7 +39,7 @@ export async function validateApiKey(
 
   // Check env var first (fast path)
   const envKey = process.env.MATRX_SHIP_API_KEY;
-  if (envKey && key === envKey) {
+  if (envKey && safeEqual(key, envKey)) {
     return null; // Valid
   }
 
@@ -45,12 +58,13 @@ export async function validateApiKey(
       );
     }
 
-    // Update last used timestamp (fire-and-forget)
+    // Update last used timestamp (fire-and-forget). Log failures so a broken
+    // audit timestamp is visible instead of silently swallowed.
     db.update(apiKeys)
       .set({ lastUsedAt: new Date() })
       .where(eq(apiKeys.id, found.id))
       .then(() => {})
-      .catch(() => {});
+      .catch((err) => logger.warn({ err }, "[auth] Failed to update API key lastUsedAt"));
 
     return null; // Valid
   } catch (error) {
@@ -72,8 +86,8 @@ export async function validateAdminAccess(
   const adminSecret = process.env.MATRX_SHIP_ADMIN_SECRET;
 
   if (adminSecret) {
-    const authHeader = request.headers.get("authorization");
-    if (authHeader === `Bearer ${adminSecret}`) {
+    const authHeader = request.headers.get("authorization") || "";
+    if (safeEqual(authHeader, `Bearer ${adminSecret}`)) {
       return null; // Valid admin
     }
   }

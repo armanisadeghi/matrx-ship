@@ -26,7 +26,7 @@
 import {
   readFileSync, writeFileSync, mkdirSync, statSync, lstatSync, readdirSync, readlinkSync, existsSync,
 } from "node:fs";
-import { join, dirname, basename, isAbsolute } from "node:path";
+import { join, dirname, basename, isAbsolute, resolve, sep } from "node:path";
 import { execFileSync } from "node:child_process";
 import { parseTarget } from "./agent_gateway.js";
 
@@ -39,16 +39,31 @@ function err(status, message) {
   return e;
 }
 
-// Map an agent-supplied path to the path the Manager process can actually use
-// for a HOST target. The advertised root is /host-srv, so agents normally pass
-// /host-srv/... already; also accept real host /srv & /data paths and remap.
-function hostPath(p, rootPath) {
-  let path = String(p || "");
-  if (!path) path = rootPath || HOST_SRV;
-  if (!isAbsolute(path)) path = join(rootPath || HOST_SRV, path);
+// Remap the host's logical /srv & /data onto the paths the Manager process sees.
+function remapHostMount(path) {
   if (path === "/srv" || path.startsWith("/srv/")) return HOST_SRV + path.slice(4);
   if (path === "/data" || path.startsWith("/data/")) return HOST_DATA + path.slice(5);
   return path;
+}
+
+// Map an agent-supplied path to the path the Manager process can actually use
+// for a HOST target, CONFINED to the granted root. Without the confinement check
+// a path like `../../etc/passwd` would normalize out of the granted directory and
+// give the agent arbitrary host-filesystem read/write. We resolve both the root
+// and the requested path (collapsing `..`) and require the result to stay inside.
+function hostPath(p, rootPath) {
+  const rawRoot = rootPath || HOST_SRV;
+  const root = resolve(remapHostMount(isAbsolute(rawRoot) ? rawRoot : join(HOST_SRV, rawRoot)));
+
+  let path = String(p || "");
+  if (!path) path = rawRoot;
+  if (!isAbsolute(path)) path = join(rawRoot, path);
+  const abs = resolve(remapHostMount(path));
+
+  if (abs !== root && !abs.startsWith(root + sep)) {
+    throw err(400, `Path escapes the granted root (${rawRoot}): ${p}`);
+  }
+  return abs;
 }
 
 function statDict(absPath, displayPath) {

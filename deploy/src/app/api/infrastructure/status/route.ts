@@ -1,5 +1,6 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { execSync } from "node:child_process";
+import { requireAuth } from "@/lib/docker";
 
 function exec(cmd: string) {
   try {
@@ -17,7 +18,9 @@ function getContainerStatus(name: string) {
   return { name, status: parts[0] || "unknown", health: parts[1] || null };
 }
 
-export async function GET() {
+export async function GET(req: NextRequest) {
+  const denied = requireAuth(req);
+  if (denied) return denied;
   // Traefik
   const traefik = getContainerStatus("traefik");
   const traefikRoutes = exec(

@@ -1,10 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { readFileSync, writeFileSync } from "node:fs";
 import { execSync } from "node:child_process";
+import { requireAuth } from "@/lib/docker";
 
 const ENV_PATH = "/host-srv/apps/server-manager/.env";
 
-export async function GET() {
+export async function GET(req: NextRequest) {
+  const denied = requireAuth(req);
+  if (denied) return denied;
   try {
     const content = readFileSync(ENV_PATH, "utf-8");
     const vars = content
@@ -26,16 +29,22 @@ export async function GET() {
 }
 
 export async function PUT(req: NextRequest) {
+  const denied = requireAuth(req);
+  if (denied) return denied;
   try {
     const { env_vars, restart } = await req.json() as { env_vars: Record<string, string>; restart?: boolean };
     if (!env_vars || typeof env_vars !== "object") {
       return NextResponse.json({ error: "env_vars object required" }, { status: 400 });
     }
+    // Reject malformed keys: an unescaped key built the match regex, so a key like
+    // `FOO.*?` caused catastrophic backtracking (ReDoS) and could corrupt the file.
+    const badKey = Object.keys(env_vars).find((k) => !/^[A-Za-z_][A-Za-z0-9_]*$/.test(k));
+    if (badKey) return NextResponse.json({ error: `invalid env var name: ${badKey}` }, { status: 400 });
 
     let content = readFileSync(ENV_PATH, "utf-8");
     for (const [k, v] of Object.entries(env_vars)) {
       const re = new RegExp(`^${k}=.*$`, "m");
-      content = re.test(content) ? content.replace(re, `${k}=${v}`) : content + `\n${k}=${v}`;
+      content = re.test(content) ? content.replace(re, () => `${k}=${v}`) : content + `\n${k}=${v}`;
     }
     writeFileSync(ENV_PATH, content, "utf-8");
 

@@ -3,10 +3,10 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import express from "express";
 import { z } from "zod";
 import { execFileSync, execSync, spawn } from "node:child_process";
-import { readFileSync, writeFileSync, readdirSync, statSync, existsSync, mkdirSync, unlinkSync, chmodSync } from "node:fs";
+import { readFileSync, writeFileSync, readdirSync, statSync, existsSync, mkdirSync, unlinkSync, chmodSync, renameSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { cpus, totalmem, freemem, uptime as osUptime, hostname } from "node:os";
-import { randomBytes, createHash } from "node:crypto";
+import { randomBytes, createHash, timingSafeEqual } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import {
   isSupabaseConfigured,
@@ -83,17 +83,31 @@ function loadTokens() {
 }
 
 function saveTokens(store) {
-  mkdirSync(dirname(TOKENS_FILE), { recursive: true });
-  writeFileSync(TOKENS_FILE, JSON.stringify(store, null, 2) + "\n", "utf-8");
-  try { execSync(`chmod 600 ${TOKENS_FILE}`, { stdio: "ignore" }); } catch { /* ok */ }
+  writeFileAtomic(TOKENS_FILE, JSON.stringify(store, null, 2) + "\n", { mode: 0o600 });
 }
+
+// Constant-time string compare that doesn't leak length-mismatch via early return.
+// Hashes both sides to a fixed-length digest first so timingSafeEqual never throws
+// on differing lengths and the comparison cost is independent of where they differ.
+function safeEqual(a, b) {
+  if (typeof a !== "string" || typeof b !== "string") return false;
+  const ha = createHash("sha256").update(a).digest();
+  const hb = createHash("sha256").update(b).digest();
+  return timingSafeEqual(ha, hb);
+}
+
+// Throttle last_used_at persistence: writing tokens.json on every authenticated
+// request caused concurrent-write clobbering and needless disk churn. Only flush
+// when the timestamp is stale by > this window.
+const TOKEN_LAST_USED_FLUSH_MS = 60_000;
 
 function verifyToken(bearerToken) {
   if (!bearerToken) return null;
-  
-  // Check environment variable tokens first (for dev and production)
+
+  // Check environment variable tokens first (for dev and production).
+  // Timing-safe compare so token bytes can't be recovered via response timing.
   const envTokens = process.env.MANAGER_TOKENS?.split(',').map(t => t.trim()).filter(Boolean) || [];
-  if (envTokens.includes(bearerToken)) {
+  if (envTokens.some((t) => safeEqual(t, bearerToken))) {
     return {
       id: 'env_token',
       token_hash: '',
@@ -103,15 +117,20 @@ function verifyToken(bearerToken) {
       last_used_at: new Date().toISOString(),
     };
   }
-  
-  // Fall back to tokens.json file (for managed tokens)
+
+  // Fall back to tokens.json file (for managed tokens). Lookup is by SHA-256 of
+  // the presented token, so the comparison value isn't attacker-tunable.
   const hash = hashToken(bearerToken);
   const store = loadTokens();
   const entry = store.tokens.find((t) => t.token_hash === hash);
   if (!entry) return null;
-  // Update last_used_at
-  entry.last_used_at = new Date().toISOString();
-  saveTokens(store);
+  // Update last_used_at, but only persist occasionally to avoid write storms.
+  const now = Date.now();
+  const prev = entry.last_used_at ? Date.parse(entry.last_used_at) : 0;
+  if (!prev || now - prev > TOKEN_LAST_USED_FLUSH_MS) {
+    entry.last_used_at = new Date(now).toISOString();
+    try { saveTokens(store); } catch { /* non-fatal: auth still succeeds */ }
+  }
   return entry;
 }
 
@@ -245,6 +264,61 @@ function formatBytes(bytes) {
   let val = bytes;
   while (val >= 1024 && i < units.length - 1) { val /= 1024; i++; }
   return `${val.toFixed(1)} ${units[i]}`;
+}
+
+// ── Input safety ─────────────────────────────────────────────────────────────
+// Instance/container names flow into shell-built `docker` commands all over this
+// file. The create path validates the name, but the per-:name read/write routes
+// historically did not re-check the path param — so a crafted name like
+// `foo; docker run …` could inject. This is the canonical validator: legitimate
+// instance names already conform, so it only rejects attacks.
+const INSTANCE_NAME_RE = /^[a-z0-9][a-z0-9-]*[a-z0-9]$/;
+function isValidInstanceName(name) {
+  return typeof name === "string" && name.length <= 63 && INSTANCE_NAME_RE.test(name);
+}
+// Express middleware: 400 on a bad :name param before any handler runs.
+function requireValidName(req, res, next) {
+  if (!isValidInstanceName(req.params.name)) {
+    return res.status(400).json({ error: "Invalid instance name" });
+  }
+  return next();
+}
+
+// Docker identifiers (container / network / volume names, image refs) that get
+// interpolated into shell-built `docker` commands. Allow the characters Docker
+// itself permits in names + image refs (`:` tag, `/` repo, `@` digest, `.` `_`
+// `-`) but nothing that can break out of the command: no spaces, `;`, `|`, `&`,
+// `$`, backticks, quotes, or newlines.
+const DOCKER_REF_RE = /^[A-Za-z0-9][A-Za-z0-9_.:/@-]*$/;
+function isDockerRef(s) {
+  return typeof s === "string" && s.length > 0 && s.length <= 256 && DOCKER_REF_RE.test(s);
+}
+// Conservative token for free-form-ish args (flags, profiles, paths, --since
+// values, db names, users): printable, no shell metacharacters.
+const SAFE_ARG_RE = /^[A-Za-z0-9 _.=:/@,+-]*$/;
+function isSafeArg(s) {
+  return typeof s === "string" && s.length <= 512 && SAFE_ARG_RE.test(s);
+}
+// A Postgres database/identifier name.
+const PG_IDENT_RE = /^[A-Za-z0-9_-]+$/;
+// Escape a string for safe literal use inside a `new RegExp(...)`.
+function escapeRegExp(s) {
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// Atomic file write: write to a temp sibling then rename, so a crash mid-write
+// can't leave a truncated/corrupt file. rename(2) is atomic within a filesystem.
+function writeFileAtomic(filePath, contents, { mode } = {}) {
+  mkdirSync(dirname(filePath), { recursive: true });
+  const tmp = `${filePath}.tmp-${process.pid}-${randomBytes(4).toString("hex")}`;
+  writeFileSync(tmp, contents, "utf-8");
+  if (mode != null) { try { chmodSync(tmp, mode); } catch { /* best effort */ } }
+  try {
+    renameSync(tmp, filePath);
+  } catch (e) {
+    try { unlinkSync(tmp); } catch { /* ignore */ }
+    throw e;
+  }
 }
 
 // ── Reverse-tag protection (2026-04-30 incident guardrail) ──────────────────
@@ -410,9 +484,10 @@ function loadDeployments() {
 }
 
 function saveDeployments(config) {
-  writeFileSync(DEPLOYMENTS_FILE, JSON.stringify(config, null, 2) + "\n", "utf-8");
-  // Dual-write to Supabase (fire and forget)
-  syncAllInstances(config).catch(() => {});
+  writeFileAtomic(DEPLOYMENTS_FILE, JSON.stringify(config, null, 2) + "\n");
+  // Dual-write to Supabase (fire and forget). Log failures so a silently-drifting
+  // backup is visible in the Manager logs instead of vanishing.
+  syncAllInstances(config).catch((e) => console.error("[supabase] syncAllInstances failed:", e?.message || e));
 }
 
 function generateCompose(name, config) {
@@ -505,6 +580,12 @@ GITHUB_WEBHOOK_SECRET=
 }
 
 function createInstance(name, display_name, api_key, postgres_image) {
+  if (!isValidInstanceName(name)) return { error: "Invalid instance name" };
+  // The postgres_image is interpolated into the generated docker-compose.yml; a
+  // value with newlines/colons could inject extra YAML. Restrict to image refs.
+  if (postgres_image != null && !isDockerRef(postgres_image)) {
+    return { error: "Invalid postgres_image (must be a valid image reference)" };
+  }
   const config = loadDeployments();
 
   if (config.instances[name]) {
@@ -513,6 +594,14 @@ function createInstance(name, display_name, api_key, postgres_image) {
   const nameCheck = exec(`docker ps -a --format '{{.Names}}' | grep -E '^(${name}|db-${name})$'`);
   if (nameCheck.success && nameCheck.output) {
     return { error: `Container ${name} or db-${name} already exists.` };
+  }
+  // Guard against silent data loss: if a prior instance of this name was deleted
+  // WITHOUT removing its data volume, recreating reuses the stale Postgres volume
+  // — which still holds the OLD password — and the freshly generated password
+  // below would never authenticate. Refuse rather than create a broken instance.
+  const volCheck = exec(`docker volume ls --format '{{.Name}}' | grep -E '(^|_)${name}_pgdata$'`);
+  if (volCheck.success && volCheck.output) {
+    return { error: `A Postgres data volume for '${name}' still exists (likely from a prior instance deleted without its data). Remove it (docker volume rm ${name}_pgdata) or pick a different name before recreating.` };
   }
 
   const dbPassword = randomHex(16);
@@ -657,8 +746,7 @@ function loadBuildHistory() {
 }
 
 function saveBuildHistory(history) {
-  mkdirSync(dirname(BUILD_HISTORY_FILE), { recursive: true });
-  writeFileSync(BUILD_HISTORY_FILE, JSON.stringify(history, null, 2) + "\n", "utf-8");
+  writeFileAtomic(BUILD_HISTORY_FILE, JSON.stringify(history, null, 2) + "\n");
 }
 
 function recordBuild(entry) {
@@ -1013,6 +1101,9 @@ function s3UploadImageTag(tag) {
 
 function s3UploadBackup(instanceName, backupFile) {
   if (!isS3Configured()) return { success: false, error: "AWS S3 not configured" };
+  // Reject path traversal in either component before they become an S3 key.
+  if (!isValidInstanceName(instanceName)) return { success: false, error: "Invalid instance name" };
+  if (!/^[A-Za-z0-9_.-]+$/.test(backupFile)) return { success: false, error: "Invalid backup file name" };
   const localPath = join(APPS_DIR, "backups", instanceName, backupFile);
   if (!existsSync(localPath)) return { success: false, error: `Backup file not found: ${localPath}` };
   return s3Upload(localPath, `db-backups/${instanceName}/${backupFile}`);
@@ -1053,17 +1144,34 @@ function getSystemInfo() {
 // ║  MCP PROTOCOL SERVER (tools + resources)                                   ║
 // ╚════════════════════════════════════════════════════════════════════════════╝
 
-function createServer() {
+function createServer(ctx = {}) {
   const server = new McpServer(
     { name: "matrx-server-manager", version: "2.0.0" },
     { capabilities: { logging: {} } }
   );
+
+  // Per-tool authorization. The HTTP routes gate destructive actions with
+  // requireRole(...), but the /mcp endpoint historically applied only
+  // authMiddleware — so ANY valid token (even a read-only `viewer`) could invoke
+  // shell_exec / app_remove / file_write. `ctx.role` is the caller's token role
+  // ("admin" | "deployer" | "viewer"), `ctx.isSuperadmin` mirrors the HTTP flag.
+  // Returns an error result if the caller lacks the role, else null. When auth is
+  // disabled (no role at all) it allows, matching requireRole's dev behavior.
+  const callerRole = ctx.role || null;
+  const callerSuper = !!ctx.isSuperadmin;
+  function gate(...allowed) {
+    if (!callerRole) return null;        // auth disabled (dev) → open, like requireRole
+    if (callerSuper) return null;        // operator-admin / super_admin → all tools
+    if (allowed.includes(callerRole)) return null;
+    return textResult({ error: `Forbidden — this tool requires role: ${allowed.join(" or ")}` });
+  }
 
   // ── SHELL TOOLS ─────────────────────────────────────────────────────────
   server.tool("shell_exec",
     "Execute a shell command on the server. Has access to Docker CLI, host /srv and /data directories.",
     { command: z.string(), working_directory: z.string().optional(), timeout_ms: z.number().optional() },
     async ({ command, working_directory, timeout_ms }) => {
+      const g = gate("admin", "deployer"); if (g) return g;
       const blocked = guardDestructiveImageOp(command);
       if (blocked) return textResult(blocked);
       const timeout = Math.min(timeout_ms || 30000, 120000);
@@ -1076,6 +1184,7 @@ function createServer() {
     "Run a shell command on a remote FLEET EC2 host via AWS SSM (NOT this /srv host — use shell_exec for /srv). `host` is a fleet key like 'matrx-sandbox-host-dev' or 'matrx-python-server'. Returns {status, stdout, stderr, exitCode}. An AccessDenied means the box's EC2 IAM role lacks that permission, not a Manager bug.",
     { host: z.string(), command: z.string(), timeout_s: z.number().optional() },
     async ({ host, command, timeout_s }) => {
+      const g = gate("admin", "deployer"); if (g) return g;
       const h = FLEET_HOSTS[host];
       if (!h) return textResult({ success: false, error: `Unknown host '${host}'. Known: ${Object.keys(FLEET_HOSTS).join(", ")}` });
       if (!awsConfigured()) return textResult({ success: false, error: "AWS not configured on the Manager (MATRX_ADMIN_AWS_* unset)" });
@@ -1105,7 +1214,10 @@ function createServer() {
   server.tool("docker_logs", "Get logs from a Docker container.",
     { container: z.string(), tail: z.number().optional(), since: z.string().optional() },
     async ({ container, tail, since }) => {
-      let cmd = `docker logs ${container} --tail ${tail || 100}`;
+      if (!isDockerRef(container)) return textResult({ error: "Invalid container name" });
+      if (since != null && !isSafeArg(since)) return textResult({ error: "Invalid 'since' value" });
+      const n = Math.min(Math.max(parseInt(tail, 10) || 100, 1), 100000);
+      let cmd = `docker logs ${container} --tail ${n}`;
       if (since) cmd += ` --since ${since}`;
       return textResult(exec(cmd + " 2>&1"));
     }
@@ -1114,6 +1226,7 @@ function createServer() {
   server.tool("docker_inspect", "Inspect a Docker container, image, network, or volume.",
     { target: z.string(), type: z.enum(["container", "image", "network", "volume"]).optional() },
     async ({ target, type }) => {
+      if (!isDockerRef(target)) return textResult({ error: "Invalid target name" });
       const cmd = type === "network" ? `docker network inspect ${target}` : type === "image" ? `docker image inspect ${target}` : type === "volume" ? `docker volume inspect ${target}` : `docker inspect ${target}`;
       const result = exec(cmd);
       if (!result.success) return textResult(result);
@@ -1124,6 +1237,8 @@ function createServer() {
   server.tool("docker_manage", "Start, stop, restart, or remove a Docker container.",
     { container: z.string(), action: z.enum(["start", "stop", "restart", "remove"]), force: z.boolean().optional() },
     async ({ container, action, force }) => {
+      const g = gate("admin", "deployer"); if (g) return g;
+      if (!isDockerRef(container)) return textResult({ error: "Invalid container name" });
       const cmds = { start: `docker start ${container}`, stop: `docker stop ${container}`, restart: `docker restart ${container}`, remove: `docker rm ${force ? "-f" : ""} ${container}` };
       return textResult(exec(cmds[action]));
     }
@@ -1132,17 +1247,34 @@ function createServer() {
   server.tool("docker_exec", "Execute a command inside a running Docker container.",
     { container: z.string(), command: z.string(), user: z.string().optional(), working_dir: z.string().optional() },
     async ({ container, command, user, working_dir }) => {
-      let cmd = `docker exec`;
-      if (user) cmd += ` -u ${user}`;
-      if (working_dir) cmd += ` -w ${working_dir}`;
-      cmd += ` ${container} sh -c '${command.replace(/'/g, "'\\''")}'`;
-      return textResult(exec(cmd, { timeout: 60000 }));
+      const g = gate("admin", "deployer"); if (g) return g;
+      if (!isDockerRef(container)) return textResult({ error: "Invalid container name" });
+      if (user != null && !isSafeArg(user)) return textResult({ error: "Invalid user" });
+      if (working_dir != null && !isSafeArg(working_dir)) return textResult({ error: "Invalid working_dir" });
+      // argv form: only `command` is interpreted by the inner shell; the docker
+      // wrapper and its flags are passed as separate process arguments so a
+      // crafted container/user/working_dir can't break out.
+      const args = ["exec"];
+      if (user) args.push("-u", user);
+      if (working_dir) args.push("-w", working_dir);
+      args.push(container, "sh", "-c", command);
+      try {
+        const out = execFileSync("docker", args, { encoding: "utf-8", timeout: 60000, maxBuffer: 10 * 1024 * 1024 });
+        return textResult({ success: true, output: out.trim() });
+      } catch (e) {
+        return textResult({ success: false, output: e.stdout?.trim() || "", error: e.stderr?.trim() || e.message });
+      }
     }
   );
 
   server.tool("docker_compose", "Run docker compose commands for a stack.",
     { stack: z.string(), action: z.enum(["up", "down", "restart", "pull", "build", "ps", "logs", "config"]), services: z.array(z.string()).optional(), profile: z.string().optional(), flags: z.string().optional() },
     async ({ stack, action, services, profile, flags }) => {
+      const g = gate("admin", "deployer"); if (g) return g;
+      if (!isSafeArg(stack) || stack.includes("..")) return textResult({ error: "Invalid stack" });
+      if (profile != null && !isSafeArg(profile)) return textResult({ error: "Invalid profile" });
+      if (flags != null && !isSafeArg(flags)) return textResult({ error: "Invalid flags — shell metacharacters are not allowed" });
+      if (services?.some((s) => !isDockerRef(s))) return textResult({ error: "Invalid service name" });
       const stackDir = join(HOST_SRV, stack);
       if (!existsSync(join(stackDir, "docker-compose.yml"))) return textResult({ error: `No docker-compose.yml in /srv/${stack}/` });
       let cmd = "docker compose";
@@ -1186,6 +1318,7 @@ function createServer() {
   server.tool("file_write", "Write content to a file on the server.",
     { path: z.string(), content: z.string(), append: z.boolean().optional(), create_parents: z.boolean().optional() },
     async ({ path, content, append, create_parents }) => {
+      const g = gate("admin", "deployer"); if (g) return g;
       try {
         const realPath = resolveHostPath(path);
         if (create_parents !== false) mkdirSync(dirname(realPath), { recursive: true });
@@ -1216,7 +1349,7 @@ function createServer() {
   );
 
   server.tool("file_delete", "Delete a file.", { path: z.string() },
-    async ({ path }) => { try { unlinkSync(resolveHostPath(path)); return textResult({ success: true, path }); } catch (e) { return textResult({ error: e.message, path }); } }
+    async ({ path }) => { const g = gate("admin", "deployer"); if (g) return g; try { unlinkSync(resolveHostPath(path)); return textResult({ success: true, path }); } catch (e) { return textResult({ error: e.message, path }); } }
   );
 
   // ── SYSTEM TOOLS ────────────────────────────────────────────────────────
@@ -1265,7 +1398,16 @@ function createServer() {
       const trimmed = query.trim().toUpperCase();
       if (!["SELECT", "SHOW", "EXPLAIN", "\\D"].some((p) => trimmed.startsWith(p)))
         return textResult({ error: "Only read-only queries allowed." });
-      return textResult(exec(`docker exec postgres psql -U matrx -d ${database || "matrx"} -c '${query.replace(/'/g, "'\\''")}'`, { timeout: 15000 }));
+      const db = database || "matrx";
+      if (!PG_IDENT_RE.test(db)) return textResult({ error: "Invalid database name" });
+      // argv form: the query is a single `-c` argument, never concatenated into
+      // a shell string, so it can't break out regardless of its contents.
+      try {
+        const out = execFileSync("docker", ["exec", "postgres", "psql", "-U", "matrx", "-d", db, "-c", query], { encoding: "utf-8", timeout: 15000, maxBuffer: 10 * 1024 * 1024 });
+        return textResult({ success: true, output: out.trim() });
+      } catch (e) {
+        return textResult({ success: false, output: e.stdout?.trim() || "", error: e.stderr?.trim() || e.message });
+      }
     }
   );
 
@@ -1273,7 +1415,10 @@ function createServer() {
   server.tool("app_create",
     "Create a fully isolated matrx-ship instance with its own PostgreSQL and Traefik subdomain.",
     { name: z.string().regex(/^[a-z0-9][a-z0-9-]*[a-z0-9]$/), display_name: z.string(), api_key: z.string().optional(), postgres_image: z.string().optional() },
-    async ({ name, display_name, api_key, postgres_image }) => textResult(createInstance(name, display_name, api_key, postgres_image))
+    async ({ name, display_name, api_key, postgres_image }) => {
+      const g = gate("admin", "deployer"); if (g) return g;
+      return textResult(createInstance(name, display_name, api_key, postgres_image));
+    }
   );
 
   server.tool("app_list", "List all deployed instances.", {},
@@ -1282,12 +1427,18 @@ function createServer() {
 
   server.tool("app_remove", "Remove a matrx-ship instance.",
     { name: z.string(), delete_data: z.boolean().optional(), force: z.boolean().optional() },
-    async ({ name, delete_data, force }) => textResult(removeInstance(name, delete_data, force))
+    async ({ name, delete_data, force }) => {
+      const g = gate("admin"); if (g) return g;
+      if (!isValidInstanceName(name)) return textResult({ error: "Invalid instance name" });
+      return textResult(removeInstance(name, delete_data, force));
+    }
   );
 
   server.tool("app_backup", "Backup an instance's PostgreSQL database.",
     { name: z.string() },
     async ({ name }) => {
+      const g = gate("admin", "deployer"); if (g) return g;
+      if (!isValidInstanceName(name)) return textResult({ error: "Invalid instance name" });
       const config = loadDeployments();
       if (!config.instances[name]) return textResult({ error: `Instance '${name}' not found` });
       mkdirSync(join(BACKUPS_DIR, name), { recursive: true });
@@ -1302,12 +1453,16 @@ function createServer() {
 
   server.tool("app_rebuild", "Rebuild the matrx-ship Docker image and restart instances. Omit name to restart all.",
     { name: z.string().optional(), skip_build: z.boolean().optional() },
-    async ({ name, skip_build }) => textResult(rebuildInstances({ name, skip_build, triggered_by: "manager-mcp" }))
+    async ({ name, skip_build }) => {
+      const g = gate("admin", "deployer"); if (g) return g;
+      if (name != null && !isValidInstanceName(name)) return textResult({ error: "Invalid instance name" });
+      return textResult(rebuildInstances({ name, skip_build, triggered_by: "manager-mcp" }));
+    }
   );
 
   server.tool("self_rebuild", "Rebuild and restart the server manager itself. Warning: connection will drop briefly.",
     {},
-    async () => textResult(selfRebuild())
+    async () => { const g = gate("admin"); if (g) return g; return textResult(selfRebuild()); }
   );
 
   // ── BUILD INFO / HISTORY / ROLLBACK / CLEANUP ──────────────────────────
@@ -1324,12 +1479,12 @@ function createServer() {
 
   server.tool("build_rollback", "Rollback to a previous image tag. Retags the specified image as :latest and restarts all instances.",
     { tag: z.string().describe("The image tag to rollback to, e.g. '20260211-204100'") },
-    async ({ tag }) => textResult(rollbackBuild(tag))
+    async ({ tag }) => { const g = gate("admin"); if (g) return g; return textResult(rollbackBuild(tag)); }
   );
 
   server.tool("build_cleanup", "Run retention cleanup on Docker image tags. Keeps last 3, 1/week for 4 weeks, 1/month for 3 months.",
     {},
-    async () => textResult(cleanupBuildImages())
+    async () => { const g = gate("admin"); if (g) return g; return textResult(cleanupBuildImages()); }
   );
 
   // ── S3 BACKUP / ARCHIVE TOOLS ─────────────────────────────────────────
@@ -1341,12 +1496,12 @@ function createServer() {
 
   server.tool("s3_upload_image", "Upload a Docker image tag to S3 as a gzipped tarball.",
     { tag: z.string().describe("Image tag to upload, e.g. '20260211-204100'") },
-    async ({ tag }) => textResult(s3UploadImageTag(tag))
+    async ({ tag }) => { const g = gate("admin"); if (g) return g; return textResult(s3UploadImageTag(tag)); }
   );
 
   server.tool("s3_upload_backup", "Upload a database backup to S3.",
     { instance_name: z.string(), backup_file: z.string() },
-    async ({ instance_name, backup_file }) => textResult(s3UploadBackup(instance_name, backup_file))
+    async ({ instance_name, backup_file }) => { const g = gate("admin"); if (g) return g; return textResult(s3UploadBackup(instance_name, backup_file)); }
   );
 
   server.tool("s3_list", "List all files in the S3 backup bucket.",
@@ -1357,7 +1512,8 @@ function createServer() {
   server.tool("app_logs", "Get logs from a matrx-ship instance.",
     { name: z.string(), service: z.enum(["app", "db", "both"]).optional(), tail: z.number().optional() },
     async ({ name, service, tail }) => {
-      const n = tail || 80; const svc = service || "app"; const r = {};
+      if (!isValidInstanceName(name)) return textResult({ error: "Invalid instance name" });
+      const n = Math.min(Math.max(parseInt(tail, 10) || 80, 1), 100000); const svc = service || "app"; const r = {};
       if (svc === "app" || svc === "both") r.app = exec(`docker logs ${name} --tail ${n} 2>&1`);
       if (svc === "db" || svc === "both") r.db = exec(`docker logs db-${name} --tail ${n} 2>&1`);
       return textResult(r);
@@ -1367,15 +1523,22 @@ function createServer() {
   server.tool("app_env_update", "Update environment variables for an instance.",
     { name: z.string(), env_vars: z.record(z.string()), restart: z.boolean().optional() },
     async ({ name, env_vars, restart }) => {
+      const g = gate("admin"); if (g) return g;
+      if (!isValidInstanceName(name)) return textResult({ error: "Invalid instance name" });
       const config = loadDeployments();
       if (!config.instances[name]) return textResult({ error: `Instance '${name}' not found` });
+      // Only accept well-formed env var names. Without this, a key like `FOO|BAR`
+      // becomes the regex /^FOO|BAR=.*$/m and corrupts unrelated lines.
+      const badKey = Object.keys(env_vars).find((k) => !/^[A-Za-z_][A-Za-z0-9_]*$/.test(k));
+      if (badKey) return textResult({ error: `Invalid env var name: ${badKey}` });
       const envPath = join(APPS_DIR, name, ".env");
       let content = readFileSync(envPath, "utf-8");
       for (const [k, v] of Object.entries(env_vars)) {
-        const re = new RegExp(`^${k}=.*$`, "m");
-        content = re.test(content) ? content.replace(re, `${k}=${v}`) : content + `\n${k}=${v}`;
+        const re = new RegExp(`^${escapeRegExp(k)}=.*$`, "m");
+        // Function replacer so `$&`, `$1`, etc. in the value aren't interpreted.
+        content = re.test(content) ? content.replace(re, () => `${k}=${v}`) : content + `\n${k}=${v}`;
       }
-      writeFileSync(envPath, content, "utf-8");
+      writeFileAtomic(envPath, content);
       let rr = null;
       if (restart !== false) rr = exec("docker compose up -d --force-recreate app", { cwd: join(APPS_DIR, name), timeout: 60000 });
       return textResult({ success: true, instance: name, updated_vars: Object.keys(env_vars), restarted: restart !== false, restart_output: rr?.output });
@@ -1431,6 +1594,11 @@ app.get("/health", (_req, res) => {
 app.get("/api/instances", authMiddleware, async (_req, res) => {
   res.json(listInstances());
 });
+
+// Reject malformed instance names before any handler interpolates them into a
+// docker shell command. Scoped to /api/instances/:name* only — container and
+// sandbox routes have their own (looser) name rules and are matched elsewhere.
+app.use("/api/instances/:name", requireValidName);
 
 app.get("/api/instances/:name", authMiddleware, async (req, res) => {
   const name = req.params.name;
@@ -1636,13 +1804,15 @@ app.put("/api/instances/:name/env", authMiddleware, requireSuperadmin, async (re
   if (!config.instances[name]) return res.status(404).json({ error: "Instance not found" });
   const { env_vars, restart } = req.body;
   if (!env_vars || typeof env_vars !== "object") return res.status(400).json({ error: "env_vars object required" });
+  const badKey = Object.keys(env_vars).find((k) => !/^[A-Za-z_][A-Za-z0-9_]*$/.test(k));
+  if (badKey) return res.status(400).json({ error: `Invalid env var name: ${badKey}` });
   const envPath = join(APPS_DIR, name, ".env");
   let content = readFileSync(envPath, "utf-8");
   for (const [k, v] of Object.entries(env_vars)) {
-    const re = new RegExp(`^${k}=.*$`, "m");
-    content = re.test(content) ? content.replace(re, `${k}=${v}`) : content + `\n${k}=${v}`;
+    const re = new RegExp(`^${escapeRegExp(k)}=.*$`, "m");
+    content = re.test(content) ? content.replace(re, () => `${k}=${v}`) : content + `\n${k}=${v}`;
   }
-  writeFileSync(envPath, content, "utf-8");
+  writeFileAtomic(envPath, content);
   let rr = null;
   if (restart !== false) rr = exec("docker compose up -d --force-recreate app", { cwd: join(APPS_DIR, name), timeout: 60000 });
   res.json({ success: true, updated: Object.keys(env_vars), restarted: restart !== false, output: rr?.output });
@@ -2298,7 +2468,9 @@ app.get("/api/sandboxes/:name", authMiddleware, async (req, res) => {
 app.get("/api/sandboxes/:name/logs", authMiddleware, async (req, res) => {
   const name = req.params.name;
   if (!/^sandbox-\d+$/.test(name)) return res.status(400).json({ error: "Invalid sandbox name" });
-  const tail = req.query.tail || 200;
+  // Coerce tail to a bounded integer — it was interpolated unquoted, so a value
+  // like `200 && docker rmi …` would have run as a second command.
+  const tail = Math.min(Math.max(parseInt(req.query.tail, 10) || 200, 1), 10000);
   try {
     const output = execSync(`docker logs ${name} --tail ${tail} 2>&1`, { encoding: "utf-8", timeout: 10000 });
     res.json({ output });
@@ -3585,11 +3757,24 @@ app.post("/api/containers/:name/exec", authMiddleware, requireSuperadmin, async 
   const blocked = guardDestructiveImageOp(command);
   if (blocked) return res.status(403).json(blocked);
   const timeout = Math.min(Number(req.body?.timeout) || 60000, 120000);
-  let cmd = "docker exec";
-  if (req.body?.user) cmd += ` -u ${String(req.body.user).replace(/[^A-Za-z0-9_.:-]/g, "")}`;
-  if (req.body?.workingDir) cmd += ` -w ${String(req.body.workingDir).replace(/'/g, "")}`;
-  cmd += ` ${name} sh -c '${command.replace(/'/g, "'\\''")}'`;
-  const result = exec(cmd, { timeout });
+  // Validate the optional flags, then build the command with argv (no shell
+  // string concatenation). Previously `workingDir` only stripped single quotes
+  // and was interpolated unquoted, so `-w "/tmp && whoami #"` broke out to the host.
+  const user = req.body?.user != null ? String(req.body.user) : null;
+  const workingDir = req.body?.workingDir != null ? String(req.body.workingDir) : null;
+  if (user != null && !/^[A-Za-z0-9_.:-]+$/.test(user)) return res.status(400).json({ error: "invalid user" });
+  if (workingDir != null && !/^[A-Za-z0-9_./:-]+$/.test(workingDir)) return res.status(400).json({ error: "invalid workingDir" });
+  const args = ["exec"];
+  if (user) args.push("-u", user);
+  if (workingDir) args.push("-w", workingDir);
+  args.push(name, "sh", "-c", command);
+  let result;
+  try {
+    const out = execFileSync("docker", args, { encoding: "utf-8", timeout, maxBuffer: 10 * 1024 * 1024 });
+    result = { success: true, output: out.trim() };
+  } catch (e) {
+    result = { success: false, output: e.stdout?.trim() || "", error: e.stderr?.trim() || e.message, exitCode: e.status };
+  }
   try {
     auditLog(req.tokenEntry?.label || "manager", "container_exec", `container:${name}`, { command: command.slice(0, 500), success: result.success, exitCode: result.exitCode });
   } catch { /* audit is best-effort */ }
@@ -4077,7 +4262,9 @@ app.post("/api/supabase/restore", authMiddleware, requireRole("admin"), async (_
 
 // MCP protocol endpoint (Model Context Protocol — this is a genuine MCP endpoint)
 app.post("/mcp", authMiddleware, async (req, res) => {
-  const server = createServer();
+  // Thread the caller's role into the MCP server so each tool can enforce the
+  // same authorization the HTTP routes do (destructive tools are role-gated).
+  const server = createServer({ role: req.tokenRole, isSuperadmin: req.isSuperadmin });
   try {
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     await server.connect(transport);
@@ -4094,6 +4281,33 @@ app.delete("/mcp", (_req, res) => res.status(405).json({ jsonrpc: "2.0", error: 
 
 // ── Start ────────────────────────────────────────────────────────────────────
 initTokenStore();
+
+// Fail closed in production: this process holds the Docker socket and the host
+// filesystem, so booting with auth disabled (no token scheme and no OAuth) would
+// expose shell exec + container control to anyone who can reach the port. Allow
+// it only outside production, where open-by-default is a deliberate dev convenience.
+{
+  const authConfigured = !!(
+    process.env.MANAGER_TOKENS ||
+    process.env.MANAGER_BEARER_TOKEN ||
+    process.env.MCP_BEARER_TOKEN ||
+    oauthEnabled()
+  );
+  if (!authConfigured && process.env.NODE_ENV === "production") {
+    console.error(
+      "FATAL: Manager started in production with no authentication configured. " +
+      "Set MANAGER_TOKENS (or MANAGER_BEARER_TOKEN / OAuth) before starting. Refusing to boot.",
+    );
+    process.exit(1);
+  }
+}
+
+// Surface unhandled rejections instead of letting Node silently swallow them —
+// several paths use fire-and-forget promises and a crash-causing rejection here
+// would otherwise be invisible.
+process.on("unhandledRejection", (reason) => {
+  console.error("[unhandledRejection]", reason);
+});
 
 const httpServer = http.createServer(app);
 // Browser terminals: WebSocket upgrades on /api/terminal → PTY (see terminal_ws.js).
