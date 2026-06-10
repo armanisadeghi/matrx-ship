@@ -1,8 +1,11 @@
 import { NextResponse } from "next/server";
 import { logger } from "@/lib/logger";
 import { getMigrationHistory } from "@/lib/db/introspect";
+import { requireAdmin } from "@/lib/auth/oauth";
 
-export async function GET() {
+export async function GET(request: Request) {
+  const denied = await requireAdmin(request);
+  if (denied) return denied;
   try {
     const migrations = await getMigrationHistory();
     return NextResponse.json({ migrations });

@@ -20,11 +20,13 @@ import {
   Columns3,
   History,
 } from "lucide-react";
+import { Loader2, LogOut } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Badge } from "@/components/ui/badge";
-
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { AuthProvider, useAuth } from "@/lib/auth-context";
+import { LoginScreen } from "@/components/admin/login-screen";
 
 interface NavItem {
   href: string;
@@ -106,7 +108,42 @@ export default function AdminLayout({
 }: {
   children: React.ReactNode;
 }) {
+  return (
+    <AuthProvider>
+      <AdminGate>{children}</AdminGate>
+    </AuthProvider>
+  );
+}
+
+// Gates the dashboard behind a Supabase OAuth admin session. The OAuth callback
+// route is allowed through unauthenticated because it is what establishes the
+// session in the first place.
+function AdminGate({ children }: { children: React.ReactNode }) {
+  const { authed, loading } = useAuth();
   const pathname = usePathname();
+
+  if (pathname === "/admin/oauth/callback") return <>{children}</>;
+
+  if (loading) {
+    return (
+      <div className="min-h-dvh flex items-center justify-center bg-background">
+        <Loader2 className="size-6 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
+  if (!authed) return <LoginScreen />;
+
+  return <DashboardShell>{children}</DashboardShell>;
+}
+
+function DashboardShell({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
+  const pathname = usePathname();
+  const { email, logout } = useAuth();
 
   return (
     <div className="min-h-dvh flex">
@@ -183,6 +220,19 @@ export default function AdminLayout({
         {/* Footer */}
         <div className="px-4 py-4 border-t border-sidebar-border space-y-3">
           <ThemeToggle />
+          {email && (
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-xs text-muted-foreground truncate" title={email}>{email}</p>
+              <button
+                type="button"
+                onClick={() => { logout(); }}
+                className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors shrink-0"
+                title="Sign out"
+              >
+                <LogOut className="size-3.5" /> Sign out
+              </button>
+            </div>
+          )}
           <p className="text-xs text-muted-foreground">Matrx Ship v0.1.0</p>
         </div>
       </aside>

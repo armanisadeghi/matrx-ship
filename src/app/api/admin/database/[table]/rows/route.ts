@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { sql } from "drizzle-orm";
+import { requireAdmin } from "@/lib/auth/oauth";
 
 type Row = Record<string, unknown>;
 
@@ -21,6 +22,8 @@ export async function GET(
   request: Request,
   { params }: { params: Promise<{ table: string }> },
 ) {
+  const denied = await requireAdmin(request);
+  if (denied) return denied;
   try {
     const { table } = await params;
 
@@ -96,6 +99,8 @@ export async function POST(
   request: Request,
   { params }: { params: Promise<{ table: string }> },
 ) {
+  const denied = await requireAdmin(request);
+  if (denied) return denied;
   try {
     const { table } = await params;
 

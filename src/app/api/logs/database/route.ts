@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { sql } from "drizzle-orm";
+import { requireAdmin } from "@/lib/auth/oauth";
 
 type Row = Record<string, unknown>;
 
@@ -10,6 +11,8 @@ type Row = Record<string, unknown>;
  * Query pg_stat_statements (slow queries) and pg_stat_activity (active connections).
  */
 export async function GET(request: Request) {
+  const denied = await requireAdmin(request);
+  if (denied) return denied;
   try {
     const { searchParams } = new URL(request.url);
     const type = searchParams.get("type") || "activity";

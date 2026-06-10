@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { logs } from "@/lib/db/schema";
 import { desc, eq, gte, lte, ilike, and, sql } from "drizzle-orm";
+import { requireAdmin } from "@/lib/auth/oauth";
 
 /**
  * GET /api/logs
@@ -10,6 +11,8 @@ import { desc, eq, gte, lte, ilike, and, sql } from "drizzle-orm";
  * Paginated, sorted by timestamp desc.
  */
 export async function GET(request: Request) {
+  const denied = await requireAdmin(request);
+  if (denied) return denied;
   try {
     const { searchParams } = new URL(request.url);
     const level = searchParams.get("level");

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { sql } from "drizzle-orm";
+import { requireAdmin } from "@/lib/auth/oauth";
 
 type Row = Record<string, unknown>;
 
@@ -42,6 +43,8 @@ export async function PATCH(
   request: Request,
   { params }: { params: Promise<{ table: string; id: string }> },
 ) {
+  const denied = await requireAdmin(request);
+  if (denied) return denied;
   try {
     const { table, id } = await params;
 
@@ -111,9 +114,11 @@ export async function PATCH(
 }
 
 export async function DELETE(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ table: string; id: string }> },
 ) {
+  const denied = await requireAdmin(request);
+  if (denied) return denied;
   try {
     const { table, id } = await params;
 

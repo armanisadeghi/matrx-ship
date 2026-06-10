@@ -4,12 +4,15 @@ import { apiKeys } from "@/lib/db/schema";
 import { eq, desc } from "drizzle-orm";
 import { generateApiKey } from "@/lib/utils";
 import { logger } from "@/lib/logger";
+import { requireAdmin } from "@/lib/auth/oauth";
 
 /**
  * GET /api/admin/api-keys
  * List all API keys (masked for security).
  */
-export async function GET() {
+export async function GET(request: Request) {
+  const denied = await requireAdmin(request);
+  if (denied) return denied;
   try {
     const keys = await db
       .select()
@@ -37,6 +40,8 @@ export async function GET() {
  * Create a new API key.
  */
 export async function POST(request: Request) {
+  const denied = await requireAdmin(request);
+  if (denied) return denied;
   try {
     const body = await request.json();
     const label = body.label || "default";
@@ -63,6 +68,8 @@ export async function POST(request: Request) {
  * Toggle active status of a key.
  */
 export async function PATCH(request: Request) {
+  const denied = await requireAdmin(request);
+  if (denied) return denied;
   try {
     const body = await request.json();
     const { id, isActive } = body;
@@ -96,6 +103,8 @@ export async function PATCH(request: Request) {
  * Delete an API key.
  */
 export async function DELETE(request: Request) {
+  const denied = await requireAdmin(request);
+  if (denied) return denied;
   try {
     const { searchParams } = new URL(request.url);
     const id = searchParams.get("id");

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { sql } from "drizzle-orm";
+import { requireAdmin } from "@/lib/auth/oauth";
 
 type Row = Record<string, unknown>;
 
@@ -15,6 +16,8 @@ const DANGEROUS_PATTERNS = [
 ];
 
 export async function POST(request: Request) {
+  const denied = await requireAdmin(request);
+  if (denied) return denied;
   try {
     const body = await request.json();
     const { query: userQuery } = body;
