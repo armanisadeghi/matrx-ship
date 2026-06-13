@@ -503,6 +503,10 @@ services:
       DATABASE_URL: postgresql://ship:\${POSTGRES_PASSWORD}@db:5432/ship
       MATRX_SHIP_API_KEY: \${MATRX_SHIP_API_KEY:-}
       MATRX_SHIP_ADMIN_SECRET: \${MATRX_SHIP_ADMIN_SECRET:-}
+      SUPABASE_MATRIX_JWT_SECRET: \${SUPABASE_MATRIX_JWT_SECRET:-}
+      SUPABASE_MATRIX_URL: \${SUPABASE_MATRIX_URL:-}
+      SUPABASE_MATRIX_KEY: \${SUPABASE_MATRIX_KEY:-}
+      MATRX_AIDREAM_URL: \${MATRX_AIDREAM_URL:-}
       PROJECT_NAME: \${PROJECT_NAME}
       VERCEL_ACCESS_TOKEN: \${VERCEL_ACCESS_TOKEN:-}
       VERCEL_PROJECT_ID: \${VERCEL_PROJECT_ID:-}
@@ -567,6 +571,13 @@ POSTGRES_PASSWORD=${dbPassword}
 PROJECT_NAME=${displayName}
 MATRX_SHIP_API_KEY=${apiKey}
 MATRX_SHIP_ADMIN_SECRET=
+
+# Admin OAuth (AI Matrx / Supabase). All three SUPABASE_MATRIX_* are required to
+# enable OAuth login for /admin; MATRX_SHIP_ADMIN_SECRET remains as break-glass.
+SUPABASE_MATRIX_JWT_SECRET=
+SUPABASE_MATRIX_URL=
+SUPABASE_MATRIX_KEY=
+MATRX_AIDREAM_URL=
 
 # Vercel integration (optional)
 VERCEL_ACCESS_TOKEN=
@@ -633,7 +644,7 @@ function createInstance(name, display_name, api_key, postgres_image) {
   if (startResult.success) {
     config.instances[name].status = "running";
     saveDeployments(config);
-    
+
     // Wait for container health + Let's Encrypt certificate
     const certResult = waitForCertificate(name, `${name}.${DOMAIN_SUFFIX}`);
     config.instances[name].certificate_status = certResult.success ? "issued" : (certResult.container_status === "unhealthy" ? "blocked-unhealthy" : "pending");
@@ -688,7 +699,7 @@ function removeInstance(name, delete_data, force = false) {
   if (existsSync(join(instanceDir, "docker-compose.yml"))) {
     const downFlags = delete_data ? "down -v --remove-orphans" : "down --remove-orphans";
     results.compose_down = exec(`docker compose ${downFlags}`, { cwd: instanceDir, timeout: 60000 });
-    
+
     // If compose down failed and force is enabled, try manual cleanup
     if (!results.compose_down.success && force) {
       results.force_cleanup = {
@@ -718,18 +729,18 @@ function removeInstance(name, delete_data, force = false) {
   // Remove from config
   delete config.instances[name];
   saveDeployments(config);
-  removeInstanceFromSupabase(name).catch(() => {});
+  removeInstanceFromSupabase(name).catch(() => { });
 
   // Audit log
   auditLog("api", "instance_remove", name, { delete_data, force });
 
   const success = results.compose_down?.success || results.force_cleanup || results.direct_removal;
-  return { 
-    success: !!success, 
-    removed: name, 
-    data_deleted: delete_data || false, 
+  return {
+    success: !!success,
+    removed: name,
+    data_deleted: delete_data || false,
     forced: force,
-    results 
+    results
   };
 }
 
@@ -754,7 +765,7 @@ function recordBuild(entry) {
   history.builds.unshift(entry); // newest first
   saveBuildHistory(history);
   // Dual-write to Supabase (fire and forget)
-  recordBuildInSupabase(entry).catch(() => {});
+  recordBuildInSupabase(entry).catch(() => { });
 }
 
 function generateBuildTag() {
@@ -816,7 +827,7 @@ function rebuildInstances({ name, skip_build, triggered_by } = {}) {
   for (const t of targets) {
     if (!config.instances[t]) { results.restarts[t] = { error: "not found" }; continue; }
     results.restarts[t] = exec("docker compose up -d --force-recreate app", { cwd: join(APPS_DIR, t), timeout: 60000 });
-    
+
     // Wait for container health + certificate after restart
     if (results.restarts[t].success) {
       results.certificates[t] = waitForCertificate(t, `${t}.${DOMAIN_SUFFIX}`, { maxWaitSec: 90 });
@@ -1338,8 +1349,8 @@ function createServer(ctx = {}) {
           return readdirSync(dirPath, { withFileTypes: true }).map((entry) => {
             const full = join(dirPath, entry.name);
             const info = { name: entry.name, type: entry.isDirectory() ? "directory" : "file" };
-            if (entry.isFile()) try { info.size = statSync(full).size; } catch {}
-            if (recursive && entry.isDirectory() && depth < 3) try { info.children = listDir(full, depth + 1); } catch {}
+            if (entry.isFile()) try { info.size = statSync(full).size; } catch { }
+            if (recursive && entry.isDirectory() && depth < 3) try { info.children = listDir(full, depth + 1); } catch { }
             return info;
           });
         }
@@ -1385,7 +1396,7 @@ function createServer(ctx = {}) {
             for (const [k, v] of Object.entries(labels).filter(([k]) => k.startsWith("traefik.http.services."))) r[k.replace("traefik.http.services.", "")] = v;
             routes.push(r);
           }
-        } catch {}
+        } catch { }
       }
       return textResult({ routes, count: routes.length });
     }
@@ -1625,7 +1636,7 @@ app.get("/api/instances/:name", authMiddleware, async (req, res) => {
       networks: Object.keys(c.NetworkSettings?.Networks || {}),
       health: c.State?.Health?.Status || null,
     };
-  } catch {}
+  } catch { }
   try {
     const raw = JSON.parse(dbInspect.output);
     const c = raw[0];
@@ -1638,15 +1649,15 @@ app.get("/api/instances/:name", authMiddleware, async (req, res) => {
       restart_count: c.RestartCount,
       health: c.State?.Health?.Status || null,
     };
-  } catch {}
+  } catch { }
 
   // Container stats (CPU + memory) — one-shot, no stream
   const appStats = exec(`docker stats ${name} --no-stream --format '{"cpu":"{{.CPUPerc}}","mem":"{{.MemUsage}}","mem_pct":"{{.MemPerc}}","net":"{{.NetIO}}","block":"{{.BlockIO}}","pids":"{{.PIDs}}"}' 2>/dev/null`);
   const dbStats = exec(`docker stats db-${name} --no-stream --format '{"cpu":"{{.CPUPerc}}","mem":"{{.MemUsage}}","mem_pct":"{{.MemPerc}}","net":"{{.NetIO}}","block":"{{.BlockIO}}","pids":"{{.PIDs}}"}' 2>/dev/null`);
 
   let appStatsData = null, dbStatsData = null;
-  try { appStatsData = JSON.parse(appStats.output); } catch {}
-  try { dbStatsData = JSON.parse(dbStats.output); } catch {}
+  try { appStatsData = JSON.parse(appStats.output); } catch { }
+  try { dbStatsData = JSON.parse(dbStats.output); } catch { }
 
   // Environment variables (from .env file, mask sensitive values)
   let envVars = [];
@@ -1662,7 +1673,7 @@ app.get("/api/instances/:name", authMiddleware, async (req, res) => {
         return { key, value, sensitive: /PASSWORD|SECRET|TOKEN|KEY/.test(key) };
       })
       .filter(Boolean);
-  } catch {}
+  } catch { }
 
   // Backups list
   let backups = [];
@@ -1677,11 +1688,11 @@ app.get("/api/instances/:name", authMiddleware, async (req, res) => {
         })
         .sort((a, b) => b.created.localeCompare(a.created));
     }
-  } catch {}
+  } catch { }
 
   // Docker compose file
   let composeFile = null;
-  try { composeFile = readFileSync(join(APPS_DIR, name, "docker-compose.yml"), "utf-8"); } catch {}
+  try { composeFile = readFileSync(join(APPS_DIR, name, "docker-compose.yml"), "utf-8"); } catch { }
 
   res.json({
     name,
@@ -1717,7 +1728,7 @@ app.get("/api/instances/:name/env", authMiddleware, requireSuperadmin, async (re
       const eq = line.indexOf("=");
       if (eq > 0) env[line.substring(0, eq).trim()] = line.substring(eq + 1).trim();
     }
-  } catch {}
+  } catch { }
   res.json({ env });
 });
 
@@ -1747,7 +1758,7 @@ app.get("/api/instances/:name/backups", authMiddleware, async (req, res) => {
       }
       backups.sort((a, b) => b.created.localeCompare(a.created));
     }
-  } catch {}
+  } catch { }
   res.json({ backups });
 });
 
@@ -2133,16 +2144,16 @@ app.get("/api/instances/:name/logs", authMiddleware, async (req, res) => {
 app.get("/api/instances/:name/db/status", authMiddleware, async (req, res) => {
   const name = req.params.name;
   const dbContainer = `db-${name}`;
-  
+
   const inspect = exec(`docker inspect ${dbContainer} --format '{{json .State}}' 2>/dev/null`);
   if (!inspect.success) return res.status(404).json({ error: `Database container ${dbContainer} not found` });
 
   let state = null;
-  try { state = JSON.parse(inspect.output); } catch {}
+  try { state = JSON.parse(inspect.output); } catch { }
 
   const stats = exec(`docker stats ${dbContainer} --no-stream --format '{"cpu":"{{.CPUPerc}}","mem":"{{.MemUsage}}","mem_pct":"{{.MemPerc}}"}' 2>/dev/null`);
   let statsData = null;
-  try { if (stats.success) statsData = JSON.parse(stats.output); } catch {}
+  try { if (stats.success) statsData = JSON.parse(stats.output); } catch { }
 
   const version = exec(`docker exec ${dbContainer} psql -U ship -d ship -tc "SELECT version()" 2>/dev/null`);
   const size = exec(`docker exec ${dbContainer} psql -U ship -d ship -tc "SELECT pg_size_pretty(pg_database_size('ship'))" 2>/dev/null`);
@@ -2417,13 +2428,13 @@ function getSandboxDetail(name) {
         { encoding: "utf-8", timeout: 5000 }
       );
       stats = JSON.parse(s);
-    } catch {}
+    } catch { }
 
     // Get logs
     let logs = "";
     try {
       logs = execSync(`docker logs ${name} --tail 100 2>&1`, { encoding: "utf-8", timeout: 5000 });
-    } catch {}
+    } catch { }
 
     return {
       name,
@@ -2945,8 +2956,10 @@ async function buildVersionsReport() {
         ? `The matrx-ship image is ${pendingCount || "some"} commit(s) behind source. Rebuild it, then recreate the apps onto the new image. (Per-app DBs are separate volumes — untouched.)`
         : "Image is built from the current source commit.",
       update: sourceAhead
-        ? { action: "ship-rebuild", label: "Rebuild image + redeploy all apps", data_safe: true,
-            note: "docker build matrx-ship:latest from current source, then recreate every app container onto it. App DB volumes are untouched." }
+        ? {
+          action: "ship-rebuild", label: "Rebuild image + redeploy all apps", data_safe: true,
+          note: "docker build matrx-ship:latest from current source, then recreate every app container onto it. App DB volumes are untouched."
+        }
         : null,
     });
 
@@ -2961,8 +2974,10 @@ async function buildVersionsReport() {
         : `All ${apps.length} app(s) are running matrx-ship:latest.`,
       apps, behind_count: behind,
       update: behind > 0
-        ? { action: "ship-redeploy-stale", label: `Redeploy ${behind} stale app(s)`, data_safe: true,
-            note: "Recreates only the app containers that aren't on matrx-ship:latest. Each app's DB volume is untouched. (Per-app Redeploy buttons below also work.)" }
+        ? {
+          action: "ship-redeploy-stale", label: `Redeploy ${behind} stale app(s)`, data_safe: true,
+          note: "Recreates only the app containers that aren't on matrx-ship:latest. Each app's DB volume is untouched. (Per-app Redeploy buttons below also work.)"
+        }
         : null,
     });
   } catch (e) { systems.push({ id: "ship-apps", name: "App portals — running image", kind: "ship-apps", status: "error", detail: String(e.message), update: null }); }
@@ -2983,11 +2998,13 @@ async function buildVersionsReport() {
       status,
       detail: !reachable ? "Orchestrator not responding."
         : repo.hostedBehind == null ? "Couldn't compare to origin (GitHub check unavailable)."
-        : behind ? "The /srv source it's built from is behind origin/main — pull latest, rebuild, and restart."
-        : "Built from origin/main — current.",
+          : behind ? "The /srv source it's built from is behind origin/main — pull latest, rebuild, and restart."
+            : "Built from origin/main — current.",
       update: behind
-        ? { action: "orch-pull-redeploy", label: "Pull latest + rebuild + restart", data_safe: true,
-            note: "git pull the /srv matrx-sandbox clone, rebuild the orchestrator image, recreate the container. No user data on the orchestrator." }
+        ? {
+          action: "orch-pull-redeploy", label: "Pull latest + rebuild + restart", data_safe: true,
+          note: "git pull the /srv matrx-sandbox clone, rebuild the orchestrator image, recreate the container. No user data on the orchestrator."
+        }
         : null,
     });
   } catch (e) { systems.push({ id: "orch-hosted", name: "Sandbox orchestrator — hosted", kind: "orchestrator", status: "error", detail: String(e.message), update: null }); }
@@ -3008,12 +3025,14 @@ async function buildVersionsReport() {
       detail: (!reachable ? "EC2 orchestrator not responding. " : "")
         + (repo.ec2Behind == null ? "Couldn't compare to origin (GitHub check unavailable)."
           : behind ? `The latest deploy (${repo.deployShort}, ${when}) is behind origin/main (${repo.mainShort}) — trigger a deploy.`
-          : `Up to date — latest GitHub Actions deploy shipped origin/main (${repo.deployShort}) on ${when}.`)
+            : `Up to date — latest GitHub Actions deploy shipped origin/main (${repo.deployShort}) on ${when}.`)
         + (repo.deployFailures ? ` ⚠ ${repo.deployFailures} of the last 5 deploys failed.` : "")
         + " (Note: the version NUMBER it reports is not a freshness signal — it's been reset across commits.)",
       update: behind
-        ? { action: "ec2-trigger-deploy", label: "Trigger GitHub deploy", data_safe: true,
-            note: "Dispatches the matrx-sandbox 'Deploy' workflow on main, which rebuilds + redeploys the EC2 orchestrator via SSM." }
+        ? {
+          action: "ec2-trigger-deploy", label: "Trigger GitHub deploy", data_safe: true,
+          note: "Dispatches the matrx-sandbox 'Deploy' workflow on main, which rebuilds + redeploys the EC2 orchestrator via SSM."
+        }
         : null,
     });
   } catch (e) { systems.push({ id: "orch-ec2", name: "Sandbox orchestrator — EC2 tier", kind: "orchestrator-ec2", status: "error", detail: String(e.message), update: null }); }
@@ -3031,8 +3050,10 @@ async function buildVersionsReport() {
       detail: drifted > 0 ? `${drifted} of ${total} sandbox(es) are on an outdated image.`
         : (total > 0 ? `All ${total} sandbox(es) on the current image.` : "No running sandboxes."),
       update: drifted > 0
-        ? { action: "migrate-all", label: `Migrate ${drifted} sandbox(es) — no data loss`, data_safe: true,
-            note: "Zero-drift swap: same volume + same id, ~40s each; busy boxes are retried. No user data is lost." }
+        ? {
+          action: "migrate-all", label: `Migrate ${drifted} sandbox(es) — no data loss`, data_safe: true,
+          note: "Zero-drift swap: same volume + same id, ~40s each; busy boxes are retried. No user data is lost."
+        }
         : null,
     });
   } catch (e) { systems.push({ id: "sandboxes", name: "Sandboxes — running boxes", kind: "sandboxes", status: "error", detail: `Orchestrator unreachable: ${e.message}`, update: null }); }
@@ -3055,8 +3076,10 @@ async function buildVersionsReport() {
       images: variants.map((v) => ({ variant: v.variant, required: v.required, present: v.present })),
       missing_required: missingRequired,
       update: missingRequired.length
-        ? { action: "sandbox-image-rebuild", label: `Rebuild image(s): ${missingRequired.join(", ")}`, data_safe: true,
-            note: "Opens the Sandboxes page where each image rebuilds with live logs (the aidream image is large and builds on top of core)." }
+        ? {
+          action: "sandbox-image-rebuild", label: `Rebuild image(s): ${missingRequired.join(", ")}`, data_safe: true,
+          note: "Opens the Sandboxes page where each image rebuilds with live logs (the aidream image is large and builds on top of core)."
+        }
         : null,
     });
   } catch (e) { systems.push({ id: "sandbox-images", name: "Sandbox images (templates)", kind: "sandbox-images", status: "error", detail: String(e.message), update: null }); }
@@ -3846,18 +3869,18 @@ function agentGwAuth(req, res, next) {
 // category + sort order. ONE source of truth so the terminal picker, agent
 // access, and any future list all group + label targets identically.
 const KIND_CATEGORY = {
-  host:             { category: "server",         categoryLabel: "Servers",              order: 0 },
-  "control-plane":  { category: "control-plane",  categoryLabel: "Control plane",        order: 1 },
-  proxy:            { category: "infrastructure", categoryLabel: "Infrastructure",       order: 2 },
-  database:         { category: "infrastructure", categoryLabel: "Infrastructure",       order: 2 },
-  "db-admin":       { category: "infrastructure", categoryLabel: "Infrastructure",       order: 2 },
-  orchestrator:     { category: "sandbox-system", categoryLabel: "Sandbox system",       order: 3 },
-  sandbox:          { category: "sandbox",        categoryLabel: "Sandboxes",            order: 4 },
-  "sandbox-legacy": { category: "sandbox",        categoryLabel: "Sandboxes",            order: 4 },
-  "ship-instance":  { category: "app",            categoryLabel: "App deployments",      order: 5 },
-  "instance-db":    { category: "database",       categoryLabel: "Databases",            order: 6 },
-  "agent-env":      { category: "agent-env",      categoryLabel: "Agent environments",   order: 7 },
-  unknown:          { category: "other",          categoryLabel: "Other",                order: 9 },
+  host: { category: "server", categoryLabel: "Servers", order: 0 },
+  "control-plane": { category: "control-plane", categoryLabel: "Control plane", order: 1 },
+  proxy: { category: "infrastructure", categoryLabel: "Infrastructure", order: 2 },
+  database: { category: "infrastructure", categoryLabel: "Infrastructure", order: 2 },
+  "db-admin": { category: "infrastructure", categoryLabel: "Infrastructure", order: 2 },
+  orchestrator: { category: "sandbox-system", categoryLabel: "Sandbox system", order: 3 },
+  sandbox: { category: "sandbox", categoryLabel: "Sandboxes", order: 4 },
+  "sandbox-legacy": { category: "sandbox", categoryLabel: "Sandboxes", order: 4 },
+  "ship-instance": { category: "app", categoryLabel: "App deployments", order: 5 },
+  "instance-db": { category: "database", categoryLabel: "Databases", order: 6 },
+  "agent-env": { category: "agent-env", categoryLabel: "Agent environments", order: 7 },
+  unknown: { category: "other", categoryLabel: "Other", order: 9 },
 };
 function categoryFor(kind) { return KIND_CATEGORY[kind] || KIND_CATEGORY.unknown; }
 
