@@ -3415,16 +3415,46 @@ async function checkAidreamPipeline() {
   }
 }
 
+// ── Expected-restart registry ────────────────────────────────────────────────
+// When the MANAGER initiates a restart (Secrets "Apply", orchestrator
+// restart/rebuild), the affected health checks WILL fail for ~a minute. That
+// used to surface as a red "critical" banner — indistinguishable from a real
+// outage — sending the operator into panic-clicking. Checks covered by a
+// fresh expected-restart window report status "restarting" instead: the UI
+// shows a calm notice, ops-triage leaves them untouched, and if the service
+// is STILL down after the window expires it goes genuinely critical.
+const _expectedRestarts = new Map(); // check id -> { label, until }
+
+function noteExpectedRestart(checkId, label, windowMs = 150000) {
+  _expectedRestarts.set(checkId, { label, until: Date.now() + windowMs });
+}
+
+function expectedRestart(checkId) {
+  const e = _expectedRestarts.get(checkId);
+  if (!e) return null;
+  if (Date.now() > e.until) { _expectedRestarts.delete(checkId); return null; }
+  return e;
+}
+
 async function computeFleetHealth() {
   const [drift, deploys, aidreamHealth, aidreamPipeline] = await Promise.all([
     checkOrchestratorDrift(), checkRecentDeploys(), checkDedicatedAidream(), checkAidreamPipeline(),
   ]);
   const images = checkSandboxImages();
   const checks = [drift, images, deploys, aidreamHealth, aidreamPipeline];
-  const rank = { ok: 0, unknown: 0, warning: 1, critical: 2 };
+  for (const c of checks) {
+    if (c.status !== "critical" && c.status !== "warning") continue;
+    const e = expectedRestart(c.id);
+    if (e) {
+      const left = Math.max(0, Math.round((e.until - Date.now()) / 1000));
+      c.status = "restarting";
+      c.detail = `Restarting (expected) — ${e.label} was just restarted from the UI; this normally clears within a minute (going critical in ${left}s if it doesn't). Underlying: ${c.detail}`;
+    }
+  }
+  const rank = { ok: 0, unknown: 0, restarting: 0, warning: 1, critical: 2 };
   const worst = checks.reduce((m, c) => Math.max(m, rank[c.status] ?? 0), 0);
   const overall = worst >= 2 ? "critical" : worst === 1 ? "degraded" : "ok";
-  return { overall, checks, checked_at: new Date().toISOString() };
+  return { overall, checks, checked_at: new Date().toISOString(), restarting: checks.filter((c) => c.status === "restarting").map((c) => c.label) };
 }
 
 app.get("/api/fleet-health", authMiddleware, async (_req, res) => {
@@ -3524,6 +3554,7 @@ app.get("/api/orchestrator/logs", authMiddleware, async (req, res) => {
 
 // ── Restart the orchestrator (recreate container, no rebuild) ───────────────
 app.post("/api/orchestrator/restart", authMiddleware, requireRole("admin", "deployer"), async (_req, res) => {
+  noteExpectedRestart("orchestrator-drift", "Hosted orchestrator");
   const r = exec("docker compose up -d --force-recreate", { cwd: ORCH_COMPOSE_DIR, timeout: 120000 });
   _sbxRepoCache = { ts: 0, data: null };
   const ready = await waitForOrchestratorReady();
@@ -3534,6 +3565,7 @@ app.post("/api/orchestrator/restart", authMiddleware, requireRole("admin", "depl
 // non-streamed — used by the Versions "Update" button). No user data on the
 // orchestrator, so this is safe. ────────────────────────────────────────────
 app.post("/api/orchestrator/redeploy", authMiddleware, requireSuperadmin, async (_req, res) => {
+  noteExpectedRestart("orchestrator-drift", "Hosted orchestrator (redeploy)", 300000);
   const context = join(SANDBOX_PROJECT, "orchestrator");
   const build = exec(`docker build -t ${ORCH_IMAGE_TAG} ${context}`, { cwd: context, timeout: 300000 });
   if (!build.success) return res.status(500).json({ success: false, step: "build", error: build.error || build.output });
@@ -3625,6 +3657,7 @@ app.post("/api/orchestrator/build/stream", authMiddleware, requireRole("admin"),
     const m = exec(`docker run --rm --env-file ${ORCH_COMPOSE_DIR}/.env ${ORCH_IMAGE_TAG} python -m orchestrator.migrate_runner`, { timeout: 120000 });
     if (!m.success) { send("error", { success: false, message: `DB migrations failed — orchestrator NOT recreated (old container keeps serving): ${m.error || "unknown"}` }); return res.end(); }
     send("phase", { phase: "restart", message: "Recreating orchestrator container..." });
+    noteExpectedRestart("orchestrator-drift", "Hosted orchestrator (rebuild)");
     const r = exec("docker compose up -d --force-recreate", { cwd: ORCH_COMPOSE_DIR, timeout: 120000 });
     send(r.success ? "done" : "error", { success: r.success, message: r.success ? "Orchestrator rebuilt + migrated + recreated" : (r.error || "recreate failed") });
     res.end();
@@ -4534,6 +4567,9 @@ app.post("/api/secrets/restart", authMiddleware, requireSuperadmin, async (req, 
     } else {
       return res.status(400).json({ error: `Unknown restart type '${s.restart.type}'` });
     }
+    // Tell fleet-health this outage is intentional so the banner stays calm.
+    if (s.id === "ec2:aidream-app") noteExpectedRestart("aidream-dedicated", s.label);
+    if (s.id === "ec2:sandbox-orchestrator" || s.id === "infra:orchestrator") noteExpectedRestart("orchestrator-drift", s.label);
     try { auditLog(req.tokenEntry?.label || "admin", "secrets_apply_restart", s.id, {}); } catch { /* */ }
     res.json({ ok: true, id: s.id, output });
   } catch (e) { res.status(500).json({ error: e.message }); }

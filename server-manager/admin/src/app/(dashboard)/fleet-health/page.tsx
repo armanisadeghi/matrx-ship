@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { RefreshCw, CheckCircle2, AlertTriangle, XCircle, HelpCircle, ArrowUpCircle, Loader2, ExternalLink } from "lucide-react";
+import { RefreshCw, CheckCircle2, AlertTriangle, XCircle, HelpCircle, ArrowUpCircle, Loader2, ExternalLink, RotateCcw } from "lucide-react";
 import { Button } from "@matrx/admin-ui/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@matrx/admin-ui/ui/card";
 import { Badge } from "@matrx/admin-ui/ui/badge";
@@ -25,7 +25,7 @@ interface ActionDef {
 interface Check {
   id: string;
   label: string;
-  status: "ok" | "warning" | "critical" | "unknown";
+  status: "ok" | "warning" | "critical" | "unknown" | "restarting";
   detail: string;
   actions?: ActionDef[];
   [k: string]: unknown;
@@ -40,6 +40,7 @@ const POLL_MS = 30000;
 
 function StatusIcon({ status }: { status: Check["status"] }) {
   if (status === "ok") return <CheckCircle2 className="size-5 text-success" />;
+  if (status === "restarting") return <RotateCcw className="size-5 animate-spin text-blue-500" style={{ animationDuration: "2.5s" }} />;
   if (status === "warning") return <AlertTriangle className="size-5 text-amber-500" />;
   if (status === "critical") return <XCircle className="size-5 text-destructive" />;
   return <HelpCircle className="size-5 text-muted-foreground" />;
