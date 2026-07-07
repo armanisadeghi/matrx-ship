@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { toast } from "sonner";
 import {
-  KeySquare, Server, Layers, Eye, EyeOff, Loader2, Check, X, Plus, Pencil, RefreshCw, ShieldAlert, Code,
+  KeySquare, Server, Layers, Eye, EyeOff, Loader2, Check, X, Plus, Pencil, RefreshCw, ShieldAlert, Code, Cloud,
 } from "lucide-react";
 import { CopyControls } from "@/components/admin/copy-controls";
 import { Button } from "@matrx/admin-ui/ui/button";
@@ -14,7 +14,7 @@ import { PageShell } from "@matrx/admin-ui/components/page-shell";
 import { useAuth } from "@/lib/auth-context";
 import { api, API, ApiError } from "@/lib/api";
 
-interface Store { id: string; label: string; kind: "app" | "infra"; exists: boolean; key_count: number; note: string | null }
+interface Store { id: string; label: string; kind: "app" | "infra" | "ec2"; exists: boolean; key_count: number | null; note: string | null; remote?: boolean; host?: string }
 interface Entry { key: string; value: string; masked: boolean; length: number }
 interface EntriesResp { id: string; label: string; kind: string; note: string | null; exists: boolean; entries: Entry[] }
 
@@ -122,20 +122,20 @@ export default function SecretsPage() {
         {/* Store list */}
         <Card className="self-start">
           <CardContent className="p-2 space-y-3">
-            {(["infra", "app"] as const).map((kind) => {
+            {(["infra", "ec2", "app"] as const).map((kind) => {
               const list = stores.filter((s) => s.kind === kind);
               if (!list.length) return null;
               return (
                 <div key={kind}>
                   <div className="px-2 pb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground flex items-center gap-1.5">
-                    {kind === "infra" ? <Server className="size-3.5" /> : <Layers className="size-3.5" />}
-                    {kind === "infra" ? "Infrastructure" : "App deployments"}
+                    {kind === "infra" ? <Server className="size-3.5" /> : kind === "ec2" ? <Cloud className="size-3.5" /> : <Layers className="size-3.5" />}
+                    {kind === "infra" ? "Infrastructure" : kind === "ec2" ? "EC2 hosts (via SSM)" : "App deployments"}
                   </div>
                   {list.map((s) => (
                     <button key={s.id} type="button" onClick={() => setSelected(s.id)}
                       className={`w-full text-left rounded-md px-2 py-1.5 flex items-center justify-between gap-2 ${selected === s.id ? "bg-primary/10 ring-1 ring-primary/40" : "hover:bg-muted"}`}>
                       <span className="text-sm truncate">{s.label}</span>
-                      <span className="text-[11px] text-muted-foreground tabular-nums shrink-0">{s.key_count}</span>
+                      <span className="text-[11px] text-muted-foreground tabular-nums shrink-0">{s.key_count ?? "remote"}</span>
                     </button>
                   ))}
                 </div>

@@ -2,7 +2,7 @@
 
 import { usePathname } from "next/navigation";
 import Link from "next/link";
-import { Loader2 } from "lucide-react";
+import { Loader2 , FolderOpen } from "lucide-react";
 import {
   Layers,
   Terminal,
@@ -53,6 +53,7 @@ const navGroups: NavGroup[] = [
       { id: "agent-access", href: "/agent-access", label: "Agent Access", icon: KeyRound },
       { id: "hosts", href: "/hosts", label: "Hosts (EC2)", icon: Cloud },
       { id: "secrets", href: "/secrets", label: "Secrets", icon: KeySquare },
+      { id: "files", href: "/files", label: "Files", icon: FolderOpen },
       { id: "tokens", href: "/tokens", label: "Tokens", icon: Key },
     ],
   },
@@ -91,7 +92,7 @@ const navGroups: NavGroup[] = [
 // Nav items that expose envs, tokens, or live access — restricted to superadmins
 // (admins.level == super_admin, or break-glass operator tokens). Developer and
 // Senior Admin don't see these. The backend enforces the same gate.
-const SUPERADMIN_ONLY = new Set(["hosts", "terminal", "agent-access", "tokens", "secrets"]);
+const SUPERADMIN_ONLY = new Set(["hosts", "terminal", "agent-access", "tokens", "secrets", "files"]);
 
 function DashboardContent({ children }: { children: React.ReactNode }) {
   const { authed, loading, role, isSuperadmin, logout } = useAuth();

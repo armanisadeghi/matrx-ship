@@ -3,7 +3,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import express from "express";
 import { z } from "zod";
 import { execFileSync, execSync, spawn } from "node:child_process";
-import { readFileSync, writeFileSync, readdirSync, statSync, existsSync, mkdirSync, unlinkSync, chmodSync, renameSync } from "node:fs";
+import { readFileSync, writeFileSync, readdirSync, statSync, existsSync, mkdirSync, unlinkSync, chmodSync, renameSync, copyFileSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { cpus, totalmem, freemem, uptime as osUptime, hostname } from "node:os";
 import { randomBytes, createHash, timingSafeEqual } from "node:crypto";
@@ -4248,7 +4248,88 @@ function secretStores() {
   ];
   return [...infra, ...apps];
 }
-function findSecretStore(id) { return secretStores().find((s) => s.id === id); }
+// POSIX single-quote for embedding a path in a remote shell command.
+function shq(s) { return `'${String(s).replace(/'/g, `'\\''`)}'`; }
+
+// EC2-hosted env files, managed over SSM so the operator never needs a
+// terminal for routine env changes on the fleet boxes. Same masked-view/set
+// UX as local stores; writes back up the file on the box first.
+const REMOTE_SECRET_STORES = [
+  {
+    id: "ec2:aidream-app",
+    label: "AI Dream dedicated (EC2) — app.env",
+    kind: "ec2",
+    host: "matrx-python-server",
+    path: "/etc/aidream/app.env",
+    note: "Applies on restart: sudo systemctl restart aidream.service (Hosts page or Terminal).",
+    remote: true,
+  },
+  {
+    id: "ec2:sandbox-orchestrator",
+    label: "EC2 sandbox orchestrator — orchestrator/.env",
+    kind: "ec2",
+    host: "matrx-sandbox-host-dev",
+    path: "/home/ec2-user/orchestrator/.env",
+    note: "Applies on restart: sudo systemctl restart matrx-orchestrator (Hosts page or Terminal). NB: some vars live in the systemd override conf instead — edit those via the Files page.",
+    remote: true,
+  },
+];
+
+function findSecretStore(id) { return [...secretStores(), ...REMOTE_SECRET_STORES].find((s) => s.id === id); }
+
+async function remoteReadFileB64(store) {
+  const h = FLEET_HOSTS[store.host];
+  if (!h) throw new Error(`Unknown fleet host '${store.host}'`);
+  const r = await ssmRun(h.instanceId, `sudo cat ${shq(store.path)} 2>/dev/null | base64 -w0`, { timeout: 60, comment: "secrets:read" });
+  if (r.status !== "Success") throw new Error(`SSM read failed: ${r.status} ${r.stderr?.slice(0, 200) || ""}`);
+  return (r.stdout || "").trim();
+}
+
+async function remoteWriteFile(store, content) {
+  const h = FLEET_HOSTS[store.host];
+  if (!h) throw new Error(`Unknown fleet host '${store.host}'`);
+  const b64 = Buffer.from(content, "utf-8").toString("base64");
+  if (b64.length > 64000) throw new Error("File too large to write over SSM (64KB cap)");
+  const p = shq(store.path);
+  const cmd = `sudo cp -a ${p} ${p}.bak-$(date +%s) 2>/dev/null; echo '${b64}' | base64 -d | sudo tee ${p} >/dev/null && sudo chmod 600 ${p} && echo WRITE_OK`;
+  const r = await ssmRun(h.instanceId, cmd, { timeout: 60, comment: "secrets:write" });
+  if (r.status !== "Success" || !(r.stdout || "").includes("WRITE_OK")) {
+    throw new Error(`SSM write failed: ${r.status} ${r.stderr?.slice(0, 200) || ""}`);
+  }
+}
+
+async function remoteParseEnv(store) {
+  const b64 = await remoteReadFileB64(store);
+  return parseEnvText(Buffer.from(b64, "base64").toString("utf-8"));
+}
+
+// Remote upsert = read → modify locally → write whole file back (with backup).
+// A sed-based in-place edit can't safely quote arbitrary secret values.
+async function remoteUpsertEnvKey(store, key, value) {
+  const b64 = await remoteReadFileB64(store);
+  let lines = Buffer.from(b64, "base64").toString("utf-8").split("\n");
+  let found = false;
+  lines = lines.map((l) => (l.startsWith(`${key}=`) ? (found = true, `${key}=${value}`) : l));
+  if (!found) {
+    if (lines.length && lines[lines.length - 1].trim() === "") lines.splice(lines.length - 1, 0, `${key}=${value}`);
+    else lines.push(`${key}=${value}`);
+  }
+  await remoteWriteFile(store, lines.join("\n"));
+  return found ? "updated" : "added";
+}
+
+function parseEnvText(text) {
+  const out = [];
+  for (const raw of String(text).split("\n")) {
+    const line = raw.trimEnd();
+    if (!line || line.trimStart().startsWith("#")) continue;
+    const i = line.indexOf("=");
+    if (i <= 0) continue;
+    out.push({ key: line.slice(0, i).trim(), value: line.slice(i + 1) });
+  }
+  return out;
+}
+
 function parseEnvFile(path) {
   const out = [];
   if (!existsSync(path)) return out;
@@ -4279,6 +4360,153 @@ function upsertEnvKey(path, key, value) {
   return found ? "updated" : "added";
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// Files — browse / read / edit files on the /srv host and the EC2 fleet boxes
+// from the UI, so routine file work needs neither SSH nor the terminal page.
+// Superadmin-only; every read/write is audit-logged; writes back up the
+// target file first (path.bak-<epoch>).
+//
+// Transports:
+//   local  — the Manager container sees the host's /srv and /data (mounted at
+//            /host-srv, /host-data). Anything else on the host isn't visible
+//            by design; the error says so instead of pretending.
+//   ssm    — fleet EC2 boxes via AWS-RunShellScript. SSM caps command output
+//            at ~24KB, so reads are CHUNKED (base64 16KB/call, 192KB cap) and
+//            writes are single-shot (64KB cap) — plenty for config files,
+//            refuses honestly beyond that.
+// ═══════════════════════════════════════════════════════════════════════════
+
+const FILES_LOCAL_ROOTS = { "/srv": HOST_SRV, "/data": "/host-data" };
+const FILES_READ_CAP = 1024 * 1024;           // local read cap (1MB)
+const FILES_REMOTE_READ_CAP = 192 * 1024;     // remote read cap (chunked)
+const FILES_REMOTE_CHUNK = 16 * 1024;         // per-SSM-call read chunk
+
+function filesTargets() {
+  return [
+    { id: "local", label: "This server (/srv host)", kind: "local", roots: Object.keys(FILES_LOCAL_ROOTS) },
+    ...Object.entries(FLEET_HOSTS).map(([name, h]) => ({ id: `ec2:${name}`, label: `${name} (${h.role})`, kind: "ec2", roots: ["/"] })),
+  ];
+}
+
+function filesValidatePath(p) {
+  if (typeof p !== "string" || !p.startsWith("/") || p.includes("\0") || p.includes("..")) {
+    throw new Error("Path must be absolute, without '..'");
+  }
+  return p.replace(/\/+$/, "") || "/";
+}
+
+function filesLocalMap(p) {
+  for (const [pub, real] of Object.entries(FILES_LOCAL_ROOTS)) {
+    if (p === pub || p.startsWith(pub + "/")) return real + p.slice(pub.length);
+  }
+  throw new Error(`Only ${Object.keys(FILES_LOCAL_ROOTS).join(" and ")} are visible to the Manager on this host`);
+}
+
+function filesResolveTarget(id) {
+  if (id === "local") return { kind: "local" };
+  const m = /^ec2:(.+)$/.exec(String(id || ""));
+  const h = m && FLEET_HOSTS[m[1]];
+  if (!h) throw new Error(`Unknown files target '${id}'`);
+  return { kind: "ec2", host: m[1], instanceId: h.instanceId };
+}
+
+app.get("/api/files/targets", authMiddleware, requireSuperadmin, (_req, res) => {
+  res.json({ targets: filesTargets() });
+});
+
+app.get("/api/files/list", authMiddleware, requireSuperadmin, async (req, res) => {
+  try {
+    const target = filesResolveTarget(String(req.query.target || "local"));
+    const path = filesValidatePath(String(req.query.path || "/"));
+    let entries = [];
+    if (target.kind === "local") {
+      const real = filesLocalMap(path);
+      if (!existsSync(real)) return res.status(404).json({ error: `Not found: ${path}` });
+      for (const name of readdirSync(real)) {
+        try {
+          const st = statSync(join(real, name));
+          entries.push({ name, type: st.isDirectory() ? "dir" : st.isSymbolicLink() ? "link" : "file", size: st.size, mtime: st.mtimeMs });
+        } catch { entries.push({ name, type: "unknown", size: null, mtime: null }); }
+      }
+    } else {
+      const cmd = `sudo find ${shq(path)} -maxdepth 1 -mindepth 1 -printf '%y\\t%s\\t%T@\\t%f\\n' 2>/dev/null | head -500`;
+      const r = await ssmRun(target.instanceId, cmd, { timeout: 60, comment: "files:list" });
+      if (r.status !== "Success") return res.status(502).json({ error: `SSM list failed: ${r.status} ${r.stderr?.slice(0, 200) || ""}` });
+      entries = (r.stdout || "").split("\n").filter(Boolean).map((l) => {
+        const [ty, size, mtime, ...nm] = l.split("\t");
+        return { name: nm.join("\t"), type: ty === "d" ? "dir" : ty === "l" ? "link" : "file", size: Number(size) || 0, mtime: (Number(mtime) || 0) * 1000 };
+      });
+    }
+    entries.sort((a, b) => (a.type === "dir" ? 0 : 1) - (b.type === "dir" ? 0 : 1) || a.name.localeCompare(b.name));
+    try { auditLog(req.tokenEntry?.label || "admin", "files_list", String(req.query.target || "local"), { path }); } catch { /* */ }
+    res.json({ target: String(req.query.target || "local"), path, entries });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+app.get("/api/files/read", authMiddleware, requireSuperadmin, async (req, res) => {
+  try {
+    const targetId = String(req.query.target || "local");
+    const target = filesResolveTarget(targetId);
+    const path = filesValidatePath(String(req.query.path || ""));
+    let buf;
+    if (target.kind === "local") {
+      const real = filesLocalMap(path);
+      if (!existsSync(real)) return res.status(404).json({ error: `Not found: ${path}` });
+      const st = statSync(real);
+      if (st.isDirectory()) return res.status(400).json({ error: "Is a directory" });
+      if (st.size > FILES_READ_CAP) return res.status(413).json({ error: `File is ${st.size} bytes; view cap is ${FILES_READ_CAP}` });
+      buf = readFileSync(real);
+    } else {
+      const sz = await ssmRun(target.instanceId, `sudo wc -c < ${shq(path)}`, { timeout: 60, comment: "files:stat" });
+      if (sz.status !== "Success") return res.status(502).json({ error: `SSM stat failed: ${sz.stderr?.slice(0, 200) || sz.status}` });
+      const size = Number((sz.stdout || "").trim());
+      if (!Number.isFinite(size)) return res.status(404).json({ error: `Not found or unreadable: ${path}` });
+      if (size > FILES_REMOTE_READ_CAP) return res.status(413).json({ error: `File is ${size} bytes; remote view cap is ${FILES_REMOTE_READ_CAP} (SSM transport)` });
+      const parts = [];
+      for (let off = 0; off < Math.max(size, 1); off += FILES_REMOTE_CHUNK) {
+        const cmd = `sudo dd if=${shq(path)} bs=1 skip=${off} count=${FILES_REMOTE_CHUNK} 2>/dev/null | base64 -w0`;
+        const r = await ssmRun(target.instanceId, cmd, { timeout: 60, comment: "files:read" });
+        if (r.status !== "Success") return res.status(502).json({ error: `SSM read failed at offset ${off}` });
+        parts.push(Buffer.from((r.stdout || "").trim(), "base64"));
+        if (size === 0) break;
+      }
+      buf = Buffer.concat(parts);
+    }
+    const is_binary = buf.includes(0);
+    try { auditLog(req.tokenEntry?.label || "admin", "files_read", targetId, { path, bytes: buf.length }); } catch { /* */ }
+    res.json({ target: targetId, path, size: buf.length, is_binary, content: is_binary ? null : buf.toString("utf-8") });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+app.put("/api/files/write", authMiddleware, requireSuperadmin, async (req, res) => {
+  try {
+    const targetId = String(req.body?.target || "local");
+    const target = filesResolveTarget(targetId);
+    const path = filesValidatePath(String(req.body?.path || ""));
+    const content = req.body?.content;
+    if (typeof content !== "string") return res.status(400).json({ error: "content must be a string" });
+    if (target.kind === "local") {
+      const real = filesLocalMap(path);
+      if (existsSync(real)) {
+        if (statSync(real).isDirectory()) return res.status(400).json({ error: "Is a directory" });
+        copyFileSync(real, `${real}.bak-${Math.floor(Date.now() / 1000)}`);
+      }
+      writeFileSync(real, content);
+    } else {
+      const b64 = Buffer.from(content, "utf-8").toString("base64");
+      if (b64.length > 64000) return res.status(413).json({ error: "Remote write cap is 64KB (SSM transport)" });
+      const p = shq(path);
+      const cmd = `sudo cp -a ${p} ${p}.bak-$(date +%s) 2>/dev/null; echo '${b64}' | base64 -d | sudo tee ${p} >/dev/null && echo WRITE_OK`;
+      const r = await ssmRun(target.instanceId, cmd, { timeout: 60, comment: "files:write" });
+      if (r.status !== "Success" || !(r.stdout || "").includes("WRITE_OK")) {
+        return res.status(502).json({ error: `SSM write failed: ${r.status} ${r.stderr?.slice(0, 200) || ""}` });
+      }
+    }
+    try { auditLog(req.tokenEntry?.label || "admin", "files_write", targetId, { path, bytes: content.length }); } catch { /* */ }
+    res.json({ ok: true, target: targetId, path, bytes: content.length, backup: "previous version saved alongside as .bak-<epoch>" });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
 app.get("/api/secrets", authMiddleware, requireSuperadmin, (_req, res) => {
   const stores = secretStores().map((s) => {
     const exists = existsSync(s.path);
@@ -4286,20 +4514,32 @@ app.get("/api/secrets", authMiddleware, requireSuperadmin, (_req, res) => {
     if (exists) { try { key_count = parseEnvFile(s.path).length; } catch { /* */ } }
     return { id: s.id, label: s.label, kind: s.kind, exists, key_count, note: s.note || null };
   });
+  // Remote (EC2) stores are listed without exists/key_count — resolving those
+  // costs an SSM round-trip each; the entries fetch does it on selection.
+  for (const s of REMOTE_SECRET_STORES) {
+    stores.push({ id: s.id, label: s.label, kind: s.kind, exists: true, key_count: null, note: s.note || null, remote: true, host: s.host, path: s.path });
+  }
   res.json({ stores });
 });
 
-app.get("/api/secrets/entries", authMiddleware, requireSuperadmin, (req, res) => {
+app.get("/api/secrets/entries", authMiddleware, requireSuperadmin, async (req, res) => {
   const s = findSecretStore(String(req.query.id || ""));
   if (!s) return res.status(404).json({ error: "Unknown secret store" });
   const reveal = req.query.reveal === "1";
-  if (!existsSync(s.path)) return res.json({ id: s.id, label: s.label, kind: s.kind, note: s.note || null, exists: false, entries: [] });
-  const entries = parseEnvFile(s.path).map(({ key, value }) => ({ key, value: reveal ? value : maskSecret(value), masked: !reveal, length: value.length }));
+  let pairs;
+  if (s.remote) {
+    try { pairs = await remoteParseEnv(s); }
+    catch (e) { return res.status(502).json({ error: `Remote read failed (${s.host}): ${e.message}` }); }
+  } else {
+    if (!existsSync(s.path)) return res.json({ id: s.id, label: s.label, kind: s.kind, note: s.note || null, exists: false, entries: [] });
+    pairs = parseEnvFile(s.path);
+  }
+  const entries = pairs.map(({ key, value }) => ({ key, value: reveal ? value : maskSecret(value), masked: !reveal, length: value.length }));
   try { auditLog(req.tokenEntry?.label || "admin", reveal ? "secrets_reveal" : "secrets_view", s.id, { keys: entries.length }); } catch { /* */ }
   res.json({ id: s.id, label: s.label, kind: s.kind, note: s.note || null, exists: true, entries });
 });
 
-app.put("/api/secrets/entries", authMiddleware, requireSuperadmin, (req, res) => {
+app.put("/api/secrets/entries", authMiddleware, requireSuperadmin, async (req, res) => {
   const s = findSecretStore(String(req.query.id || ""));
   if (!s) return res.status(404).json({ error: "Unknown secret store" });
   const key = String(req.body?.key || "");
@@ -4307,7 +4547,7 @@ app.put("/api/secrets/entries", authMiddleware, requireSuperadmin, (req, res) =>
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) return res.status(400).json({ error: "Invalid key (letters, digits, underscore; not starting with a digit)" });
   if (typeof value !== "string") return res.status(400).json({ error: "value must be a string" });
   try {
-    const action = upsertEnvKey(s.path, key, value);
+    const action = s.remote ? await remoteUpsertEnvKey(s, key, value) : upsertEnvKey(s.path, key, value);
     try { auditLog(req.tokenEntry?.label || "admin", "secrets_set", s.id, { key, action }); } catch { /* */ }
     res.json({ ok: true, id: s.id, key, action, note: s.note || null });
   } catch (e) { res.status(500).json({ error: e.message }); }
