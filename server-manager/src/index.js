@@ -21,6 +21,7 @@ import {
   fullSync,
   fullRestore,
 } from "./supabase.js";
+import { syncFleetIssuesToOps, opsConfigured } from "./ops_triage.js";
 import {
   awsConfigured,
   awsRegion,
@@ -3346,15 +3347,109 @@ async function checkRecentDeploys() {
   }
 }
 
-app.get("/api/fleet-health", authMiddleware, async (_req, res) => {
-  const [drift, deploys] = await Promise.all([checkOrchestratorDrift(), checkRecentDeploys()]);
+// The dedicated aidream server that sandbox-attached chat turns route to
+// (frontend channel "ec2-dedicated"). It crashlooped for 3 DAYS in July 2026
+// with zero visibility — every sandbox chat turn 502'd and nothing watched
+// this box. Fleet Health now owns that gap.
+const AIDREAM_DEDICATED_HEALTH_URL = process.env.MATRX_AIDREAM_DEDICATED_HEALTH_URL || "https://sandbox.matrxserver.com/health";
+
+async function checkDedicatedAidream() {
+  const id = "aidream-dedicated", label = "Dedicated aidream server (sandbox chat channel)";
+  try {
+    const t0 = Date.now();
+    const r = await fetch(AIDREAM_DEDICATED_HEALTH_URL, { signal: AbortSignal.timeout(8000) });
+    const ms = Date.now() - t0;
+    if (r.ok) return { id, label, status: "ok", detail: `${AIDREAM_DEDICATED_HEALTH_URL} -> ${r.status} in ${ms}ms.`, actions: [] };
+    return {
+      id, label, status: "critical",
+      detail: `${AIDREAM_DEDICATED_HEALTH_URL} -> HTTP ${r.status}. Every sandbox-attached chat turn is failing ("Failed to fetch" in the FE). Check aidream.service on matrx-python-server (Hosts page / terminal): journalctl -u aidream.service, docker logs aidream.`,
+      actions: [{ label: "Open host terminal (matrx-python-server)", action: "open-url", url: "/admin/terminal" }],
+    };
+  } catch (e) {
+    return {
+      id, label, status: "critical",
+      detail: `${AIDREAM_DEDICATED_HEALTH_URL} unreachable (${e.message}). Every sandbox-attached chat turn is failing. Check aidream.service on matrx-python-server.`,
+      actions: [{ label: "Open host terminal (matrx-python-server)", action: "open-url", url: "/admin/terminal" }],
+    };
+  }
+}
+
+// aidream's Deploy workflow is NOT gated on its Tests workflow — a commit with
+// red tests still ships to production (observed 2026-07-07). Until that's
+// changed in the aidream repo, at least make it VISIBLE.
+async function checkAidreamPipeline() {
+  const id = "aidream-pipeline", label = "aidream deploys vs tests";
+  const token = process.env.GITHUB_PAT || process.env.GH_TOKEN || "";
+  if (!token) return { id, label, status: "unknown", detail: "GITHUB_PAT not set.", actions: [] };
+  const gh = async (path) => {
+    const r = await fetch(`https://api.github.com/repos/AI-Matrix-Engine/aidream-current/${path}`, {
+      headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", "User-Agent": "matrx-manager" },
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!r.ok) throw new Error(`GitHub API ${r.status}`);
+    return r.json();
+  };
+  try {
+    const [dep, tst] = await Promise.all([
+      gh("actions/workflows/deploy.yml/runs?branch=main&status=completed&per_page=1"),
+      gh("actions/workflows/test.yml/runs?branch=main&status=completed&per_page=1"),
+    ]);
+    const d = (dep.workflow_runs || [])[0], t = (tst.workflow_runs || [])[0];
+    if (!d) return { id, label, status: "ok", detail: "No completed aidream deploy runs found.", actions: [] };
+    const actions = d.html_url ? [{ label: "View deploy run", action: "open-url", url: d.html_url }] : [];
+    if (d.conclusion === "failure") {
+      return { id, label, status: "critical", detail: `Latest aidream deploy FAILED (${(d.head_sha || "").slice(0, 7)}, ${d.created_at?.slice(0, 16)}) — production may be running older code.`, actions };
+    }
+    if (t && t.conclusion === "failure") {
+      return {
+        id, label, status: "warning",
+        detail: `aidream production is running ${(d.head_sha || "").slice(0, 7)} but the Tests workflow is RED (${(t.head_sha || "").slice(0, 7)}, ${t.created_at?.slice(0, 16)}) — deploys are not gated on tests, so a broken commit ships silently.`,
+        actions: t.html_url ? [...actions, { label: "View failing tests", action: "open-url", url: t.html_url }] : actions,
+      };
+    }
+    return { id, label, status: "ok", detail: `Latest deploy ${d.conclusion} (${(d.head_sha || "").slice(0, 7)}); tests ${t ? t.conclusion : "n/a"}.`, actions: [] };
+  } catch (e) {
+    // Most likely: the PAT is scoped to armanisadeghi/matrx-sandbox only and
+    // can't see the AI-Matrix-Engine org. Say so — this is fixable in Secrets.
+    return { id, label, status: "unknown", detail: `aidream repo not readable with the current GITHUB_PAT (${e.message}). Grant the PAT read access to AI-Matrix-Engine/aidream-current (Secrets page -> GITHUB_PAT) to enable this check.`, actions: [] };
+  }
+}
+
+async function computeFleetHealth() {
+  const [drift, deploys, aidreamHealth, aidreamPipeline] = await Promise.all([
+    checkOrchestratorDrift(), checkRecentDeploys(), checkDedicatedAidream(), checkAidreamPipeline(),
+  ]);
   const images = checkSandboxImages();
-  const checks = [drift, images, deploys];
+  const checks = [drift, images, deploys, aidreamHealth, aidreamPipeline];
   const rank = { ok: 0, unknown: 0, warning: 1, critical: 2 };
   const worst = checks.reduce((m, c) => Math.max(m, rank[c.status] ?? 0), 0);
   const overall = worst >= 2 ? "critical" : worst === 1 ? "degraded" : "ok";
-  res.json({ overall, checks, checked_at: new Date().toISOString() });
+  return { overall, checks, checked_at: new Date().toISOString() };
+}
+
+app.get("/api/fleet-health", authMiddleware, async (_req, res) => {
+  res.json(await computeFleetHealth());
 });
+
+// Periodic fleet-health -> AI Dream ops-triage mirror. The operator watches
+// the aidream dashboard, not this UI — push problems to where the eyes are.
+// Interval env-tunable; 0 disables. Runs one sweep shortly after boot so a
+// fresh Manager reports within a minute.
+const FLEET_OPS_SYNC_SECONDS = Number(process.env.MATRX_FLEET_OPS_SYNC_SECONDS ?? 300);
+if (FLEET_OPS_SYNC_SECONDS > 0) {
+  const sweep = async () => {
+    try {
+      const fh = await computeFleetHealth();
+      const r = await syncFleetIssuesToOps(fh.checks);
+      if (r && r.skipped) console.log(`[fleet-ops-sync] ${r.skipped}`);
+    } catch (e) {
+      console.error("[fleet-ops-sync] sweep failed:", e.message);
+    }
+  };
+  setTimeout(sweep, 45000);
+  setInterval(sweep, FLEET_OPS_SYNC_SECONDS * 1000);
+  console.log(`[fleet-ops-sync] mirroring fleet health to ops-triage every ${FLEET_OPS_SYNC_SECONDS}s (configured=${opsConfigured()})`);
+}
 
 // Wait for the hosted orchestrator's `/` to respond 200. The Manager hits this
 // after a recreate so the UI sees "ready" before it tries the next call (and
