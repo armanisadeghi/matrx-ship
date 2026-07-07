@@ -60,7 +60,10 @@ curl -X DELETE \
 
 ## Runbook: Updating the Server Manager
 
-### Standard Update (via Deploy Server)
+### Standard Update (automatic — push to main)
+Merge/push to `main`. CI builds `matrx-ship-manager:latest` to GHCR; within ~2 min the host poller (`matrx-ship-deploy.timer`) pulls it and recreates the Manager, health-gated with automatic rollback. Watch: `journalctl -u matrx-ship-deploy.service -f`. Verify: `/admin/versions`.
+
+### Fallback Update (via Deploy Server)
 1. Go to `https://deploy.dev.codematrx.com`
 2. Navigate to **Manager Control**
 3. Check **Pending Changes** to see what's new

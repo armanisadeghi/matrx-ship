@@ -33,7 +33,8 @@ What actually exists, so the plan builds on reality:
 | Ticket system: schema, service layer, REST API, **10 MCP tools**, admin pipeline UI, public portal, published `@matrx/ticket-widget`, AI-**triage** (assessment/proposal/complexity/autonomy-score) | **Shipped — but advisory only** |
 | Multi-host fleet management | **Schema reserved, unbuilt** (`infra_*` tables defined, never queried) |
 | Autonomous fix-and-ship loop (ticket → agent edits code → builds → ships → updates ticket) | **Aspirational — no bridge exists** between tickets and the execution/deploy machinery |
-| Repo git-pull, config editing, backup scheduling, cert observability, cron inventory | **SSH-only** (Stage 1, Phases 3–5 — planned) |
+| ~~Repo git-pull~~ (auto-deploy pollers, 2026-07-07), ~~config editing~~ (`/admin/files` + Secrets EC2 remote stores, 2026-07-07) | Delivered |
+| Backup scheduling, cert observability, cron inventory | SSH-only (Stage 1, Phases 4–5 — planned) |
 | Notifications/alerting, cost/usage analytics, teams/multi-user RBAC | **Absent — no design yet** |
 
 **Two truths to keep front-of-mind:**
@@ -51,8 +52,8 @@ Each stage delivers standalone value and unlocks the next. Status tags: ✅ ship
 - ✅ Phase 1 cheap wins (partial) · ✅ Phase 2 sandbox image + orchestrator build/restart (the incident fix).
 - ✅ **A2** — create-sandbox from the UI (hosted tier). · ✅ **A4 guardrails** — global missing-required-tag banner + reverse-tag protection (`docker rmi`/`prune -a` of protected images refused without `MATRX_DESTRUCTIVE_OPS=1`).
 - ⬜ **A3** — surface the **EC2 tier** in the Manager. *Blocked:* needs `MATRX_EC2_ORCHESTRATOR_URL` + `_API_KEY` (the hosted key is 403 on EC2); the dual-tier proxy is straightforward once those exist.
-- ⬜ Phase 3 — repo `git pull` (status/diff/pull as MCP tools + UI).
-- ⬜ Phase 4 — config-file catalog + editor; encrypted backup of `/srv/.credentials`.
+- ✅ Phase 3 — superseded by auto-deploy pollers (2026-07-07) (status/diff/pull as MCP tools + UI).
+- 🟨 Phase 4 — editor DELIVERED (/admin/files + Secrets remote stores, 2026-07-07); catalog/versioning remains; encrypted backup of `/srv/.credentials`.
 - ⬜ Phase 5 — backup scheduling, **certificate observability**, disk-pressure cleanup, cron/systemd inventory, aggregated log firehose.
 
 ### Stage 2 — Fleet: the multi-host control plane — ⬜

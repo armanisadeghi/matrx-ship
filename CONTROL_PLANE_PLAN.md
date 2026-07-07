@@ -24,7 +24,7 @@ The sandbox agent-access stack is four generic, target-agnostic layers:
 - **A1** Run a command on any EC2 box from the UI (`POST /api/hosts/:id/exec` → SSM SendCommand + SSE stream).
 - **A2** Real browser terminals (the headline): host + containers via the `matrx_agent` `WS /pty` proxy; EC2 via SSM StartSession. One xterm.js component, target picker. *Net-new — no PTY/WS/xterm exists today.*
 - **A3** AWS views + EC2 lifecycle (describe/start/stop/reboot, ECR, CloudWatch Logs, CloudTrail audit, S3).
-- **A4** Round out local control (HTTP file editor, surface `docker_*` as UI actions, safe command console).
+- **A4** Round out local control (~~HTTP file editor~~ **DELIVERED 2026-07-07 as `/admin/files`** — host + both EC2 boxes over SSM, `.bak` on save; plus Secrets EC2 remote stores w/ Apply-restart. Remaining: surface `docker_*` as UI actions, safe command console).
 - **A5** "Fleet"/"Hosts" registry (activate `infra_servers`) — single pane over `/srv` + both EC2 boxes.
 
 ## Workstream B — real-infra agent access (the hijack)

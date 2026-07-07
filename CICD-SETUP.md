@@ -1,5 +1,9 @@
 # CI/CD Setup Complete ✅
 
+> **⚠️ 2026-07-07 — DEPLOY MECHANISM CHANGED. READ THIS FIRST.**
+> The GHA SSH deploy job described below is now **best-effort only** (`continue-on-error`): GitHub runner IPs intermittently trip the host's fail2ban — it failed every push June 2–13 while a 5-week-old Manager build ran silently. The AUTHORITATIVE deploy is a **2-min systemd poller on the host** (`matrx-ship-deploy.timer` → [scripts/pull-deploy.sh](scripts/pull-deploy.sh)) that watches the GHCR digests CI pushes and rolls the Manager (health-gated + rollback), the Deploy app, and every Ship instance. A red/skipped SSH job does NOT mean "not deployed" — check the Manager's Versions page. Do not "fix" deploys by hand-building on the host; push to main and watch `journalctl -u matrx-ship-deploy.service -f`.
+
+
 This document summarizes the CI/CD infrastructure that has been set up for matrx-ship.
 
 ## What Was Added

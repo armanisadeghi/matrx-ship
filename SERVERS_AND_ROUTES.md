@@ -70,7 +70,7 @@ Each one also has a private `db-<name>` Postgres container (no public URL).
 | URL | What it is |
 |---|---|
 | `server.app.matrxserver.com` | The **AI Dream backend** API (EC2 `matrx-python-server`). Also the **OAuth broker** — `/auth/aimatrx` is what this admin logs in through. |
-| `sandbox.matrxserver.com` | Same EC2 box (AI Dream backend). |
+| `sandbox.matrxserver.com` | The **dedicated aidream server** that sandbox-attached chat turns route to (frontend channel `ec2-dedicated`). Runs as systemd `aidream.service` on `matrx-python-server`; env at `/etc/aidream/app.env` (editable from Manager Secrets, remote store `ec2:aidream-app`). Monitored by Fleet Health check `aidream-dedicated` — it once crashlooped 3 days unseen. |
 | `www.aimatrx.com` | The **identity/OAuth provider** (Supabase-backed). Where you actually sign in. |
 
 ---

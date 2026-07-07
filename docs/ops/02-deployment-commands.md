@@ -48,6 +48,8 @@ curl -sv https://manager.dev.codematrx.com/health 2>&1 | head -30
 
 ## Server Manager (Matrx Manager)
 
+> **2026-07-07:** push-to-main is the standard deploy path now (CI builds GHCR images → the host's `matrx-ship-deploy.timer` poller rolls Manager/Deploy/instances, health-gated). The manual rebuilds below are **break-glass fallbacks** — a hand-built image is superseded the next time CI pushes a new digest.
+
 ### Standard Rebuild (Zero Downtime)
 ```bash
 cd /srv/apps/server-manager
