@@ -4297,7 +4297,7 @@ const REMOTE_SECRET_STORES = [
     path: "/etc/aidream/app.env",
     note: "Env is re-read on service restart — use Apply after editing.",
     remote: true,
-    restart: { type: "ssm", command: "sudo systemctl restart aidream.service && sleep 20 && curl -s -m 5 -o /dev/null -w 'health:%{http_code}' http://127.0.0.1:8000/health" },
+    restart: { type: "ssm", command: "sudo systemctl restart aidream.service && for i in $(seq 1 14); do sleep 5; code=$(curl -s -o /dev/null -w '%{http_code}' -m 4 http://127.0.0.1:8000/health || true); [ \"$code\" = 200 ] && break; done; echo health:$code" },
   },
   {
     id: "ec2:sandbox-orchestrator",
@@ -4307,7 +4307,7 @@ const REMOTE_SECRET_STORES = [
     path: "/home/ec2-user/orchestrator/.env",
     note: "Env is re-read on service restart — use Apply after editing. NB: some vars live in the systemd override conf instead — edit those via the Files page.",
     remote: true,
-    restart: { type: "ssm", command: "sudo systemctl restart matrx-orchestrator && sleep 10 && curl -s -m 5 -o /dev/null -w 'health:%{http_code}' http://127.0.0.1:8000/health" },
+    restart: { type: "ssm", command: "sudo systemctl restart matrx-orchestrator && for i in $(seq 1 12); do sleep 5; code=$(curl -s -o /dev/null -w '%{http_code}' -m 4 http://127.0.0.1:8000/health || true); [ \"$code\" = 200 ] && break; done; echo health:$code" },
   },
 ];
 
@@ -4552,6 +4552,10 @@ app.post("/api/secrets/restart", authMiddleware, requireSuperadmin, async (req, 
   if (!s) return res.status(404).json({ error: "Unknown secret store" });
   if (!s.restart) return res.status(400).json({ error: s.note || "This store has no one-click apply; see its note." });
   try {
+    // Register BEFORE the restart runs — the point is to cover the down
+    // window; registering after completion misses it (verified live).
+    if (s.id === "ec2:aidream-app") noteExpectedRestart("aidream-dedicated", s.label);
+    if (s.id === "ec2:sandbox-orchestrator" || s.id === "infra:orchestrator") noteExpectedRestart("orchestrator-drift", s.label);
     let output = "";
     if (s.restart.type === "compose") {
       const svc = s.restart.service ? ` ${s.restart.service}` : "";
@@ -4567,9 +4571,6 @@ app.post("/api/secrets/restart", authMiddleware, requireSuperadmin, async (req, 
     } else {
       return res.status(400).json({ error: `Unknown restart type '${s.restart.type}'` });
     }
-    // Tell fleet-health this outage is intentional so the banner stays calm.
-    if (s.id === "ec2:aidream-app") noteExpectedRestart("aidream-dedicated", s.label);
-    if (s.id === "ec2:sandbox-orchestrator" || s.id === "infra:orchestrator") noteExpectedRestart("orchestrator-drift", s.label);
     try { auditLog(req.tokenEntry?.label || "admin", "secrets_apply_restart", s.id, {}); } catch { /* */ }
     res.json({ ok: true, id: s.id, output });
   } catch (e) { res.status(500).json({ error: e.message }); }
