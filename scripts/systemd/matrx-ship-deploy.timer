@@ -1,0 +1,12 @@
+[Unit]
+Description=Run the Matrx Ship pull deploy every 2 minutes
+
+[Timer]
+OnBootSec=2min
+# Measured from when the last run FINISHED, so instance-recreate storms never
+# overlap the next tick even without the script's flock.
+OnUnitInactiveSec=2min
+RandomizedDelaySec=15s
+
+[Install]
+WantedBy=timers.target

@@ -3522,9 +3522,16 @@ app.post("/api/orchestrator/build/stream", authMiddleware, requireRole("admin"),
   proc.stderr.on("data", relay);
   proc.on("close", (code) => {
     if (code !== 0) { send("error", { success: false, message: `Build exited with code ${code}` }); return res.end(); }
+    // Bring the shared sandbox DB schema forward BEFORE the new orchestrator
+    // serves traffic — same order as scripts/deploy-hosted.sh. Skipping this
+    // is how the schema fell behind the code (2026-07: user_memory missing).
+    // Idempotent via the schema_migrations ledger.
+    send("phase", { phase: "migrate", message: "Applying DB migrations (orchestrator.migrate_runner)..." });
+    const m = exec(`docker run --rm --env-file ${ORCH_COMPOSE_DIR}/.env ${ORCH_IMAGE_TAG} python -m orchestrator.migrate_runner`, { timeout: 120000 });
+    if (!m.success) { send("error", { success: false, message: `DB migrations failed — orchestrator NOT recreated (old container keeps serving): ${m.error || "unknown"}` }); return res.end(); }
     send("phase", { phase: "restart", message: "Recreating orchestrator container..." });
     const r = exec("docker compose up -d --force-recreate", { cwd: ORCH_COMPOSE_DIR, timeout: 120000 });
-    send(r.success ? "done" : "error", { success: r.success, message: r.success ? "Orchestrator rebuilt + recreated" : (r.error || "recreate failed") });
+    send(r.success ? "done" : "error", { success: r.success, message: r.success ? "Orchestrator rebuilt + migrated + recreated" : (r.error || "recreate failed") });
     res.end();
   });
   proc.on("error", (err) => { send("error", { success: false, message: err.message }); res.end(); });

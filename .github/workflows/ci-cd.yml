@@ -214,11 +214,19 @@ jobs:
           platforms: linux/amd64
 
   # ── Deploy to Production ─────────────────────────────────────────────
+  # BEST-EFFORT fast path only. Inbound SSH from GitHub runners intermittently
+  # times out on this host (runner IPs share Azure ranges that trip fail2ban)
+  # — this job failed on every push June 2–13 2026 while the images sat built
+  # in GHCR. The AUTHORITATIVE deploy is the pull-based poller ON the host
+  # (scripts/systemd/ — a 2-min timer running scripts/pull-deploy.sh, which
+  # watches the GHCR digests this workflow pushes). A red/skipped run here no
+  # longer means "not deployed"; check the Manager's Versions page instead.
   deploy-production:
-    name: Deploy to Production
+    name: Deploy to Production — best-effort; host poller is authoritative
     runs-on: ubuntu-latest
     needs: [docker, docker-deploy, docker-manager]
     if: github.ref == 'refs/heads/main'
+    continue-on-error: true
     environment:
       name: production
       url: https://manager.dev.codematrx.com
@@ -237,7 +245,13 @@ jobs:
           command_timeout: 15m
           script: |
             set -e
-            
+
+            # Serialize with the host's pull-deploy poller so an SSH deploy
+            # and a poller tick can't recreate the same stacks concurrently.
+            mkdir -p /srv/apps/deploy-state
+            exec 9>/srv/apps/deploy-state/.ship-deploy.lock
+            flock 9
+
             echo "🚀 Starting deployment..."
             
             # --- 1. Main App ---

@@ -1,0 +1,18 @@
+[Unit]
+# Pull-based deploy for the Matrx Ship stacks (Manager / Deploy / Ship app
+# instances) — see the WHY block in scripts/pull-deploy.sh. Deploys the GHCR
+# images CI built whenever their digests change; no inbound SSH involved.
+Description=Matrx Ship pull deploy (GHCR digests -> /srv/apps stacks)
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Installed copy — never run from the repo checkout. Re-run
+# scripts/systemd/install.sh after changing pull-deploy.sh.
+ExecStart=/usr/local/bin/matrx-ship-deploy-runner
+TimeoutStartSec=20min
+Nice=5
+
+[Install]
+WantedBy=multi-user.target
