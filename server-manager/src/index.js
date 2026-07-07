@@ -3382,7 +3382,7 @@ async function checkAidreamPipeline() {
   const token = process.env.GITHUB_PAT || process.env.GH_TOKEN || "";
   if (!token) return { id, label, status: "unknown", detail: "GITHUB_PAT not set.", actions: [] };
   const gh = async (path) => {
-    const r = await fetch(`https://api.github.com/repos/AI-Matrix-Engine/aidream-current/${path}`, {
+    const r = await fetch(`https://api.github.com/repos/AI-Matrix-Engine/aidream/${path}`, {
       headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", "User-Agent": "matrx-manager" },
       signal: AbortSignal.timeout(8000),
     });
@@ -3411,7 +3411,7 @@ async function checkAidreamPipeline() {
   } catch (e) {
     // Most likely: the PAT is scoped to armanisadeghi/matrx-sandbox only and
     // can't see the AI-Matrix-Engine org. Say so — this is fixable in Secrets.
-    return { id, label, status: "unknown", detail: `aidream repo not readable with the current GITHUB_PAT (${e.message}). Grant the PAT read access to AI-Matrix-Engine/aidream-current (Secrets page -> GITHUB_PAT) to enable this check.`, actions: [] };
+    return { id, label, status: "unknown", detail: `aidream repo not readable with the current GITHUB_PAT (${e.message}). Grant the PAT read access to AI-Matrix-Engine/aidream (Secrets page -> GITHUB_PAT) to enable this check.`, actions: [] };
   }
 }
 
