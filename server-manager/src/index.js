@@ -4240,11 +4240,12 @@ function secretStores() {
   const cfg = loadDeployments();
   const apps = Object.entries(cfg.instances || {}).map(([n, info]) => ({
     id: `app:${n}`, label: info.display_name || n, kind: "app", path: `${HOST_SRV}/apps/${n}/.env`,
-    note: "Recreate the app to apply.",
+    note: "Env is re-read on recreate — use Apply after editing.",
+    restart: { type: "compose", cwd: `${HOST_SRV}/apps/${n}`, service: "app" },
   }));
   const infra = [
-    { id: "infra:manager", label: "Server Manager", kind: "infra", path: `${HOST_SRV}/apps/server-manager/.env`, note: "Restart the Manager to apply (Deploy server can do it)." },
-    { id: "infra:orchestrator", label: "Sandbox Orchestrator (hosted)", kind: "infra", path: `${HOST_SRV}/apps/sandbox-orchestrator/.env`, note: "Restart the orchestrator to apply." },
+    { id: "infra:manager", label: "Server Manager", kind: "infra", path: `${HOST_SRV}/apps/server-manager/.env`, note: "Applies on recreate — the Manager can't safely recreate itself; use deploy.dev.codematrx.com." },
+    { id: "infra:orchestrator", label: "Sandbox Orchestrator (hosted)", kind: "infra", path: `${HOST_SRV}/apps/sandbox-orchestrator/.env`, note: "Env is re-read on recreate — use Apply after editing.", restart: { type: "compose", cwd: ORCH_COMPOSE_DIR, service: "" } },
   ];
   return [...infra, ...apps];
 }
@@ -4261,8 +4262,9 @@ const REMOTE_SECRET_STORES = [
     kind: "ec2",
     host: "matrx-python-server",
     path: "/etc/aidream/app.env",
-    note: "Applies on restart: sudo systemctl restart aidream.service (Hosts page or Terminal).",
+    note: "Env is re-read on service restart — use Apply after editing.",
     remote: true,
+    restart: { type: "ssm", command: "sudo systemctl restart aidream.service && sleep 20 && curl -s -m 5 -o /dev/null -w 'health:%{http_code}' http://127.0.0.1:8000/health" },
   },
   {
     id: "ec2:sandbox-orchestrator",
@@ -4270,8 +4272,9 @@ const REMOTE_SECRET_STORES = [
     kind: "ec2",
     host: "matrx-sandbox-host-dev",
     path: "/home/ec2-user/orchestrator/.env",
-    note: "Applies on restart: sudo systemctl restart matrx-orchestrator (Hosts page or Terminal). NB: some vars live in the systemd override conf instead — edit those via the Files page.",
+    note: "Env is re-read on service restart — use Apply after editing. NB: some vars live in the systemd override conf instead — edit those via the Files page.",
     remote: true,
+    restart: { type: "ssm", command: "sudo systemctl restart matrx-orchestrator && sleep 10 && curl -s -m 5 -o /dev/null -w 'health:%{http_code}' http://127.0.0.1:8000/health" },
   },
 ];
 
@@ -4507,17 +4510,46 @@ app.put("/api/files/write", authMiddleware, requireSuperadmin, async (req, res) 
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
+// POST /api/secrets/restart?id= — apply env edits by restarting/recreating the
+// store's service, from the UI. compose stores force-RECREATE (a plain restart
+// does NOT re-read env_file — the classic trap); ssm stores restart the
+// systemd unit on the box and echo a local health probe.
+app.post("/api/secrets/restart", authMiddleware, requireSuperadmin, async (req, res) => {
+  const s = findSecretStore(String(req.query.id || ""));
+  if (!s) return res.status(404).json({ error: "Unknown secret store" });
+  if (!s.restart) return res.status(400).json({ error: s.note || "This store has no one-click apply; see its note." });
+  try {
+    let output = "";
+    if (s.restart.type === "compose") {
+      const svc = s.restart.service ? ` ${s.restart.service}` : "";
+      const r = exec(`docker compose up -d --force-recreate${svc}`, { cwd: s.restart.cwd, timeout: 180000 });
+      if (!r.success) return res.status(500).json({ error: r.error || "compose recreate failed" });
+      output = (r.output || "").slice(-500);
+    } else if (s.restart.type === "ssm") {
+      const h = FLEET_HOSTS[s.host];
+      if (!h) return res.status(500).json({ error: `Unknown fleet host '${s.host}'` });
+      const r = await ssmRun(h.instanceId, s.restart.command, { timeout: 120, comment: "secrets:apply-restart" });
+      if (r.status !== "Success") return res.status(502).json({ error: `SSM restart failed: ${r.status} ${r.stderr?.slice(0, 200) || ""}` });
+      output = (r.stdout || "").slice(-500);
+    } else {
+      return res.status(400).json({ error: `Unknown restart type '${s.restart.type}'` });
+    }
+    try { auditLog(req.tokenEntry?.label || "admin", "secrets_apply_restart", s.id, {}); } catch { /* */ }
+    res.json({ ok: true, id: s.id, output });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.get("/api/secrets", authMiddleware, requireSuperadmin, (_req, res) => {
   const stores = secretStores().map((s) => {
     const exists = existsSync(s.path);
     let key_count = 0;
     if (exists) { try { key_count = parseEnvFile(s.path).length; } catch { /* */ } }
-    return { id: s.id, label: s.label, kind: s.kind, exists, key_count, note: s.note || null };
+    return { id: s.id, label: s.label, kind: s.kind, exists, key_count, note: s.note || null, can_restart: !!s.restart };
   });
   // Remote (EC2) stores are listed without exists/key_count — resolving those
   // costs an SSM round-trip each; the entries fetch does it on selection.
   for (const s of REMOTE_SECRET_STORES) {
-    stores.push({ id: s.id, label: s.label, kind: s.kind, exists: true, key_count: null, note: s.note || null, remote: true, host: s.host, path: s.path });
+    stores.push({ id: s.id, label: s.label, kind: s.kind, exists: true, key_count: null, note: s.note || null, remote: true, host: s.host, path: s.path, can_restart: !!s.restart });
   }
   res.json({ stores });
 });

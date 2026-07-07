@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { toast } from "sonner";
 import {
-  KeySquare, Server, Layers, Eye, EyeOff, Loader2, Check, X, Plus, Pencil, RefreshCw, ShieldAlert, Code, Cloud,
+  KeySquare, Server, Layers, Eye, EyeOff, Loader2, Check, X, Plus, Pencil, RefreshCw, ShieldAlert, Code, Cloud, RotateCcw,
 } from "lucide-react";
 import { CopyControls } from "@/components/admin/copy-controls";
 import { Button } from "@matrx/admin-ui/ui/button";
@@ -14,7 +14,7 @@ import { PageShell } from "@matrx/admin-ui/components/page-shell";
 import { useAuth } from "@/lib/auth-context";
 import { api, API, ApiError } from "@/lib/api";
 
-interface Store { id: string; label: string; kind: "app" | "infra" | "ec2"; exists: boolean; key_count: number | null; note: string | null; remote?: boolean; host?: string }
+interface Store { id: string; label: string; kind: "app" | "infra" | "ec2"; exists: boolean; key_count: number | null; note: string | null; remote?: boolean; host?: string; can_restart?: boolean }
 interface Entry { key: string; value: string; masked: boolean; length: number }
 interface EntriesResp { id: string; label: string; kind: string; note: string | null; exists: boolean; entries: Entry[] }
 
@@ -39,6 +39,20 @@ export default function SecretsPage() {
   const [devView, setDevView] = useState(false);
   const [devText, setDevText] = useState("");
   const [devSaving, setDevSaving] = useState(false);
+  const [applying, setApplying] = useState(false);
+
+  async function applyRestart() {
+    if (!selected) return;
+    setApplying(true);
+    try {
+      await api(`/api/secrets/restart?id=${encodeURIComponent(selected)}`, { method: "POST" });
+      toast.success("Service restarted — env changes are live.");
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e.message : String(e));
+    } finally {
+      setApplying(false);
+    }
+  }
 
   // Vercel-style: pasting/typing "KEY=value" into the key field auto-splits it.
   function onNewKeyChange(v: string) {
@@ -160,6 +174,11 @@ export default function SecretsPage() {
                 {revealed ? <EyeOff className="size-4" /> : <Eye className="size-4" />} {revealed ? "Hide" : "Reveal"} values
               </Button>
               <Button size="sm" onClick={() => { setAdding(true); setEditKey(null); }}><Plus className="size-4" /> Add</Button>
+              {stores.find((s) => s.id === selected)?.can_restart && (
+                <Button size="sm" variant="destructive" onClick={applyRestart} disabled={applying}>
+                  {applying ? <Loader2 className="size-4 animate-spin" /> : <RotateCcw className="size-4" />} Apply (restart)
+                </Button>
+              )}
             </div>
 
             {data?.note && (
