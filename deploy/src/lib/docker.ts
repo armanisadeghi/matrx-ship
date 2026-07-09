@@ -513,11 +513,28 @@ export function streamingSelfRebuild(
   return new Promise((resolve) => {
     const managerDir = join(HOST_SRV, "apps", "server-manager");
 
-    send("phase", { phase: "build", message: "Rebuilding server manager..." });
-    send("log", { message: "Running: docker compose up -d --build server-manager" });
+    // The Manager deploys from a prebuilt image (no build: section in its
+    // compose file), so this action is really: pull the newest CI image from
+    // GHCR (best-effort — offline keeps the local image), retag, and
+    // force-RECREATE. Recreate (not restart) is what re-reads the env_file —
+    // this button is also the "apply Manager env changes" path, since the
+    // Manager's own Secrets store deliberately has no Apply (it can't safely
+    // recreate itself; overseeing it is this Deploy server's whole job).
+    send("phase", { phase: "pull", message: "Pulling latest Manager image from GHCR (best-effort)..." });
+    const pull = exec("docker pull ghcr.io/armanisadeghi/matrx-ship-manager:latest", { timeout: 180000 });
+    if (pull.success) {
+      exec("docker tag matrx-ship-manager:latest matrx-ship-manager:rollback 2>/dev/null");
+      exec("docker tag ghcr.io/armanisadeghi/matrx-ship-manager:latest matrx-ship-manager:latest");
+      send("log", { message: "Pulled + retagged latest GHCR image (previous kept as :rollback)." });
+    } else {
+      send("log", { message: "GHCR pull failed (offline or auth) — recreating with the image already on this host." });
+    }
+
+    send("phase", { phase: "recreate", message: "Recreating Manager container (env re-read)..." });
+    send("log", { message: "Running: docker compose up -d --force-recreate server-manager" });
     send("log", { message: `Working directory: ${managerDir}` });
 
-    const proc = spawn("docker", ["compose", "up", "-d", "--build", "server-manager"], {
+    const proc = spawn("docker", ["compose", "up", "-d", "--force-recreate", "server-manager"], {
       cwd: managerDir,
       env: { ...process.env, PATH: process.env.PATH },
     });
@@ -536,7 +553,7 @@ export function streamingSelfRebuild(
 
     proc.on("close", (code: number | null) => {
       if (code === 0) {
-        send("done", { success: true, message: "Server manager rebuilt. Container will restart — connection may drop momentarily." });
+        send("done", { success: true, message: "Manager updated + recreated (latest image, env reloaded). Connection may drop momentarily while it comes up." });
       } else {
         send("error", { success: false, error: `docker compose exited with code ${code}` });
       }

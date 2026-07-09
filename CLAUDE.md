@@ -87,6 +87,8 @@ When developing here, the live deployment compose lives at `/srv/apps/server-man
 
 Next.js. Runs as `matrx-deploy`. Its **only purpose is to recover the Server Manager** when the Manager is broken — and to rebuild itself if needed.
 
+**The `/manager` page is the Manager's apply/update button** (2026-07-09): "Update + Restart" pulls the latest CI image from GHCR (best-effort) and force-recreates the Manager — which is how Manager **env changes take effect** (the Manager's own Secrets store deliberately has no Apply; env_file is only re-read on recreate). Previous image kept as `matrx-ship-manager:rollback`. The operator designed this lifeline precisely so the Manager is never unmanageable — agents: use it instead of hand-recreating.
+
 - Pages: Deploy (rebuilds w/ streaming SSE logs), Docker, Instances, Infrastructure, History, Manager, **Emergency** (reset Manager, rebuild from scratch), Docs.
 - Auth: `DEPLOY_TOKENS` (comma-separated bearer tokens).
 - Has its own image, its own deployment under `/srv/apps/deploy/`. Can rebuild itself via `/api/self-rebuild`.

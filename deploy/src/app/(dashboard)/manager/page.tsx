@@ -70,7 +70,7 @@ export default function ManagerPage() {
                 const data = JSON.parse(line.slice(6));
                 if (eventType === "log") setBuildLogs((prev) => [...prev, data.message]);
                 else if (eventType === "phase") { setBuildPhase(data.phase); setBuildLogs((prev) => [...prev, `── ${data.message} ──`]); }
-                else if (eventType === "done") { toast.success("Server Manager rebuild complete. Container restarting..."); setBuildPhase("done"); }
+                else if (eventType === "done") { toast.success("Manager updated + recreated (env reloaded)."); setBuildPhase("done"); }
                 else if (eventType === "error") { toast.error(`Rebuild failed: ${data.error}`); setBuildPhase("error"); }
               } catch { /* skip */ }
             }
@@ -145,22 +145,23 @@ export default function ManagerPage() {
           <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <CardTitle className="text-base flex items-center gap-2">
-                <Wrench className="size-4" /> Rebuild Server Manager
+                <Wrench className="size-4" /> Update &amp; Restart Server Manager
               </CardTitle>
               <CardDescription>
-                Rebuild the Server Manager from source, rebuild its Docker image, and restart the container.
+                Pulls the latest CI-built Manager image from GHCR (best-effort) and force-recreates the container — env changes are re-read on recreate.
               </CardDescription>
             </div>
             <Button onClick={handleRebuildManager} disabled={rebuilding}>
               {rebuilding ? <Loader2 className="size-4 animate-spin" /> : <Wrench className="size-4" />}
-              {rebuilding ? "Rebuilding..." : "Rebuild Manager"}
+              {rebuilding ? "Updating..." : "Update + Restart"}
             </Button>
           </div>
         </CardHeader>
         <CardContent>
           <p className="text-sm text-muted-foreground">
-            This rebuilds <code className="bg-muted px-1 py-0.5 rounded text-xs">/srv/apps/server-manager/</code> and restarts
-            the container. The Manager admin UI will briefly disconnect during the restart.
+            Use this after changing the Manager&apos;s env in Secrets (its own store has no Apply button — this page IS the apply button),
+            or to roll it onto the newest CI build without waiting for the deploy poller. The previous image is kept as
+            <code className="bg-muted px-1 py-0.5 rounded text-xs">matrx-ship-manager:rollback</code>; the admin UI disconnects briefly during the recreate.
           </p>
         </CardContent>
       </Card>

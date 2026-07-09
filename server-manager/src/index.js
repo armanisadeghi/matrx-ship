@@ -4319,7 +4319,7 @@ function secretStores() {
     restart: { type: "compose", cwd: `${HOST_SRV}/apps/${n}`, service: "app" },
   }));
   const infra = [
-    { id: "infra:manager", label: "Server Manager", kind: "infra", path: `${HOST_SRV}/apps/server-manager/.env`, note: "Applies on recreate — the Manager can't safely recreate itself; use deploy.dev.codematrx.com." },
+    { id: "infra:manager", label: "Server Manager", kind: "infra", path: `${HOST_SRV}/apps/server-manager/.env`, note: "Applies on recreate — the Manager can't safely recreate itself. Use deploy.dev.codematrx.com/manager → \"Update + Restart\" (that page IS this store's Apply button)." },
     { id: "infra:orchestrator", label: "Sandbox Orchestrator (hosted)", kind: "infra", path: `${HOST_SRV}/apps/sandbox-orchestrator/.env`, note: "Env is re-read on recreate — use Apply after editing.", restart: { type: "compose", cwd: ORCH_COMPOSE_DIR, service: "" } },
   ];
   return [...infra, ...apps];
