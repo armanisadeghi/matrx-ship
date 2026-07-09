@@ -3436,12 +3436,54 @@ function expectedRestart(checkId) {
   return e;
 }
 
+// The hosted deploy poller can wedge: if any image rebuild fails, the run
+// exits non-zero and the last-deployed-SHA state file never advances — every
+// 2-min tick repeats the identical failure (2026-07-09: an unpinned
+// npm@latest did exactly this for a day; the dashboard showed the missing
+// image and the failed GHA run, but nothing said "the poller is stuck").
+// This check names the disease directly: state SHA behind origin/main with a
+// stale state file = stuck.
+const HOSTED_DEPLOY_STATE_FILE = "/host-srv/apps/deploy-state/matrx-sandbox.last-deployed-sha";
+const HOSTED_DEPLOY_STUCK_MINUTES = Number(process.env.MATRX_HOSTED_DEPLOY_STUCK_MINUTES || 30);
+
+async function checkHostedDeployFreshness() {
+  const id = "hosted-deploy", label = "Hosted deploy poller (matrx-sandbox)";
+  const token = process.env.GITHUB_PAT || process.env.GH_TOKEN || "";
+  if (!existsSync(HOSTED_DEPLOY_STATE_FILE)) {
+    return { id, label, status: "warning", detail: `State file ${HOSTED_DEPLOY_STATE_FILE} missing — has the poller ever completed a deploy?`, actions: [] };
+  }
+  const deployed = readFileSync(HOSTED_DEPLOY_STATE_FILE, "utf-8").trim();
+  const ageMin = Math.round((Date.now() - statSync(HOSTED_DEPLOY_STATE_FILE).mtimeMs) / 60000);
+  if (!token) return { id, label, status: "unknown", detail: "GITHUB_PAT not set — cannot compare against origin/main.", actions: [] };
+  try {
+    const r = await fetch("https://api.github.com/repos/armanisadeghi/matrx-sandbox/commits/main", {
+      headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", "User-Agent": "matrx-manager" },
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!r.ok) return { id, label, status: "unknown", detail: `GitHub API ${r.status}`, actions: [] };
+    const mainSha = (await r.json()).sha || "";
+    if (mainSha === deployed) {
+      return { id, label, status: "ok", detail: `Hosted tier is at origin/main (${deployed.slice(0, 7)}).`, actions: [] };
+    }
+    if (ageMin < HOSTED_DEPLOY_STUCK_MINUTES) {
+      return { id, label, status: "ok", detail: `Deploying: hosted at ${deployed.slice(0, 7)}, main at ${mainSha.slice(0, 7)} (state ${ageMin}m old — poller has ${HOSTED_DEPLOY_STUCK_MINUTES - ageMin}m before this goes critical).`, actions: [] };
+    }
+    return {
+      id, label, status: "critical",
+      detail: `Hosted deploy poller STUCK: last successful deploy is ${deployed.slice(0, 7)} (${ageMin} min ago) but origin/main is ${mainSha.slice(0, 7)}. Every 2-min tick is failing the same way. Diagnose: journalctl -u matrx-hosted-deploy.service -n 100 (look for the FIRST error in a run — usually an image build).`,
+      actions: [],
+    };
+  } catch (e) {
+    return { id, label, status: "unknown", detail: `Freshness check failed: ${e.message}`, actions: [] };
+  }
+}
+
 async function computeFleetHealth() {
-  const [drift, deploys, aidreamHealth, aidreamPipeline] = await Promise.all([
-    checkOrchestratorDrift(), checkRecentDeploys(), checkDedicatedAidream(), checkAidreamPipeline(),
+  const [drift, deploys, aidreamHealth, aidreamPipeline, hostedDeploy] = await Promise.all([
+    checkOrchestratorDrift(), checkRecentDeploys(), checkDedicatedAidream(), checkAidreamPipeline(), checkHostedDeployFreshness(),
   ]);
   const images = checkSandboxImages();
-  const checks = [drift, images, deploys, aidreamHealth, aidreamPipeline];
+  const checks = [drift, images, deploys, aidreamHealth, aidreamPipeline, hostedDeploy];
   for (const c of checks) {
     if (c.status !== "critical" && c.status !== "warning") continue;
     const e = expectedRestart(c.id);
