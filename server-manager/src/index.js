@@ -3503,6 +3503,64 @@ app.get("/api/fleet-health", authMiddleware, async (_req, res) => {
   res.json(await computeFleetHealth());
 });
 
+// ── Auto-retry transiently-failed deploy workflows ──────────────────────────
+// 2026-07-09: a GitHub Actions platform blip killed three jobs across two
+// repos at exactly ~15min. Nothing retried them, so the EC2 tier and the
+// GHCR ship images sat behind for THREE DAYS of no-pushes while a red
+// "Fix it →" waited for a human. The hosted tier self-heals (2-min poller);
+// this gives the GHA-driven paths the same property: latest run on main
+// failed + nothing newer running + not already auto-retried → dispatch
+// rerun-failed-jobs, ONCE per run id (genuinely broken code stays red
+// instead of looping). Attempted ids persist across Manager restarts.
+const GHA_RETRY_STATE_FILE = "/host-srv/apps/deploy-state/gha-auto-retries.json";
+const GHA_RETRY_TARGETS = [
+  { repo: "armanisadeghi/matrx-sandbox", workflow: "deploy.yml", label: "matrx-sandbox Deploy" },
+  { repo: "armanisadeghi/matrx-ship", workflow: "ci-cd.yml", label: "matrx-ship CI/CD" },
+];
+
+function loadRetryState() {
+  try { return JSON.parse(readFileSync(GHA_RETRY_STATE_FILE, "utf-8")); } catch { return { attempted: [] }; }
+}
+function saveRetryState(state) {
+  try {
+    mkdirSync(dirname(GHA_RETRY_STATE_FILE), { recursive: true });
+    // Keep the ledger small — retention beyond recent history has no value.
+    state.attempted = (state.attempted || []).slice(-100);
+    writeFileSync(GHA_RETRY_STATE_FILE, JSON.stringify(state, null, 2));
+  } catch (e) { console.error("[gha-auto-retry] state save failed:", e.message); }
+}
+
+async function maybeRetryFailedDeploys() {
+  const token = process.env.GITHUB_PAT || process.env.GH_TOKEN || "";
+  if (!token) return;
+  const gh = (path, opts = {}) => fetch(`https://api.github.com/repos/${path}`, {
+    ...opts,
+    headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", "User-Agent": "matrx-manager", ...(opts.headers || {}) },
+    signal: AbortSignal.timeout(10000),
+  });
+  const state = loadRetryState();
+  for (const t of GHA_RETRY_TARGETS) {
+    try {
+      const r = await gh(`${t.repo}/actions/workflows/${t.workflow}/runs?branch=main&per_page=1`);
+      if (!r.ok) continue;
+      const run = ((await r.json()).workflow_runs || [])[0];
+      if (!run) continue;
+      // Only act when the NEWEST run is a completed failure — anything queued
+      // or in progress means the situation is already being handled.
+      if (run.status !== "completed" || run.conclusion !== "failure") continue;
+      if (state.attempted.includes(run.id)) continue;
+      const rr = await gh(`${t.repo}/actions/runs/${run.id}/rerun-failed-jobs`, { method: "POST" });
+      state.attempted.push(run.id);
+      saveRetryState(state);
+      const outcome = rr.ok ? "dispatched" : `dispatch failed (HTTP ${rr.status})`;
+      console.log(`[gha-auto-retry] ${t.label} run ${run.id} (${(run.head_sha || "").slice(0, 7)}) failed — auto-retry ${outcome}.`);
+      try { auditLog("system", "gha_auto_retry", t.repo, { run_id: run.id, sha: (run.head_sha || "").slice(0, 7), outcome }); } catch { /* */ }
+    } catch (e) {
+      console.error(`[gha-auto-retry] ${t.label} check failed:`, e.message);
+    }
+  }
+}
+
 // Periodic fleet-health -> AI Dream ops-triage mirror. The operator watches
 // the aidream dashboard, not this UI — push problems to where the eyes are.
 // Interval env-tunable; 0 disables. Runs one sweep shortly after boot so a
@@ -3517,6 +3575,7 @@ if (FLEET_OPS_SYNC_SECONDS > 0) {
     } catch (e) {
       console.error("[fleet-ops-sync] sweep failed:", e.message);
     }
+    await maybeRetryFailedDeploys();
   };
   setTimeout(sweep, 45000);
   setInterval(sweep, FLEET_OPS_SYNC_SECONDS * 1000);
