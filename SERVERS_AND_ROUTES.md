@@ -10,10 +10,17 @@ verified 2026-05-26 from live `docker ps` + Traefik labels.
 | Machine | Address | What it is |
 |---|---|---|
 | **`/srv` dev host** | `srv504398.hstgr.cloud` · `77.37.62.64` · `*.dev.codematrx.com` | The main box. Runs the control plane, all the per-project apps, the shared DB, and the hosted sandbox tier. **This is what the Server Manager manages.** |
-| **EC2 `matrx-sandbox-host-dev`** | AWS `i-084f757c1e47d4efb` · `54.144.86.132` | The **EC2 sandbox tier** — runs its own sandbox orchestrator (systemd) + the sandboxes it spawns. Barely used today. |
+| **EC2 `matrx-sandbox-host-dev`** | AWS `i-084f757c1e47d4efb` · `54.144.86.132` | The **EC2 sandbox tier** — runs its own sandbox orchestrator (systemd) + the sandboxes it spawns. **Also now hosts the `matrx-files` microservice** (docker `matrx-files`, port 8080 — see §EC2 services). |
 | **EC2 `matrx-python-server`** | AWS `i-0241f4fee60fb02f6` · `54.166.106.252` | The **AI Dream backend** (the real aidream.ai API). Also hosts the OAuth broker. A different system — not a sandbox host. |
 
 > Both EC2 boxes are in AWS account `872515272894`, region `us-east-1`.
+
+### EC2-hosted services (not on `/srv`)
+
+| Host | Service | Runs as | Endpoint | What it is |
+|---|---|---|---|---|
+| `matrx-sandbox-host-dev` (`i-084f757c1e47d4efb`, `54.144.86.132`) | **Matrx Files** | docker container `matrx-files` (`matrx-files[standalone]==0.1.1` from PyPI, uvicorn :8080, `--restart unless-stopped`) | `http://54.144.86.132:8080` · health `GET /files-service/health` · (DNS `files.matrxserver.com` pending) | The independent file microservice carved out of aidream (all cloud storage / media / PDF / sharing). Own matrx-orm pool onto the shared Supabase `files` schema; Supabase-JWT auth. Env at `/etc/matrx-files.env` (root 600). First matrx-package-template package. Deployed 2026-07-13. Manage via the Manager's host exec (`POST /api/hosts/matrx-sandbox-host-dev/exec` → `sudo docker …`). |
+
 
 ---
 
