@@ -17,6 +17,8 @@ verified 2026-05-26 from live `docker ps` + Traefik labels.
 
 ### EC2-hosted services (not on `/srv`)
 
+> Cross-repo system-of-record: `/Users/armanisadeghi/code/common-docs/matrx-files-service/FEATURE.md` — full contract, deploy state, and cutover plan for matrx-files.
+
 | Host | Service | Runs as | Endpoint | What it is |
 |---|---|---|---|---|
 | `matrx-sandbox-host-dev` (`i-084f757c1e47d4efb`, `54.144.86.132`) | **Matrx Files** | docker container `matrx-files` (`matrx-files[standalone]==0.1.1` from PyPI, uvicorn :8080, `--restart unless-stopped`) | `http://54.144.86.132:8080` · health `GET /files-service/health` · (DNS `files.matrxserver.com` pending) | The independent file microservice carved out of aidream (all cloud storage / media / PDF / sharing). Own matrx-orm pool onto the shared Supabase `files` schema; Supabase-JWT auth. Env at `/etc/matrx-files.env` (root 600). First matrx-package-template package. Deployed 2026-07-13. Manage via the Manager's host exec (`POST /api/hosts/matrx-sandbox-host-dev/exec` → `sudo docker …`). |
