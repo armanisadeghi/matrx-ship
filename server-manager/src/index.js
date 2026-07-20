@@ -3603,6 +3603,31 @@ async function maybeAutoDeployMatrxFiles() {
   }
 }
 
+// Status + logs (per MATRX_FILES_SERVER_MANAGER_TASK.md §1) — both containers,
+// versions, and the health triad, without anyone opening a terminal.
+app.get("/api/matrx-files/status", authMiddleware, async (_req, res) => {
+  try {
+    const h = FLEET_HOSTS[MATRX_FILES.host];
+    const r = await ssmRun(h.instanceId,
+      `sudo docker ps -a --format '{{.Names}}|{{.Image}}|{{.Status}}' | grep -E 'matrx-files'; echo ---; cat ${MATRX_FILES.optDir}/CURRENT 2>/dev/null; cat ${MATRX_FILES.optDir}/PREVIOUS 2>/dev/null; echo ---; curl -s -o /dev/null -w '%{http_code}' -m 4 http://127.0.0.1:8080/files-service/health; echo; curl -s -o /dev/null -w '%{http_code}' -m 4 http://127.0.0.1:8080/files-service/ready`,
+      { timeout: 60, comment: "matrx-files:status" });
+    let edge = null, latest = null;
+    try { edge = (await fetch(`${MATRX_FILES.publicBase}/files-service/health`, { signal: AbortSignal.timeout(6000) })).status; } catch { /* */ }
+    try { latest = await matrxFilesPypiLatest(); } catch { /* */ }
+    res.json({ host: MATRX_FILES.host, public_base: MATRX_FILES.publicBase, edge_health: edge, pypi_latest: latest, deployed: _matrxFilesDeployed, auto_deploy: MATRX_FILES_AUTO_DEPLOY, raw: (r.stdout || "").trim() });
+  } catch (e) { res.status(502).json({ error: e.message }); }
+});
+
+app.get("/api/matrx-files/logs", authMiddleware, requireSuperadmin, async (req, res) => {
+  const lines = Math.min(500, Math.max(10, Number(req.query.lines) || 100));
+  const container = req.query.container === "tls" ? "matrx-files-tls" : "matrx-files";
+  try {
+    const h = FLEET_HOSTS[MATRX_FILES.host];
+    const r = await ssmRun(h.instanceId, `sudo docker logs --tail ${lines} ${container} 2>&1 | tail -c 20000`, { timeout: 60, comment: "matrx-files:logs" });
+    res.type("text/plain").send(r.stdout || r.stderr || "");
+  } catch (e) { res.status(502).json({ error: e.message }); }
+});
+
 // Manual/agent trigger + status.
 app.post("/api/matrx-files/deploy", authMiddleware, requireSuperadmin, async (req, res) => {
   const version = String(req.query.version || req.body?.version || "").trim();
