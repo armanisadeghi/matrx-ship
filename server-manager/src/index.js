@@ -3479,11 +3479,11 @@ async function checkHostedDeployFreshness() {
 }
 
 async function computeFleetHealth() {
-  const [drift, deploys, aidreamHealth, aidreamPipeline, hostedDeploy] = await Promise.all([
-    checkOrchestratorDrift(), checkRecentDeploys(), checkDedicatedAidream(), checkAidreamPipeline(), checkHostedDeployFreshness(),
+  const [drift, deploys, aidreamHealth, aidreamPipeline, hostedDeploy, matrxFiles] = await Promise.all([
+    checkOrchestratorDrift(), checkRecentDeploys(), checkDedicatedAidream(), checkAidreamPipeline(), checkHostedDeployFreshness(), checkMatrxFiles(),
   ]);
   const images = checkSandboxImages();
-  const checks = [drift, images, deploys, aidreamHealth, aidreamPipeline, hostedDeploy];
+  const checks = [drift, images, deploys, aidreamHealth, aidreamPipeline, hostedDeploy, matrxFiles];
   for (const c of checks) {
     if (c.status !== "critical" && c.status !== "warning") continue;
     const e = expectedRestart(c.id);
@@ -3502,6 +3502,137 @@ async function computeFleetHealth() {
 app.get("/api/fleet-health", authMiddleware, async (_req, res) => {
   res.json(await computeFleetHealth());
 });
+
+// ── matrx-files: PyPI-driven auto-deploy + management ───────────────────────
+// The standalone file service (https://files.matrxserver.com, container
+// matrx-files on matrx-sandbox-host-dev) publishes to PyPI automatically on
+// tag (aidream repo, matrx-files/v*), but deploying required an operator
+// laptop with AWS SSO — so it sat NINE versions stale (0.1.5 vs 0.1.14,
+// 2026-07-12) the moment attention moved on. The Manager now owns it:
+// every sweep compares PyPI's latest to the box's deployed version and
+// upgrades over SSM using deploy.sh's proven discipline — canonical
+// Dockerfile from GitHub (kills on-box drift), build, VERIFY the version
+// inside the image before touching the live container, swap (rm+run — env
+// is only read at run time), health-poll, auto-rollback to the previous
+// version on failure. One auto-attempt per version (persistent ledger) so a
+// broken release stays loudly stuck instead of loop-building.
+const MATRX_FILES = {
+  host: "matrx-sandbox-host-dev",
+  publicBase: "https://files.matrxserver.com",
+  optDir: "/opt/matrx-files",
+  envFile: "/etc/matrx-files.env",
+  dockerfileRepoPath: "AI-Matrix-Engine/aidream/contents/packages/matrx-files/Dockerfile",
+};
+const MATRX_FILES_AUTO_DEPLOY = (process.env.MATRX_FILES_AUTO_DEPLOY ?? "1") === "1";
+const MATRX_FILES_ATTEMPTS_FILE = "/host-srv/apps/deploy-state/matrx-files-attempts.json";
+let _matrxFilesDeployed = null; // cache of last-known deployed version
+
+async function matrxFilesPypiLatest() {
+  const r = await fetch("https://pypi.org/pypi/matrx-files/json", { signal: AbortSignal.timeout(8000) });
+  if (!r.ok) throw new Error(`PyPI ${r.status}`);
+  return (await r.json()).info.version;
+}
+
+async function matrxFilesDeployedVersion() {
+  const h = FLEET_HOSTS[MATRX_FILES.host];
+  const r = await ssmRun(h.instanceId,
+    `cat ${MATRX_FILES.optDir}/CURRENT 2>/dev/null || sudo docker inspect matrx-files --format '{{.Config.Image}}' 2>/dev/null | cut -d: -f2`,
+    { timeout: 60, comment: "matrx-files:version" });
+  const v = (r.stdout || "").trim().split("\n").pop();
+  if (r.status === "Success" && v) { _matrxFilesDeployed = v; return v; }
+  return null;
+}
+
+// The swap script — deploy.sh's steps 2-6, SSM-ified. Dockerfile arrives
+// base64'd from GitHub main so an on-box edit can never silently pin a
+// version again (that was the 2026-07-14 half-deploy).
+function matrxFilesUpgradeScript(version, dockerfileB64) {
+  const d = MATRX_FILES.optDir;
+  return [
+    `set -e`,
+    `echo '${dockerfileB64}' | base64 -d | sudo tee ${d}/Dockerfile >/dev/null`,
+    `sudo docker build --build-arg MATRX_FILES_VERSION="==${version}" -t matrx-files:${version} ${d}`,
+    `GOT=$(sudo docker run --rm --entrypoint python matrx-files:${version} -c "import importlib.metadata as m; print(m.version('matrx-files'))" | tr -d "[:space:]")`,
+    `[ "$GOT" = "${version}" ] || { echo "VERIFY_FAILED image contains $GOT"; exit 1; }`,
+    `PREV=$(cat ${d}/CURRENT 2>/dev/null || sudo docker inspect matrx-files --format '{{.Config.Image}}' | cut -d: -f2)`,
+    `sudo docker rm -f matrx-files >/dev/null 2>&1 || true`,
+    `sudo docker run -d --name matrx-files --restart unless-stopped -p 127.0.0.1:8080:8080 -v /data/matrx-files:/data/matrx-files --env-file ${MATRX_FILES.envFile} matrx-files:${version} >/dev/null`,
+    `ok=""; for i in $(seq 1 20); do sleep 3; code=$(curl -s -o /dev/null -w '%{http_code}' -m 4 http://127.0.0.1:8080/files-service/health || true); [ "$code" = 200 ] && { ok=1; break; }; done`,
+    `if [ -z "$ok" ]; then echo "HEALTH_FAILED rolling back to $PREV"; sudo docker rm -f matrx-files >/dev/null 2>&1 || true; sudo docker run -d --name matrx-files --restart unless-stopped -p 127.0.0.1:8080:8080 -v /data/matrx-files:/data/matrx-files --env-file ${MATRX_FILES.envFile} matrx-files:$PREV >/dev/null; exit 1; fi`,
+    `echo "$PREV" | sudo tee ${d}/PREVIOUS >/dev/null`,
+    `echo "${version}" | sudo tee ${d}/CURRENT >/dev/null`,
+    `echo "UPGRADE_OK ${version} (was $PREV)"`,
+  ].join("\n");
+}
+
+async function deployMatrxFiles(version) {
+  const token = process.env.GITHUB_PAT || process.env.GH_TOKEN || "";
+  const dfR = await fetch(`https://api.github.com/repos/${MATRX_FILES.dockerfileRepoPath}?ref=main`, {
+    headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github.raw", "User-Agent": "matrx-manager" },
+    signal: AbortSignal.timeout(10000),
+  });
+  if (!dfR.ok) throw new Error(`Dockerfile fetch from GitHub failed: ${dfR.status}`);
+  const dockerfileB64 = Buffer.from(await dfR.text(), "utf-8").toString("base64");
+  const h = FLEET_HOSTS[MATRX_FILES.host];
+  const r = await ssmRun(h.instanceId, matrxFilesUpgradeScript(version, dockerfileB64), { timeout: 420, comment: `matrx-files:deploy ${version}` });
+  const ok = r.status === "Success" && (r.stdout || "").includes("UPGRADE_OK");
+  if (ok) _matrxFilesDeployed = version;
+  // Confirm through Cloudflare too — local health can pass while the edge 502s.
+  let edge = null;
+  try { edge = (await fetch(`${MATRX_FILES.publicBase}/files-service/health`, { signal: AbortSignal.timeout(8000) })).status; } catch { /* */ }
+  try { auditLog("system", "matrx_files_deploy", version, { ok, edge, tail: (r.stdout || r.stderr || "").slice(-300) }); } catch { /* */ }
+  return { ok, edge, output: (r.stdout || "").slice(-500), error: ok ? null : (r.stderr || r.stdout || "").slice(-300) };
+}
+
+async function maybeAutoDeployMatrxFiles() {
+  if (!MATRX_FILES_AUTO_DEPLOY) return;
+  try {
+    const latest = await matrxFilesPypiLatest();
+    const deployed = _matrxFilesDeployed || await matrxFilesDeployedVersion();
+    if (!deployed || deployed === latest) return;
+    let attempts;
+    try { attempts = JSON.parse(readFileSync(MATRX_FILES_ATTEMPTS_FILE, "utf-8")); } catch { attempts = { tried: [] }; }
+    if (attempts.tried.includes(latest)) return; // one auto-attempt per version
+    attempts.tried = attempts.tried.slice(-50); attempts.tried.push(latest);
+    try { mkdirSync(dirname(MATRX_FILES_ATTEMPTS_FILE), { recursive: true }); writeFileSync(MATRX_FILES_ATTEMPTS_FILE, JSON.stringify(attempts, null, 2)); } catch { /* */ }
+    console.log(`[matrx-files] ${deployed} -> ${latest}: auto-deploy starting`);
+    const res = await deployMatrxFiles(latest);
+    console.log(`[matrx-files] auto-deploy ${latest}: ${res.ok ? "OK" : "FAILED"} ${res.error || ""}`);
+  } catch (e) {
+    console.error("[matrx-files] auto-deploy sweep failed:", e.message);
+  }
+}
+
+// Manual/agent trigger + status.
+app.post("/api/matrx-files/deploy", authMiddleware, requireSuperadmin, async (req, res) => {
+  const version = String(req.query.version || req.body?.version || "").trim();
+  try {
+    const target = version || await matrxFilesPypiLatest();
+    const r = await deployMatrxFiles(target);
+    res.status(r.ok ? 200 : 500).json({ version: target, ...r });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+async function checkMatrxFiles() {
+  const id = "matrx-files", label = "Matrx Files service (files.matrxserver.com)";
+  try {
+    const t0 = Date.now();
+    const r = await fetch(`${MATRX_FILES.publicBase}/files-service/health`, { signal: AbortSignal.timeout(8000) });
+    const ms = Date.now() - t0;
+    if (!r.ok) {
+      return { id, label, status: "critical", detail: `${MATRX_FILES.publicBase}/files-service/health -> HTTP ${r.status}. File operations are failing. Container matrx-files on ${MATRX_FILES.host} (Hosts page / terminal): sudo docker logs matrx-files.`, actions: [] };
+    }
+    let latest = null;
+    try { latest = await matrxFilesPypiLatest(); } catch { /* */ }
+    const deployed = _matrxFilesDeployed; // refreshed by deploys + the auto sweep
+    if (latest && deployed && deployed !== latest) {
+      return { id, label, status: "warning", detail: `Healthy (${ms}ms) but running ${deployed} while PyPI has ${latest}. Auto-deploy ${MATRX_FILES_AUTO_DEPLOY ? "tries each version once — check the audit log / Manager logs for the failure" : "is DISABLED (MATRX_FILES_AUTO_DEPLOY=0)"}. Manual: POST /api/matrx-files/deploy.`, actions: [] };
+    }
+    return { id, label, status: "ok", detail: `Healthy in ${ms}ms${deployed ? `, version ${deployed}` : ""}${latest ? ` (PyPI latest ${latest})` : ""}.`, actions: [] };
+  } catch (e) {
+    return { id, label, status: "critical", detail: `${MATRX_FILES.publicBase} unreachable (${e.message}). File operations are failing.`, actions: [] };
+  }
+}
 
 // ── Auto-retry transiently-failed deploy workflows ──────────────────────────
 // 2026-07-09: a GitHub Actions platform blip killed three jobs across two
@@ -3576,6 +3707,7 @@ if (FLEET_OPS_SYNC_SECONDS > 0) {
       console.error("[fleet-ops-sync] sweep failed:", e.message);
     }
     await maybeRetryFailedDeploys();
+    await maybeAutoDeployMatrxFiles();
   };
   setTimeout(sweep, 45000);
   setInterval(sweep, FLEET_OPS_SYNC_SECONDS * 1000);
@@ -4401,6 +4533,16 @@ const REMOTE_SECRET_STORES = [
     restart: { type: "ssm", command: "sudo systemctl restart aidream.service && for i in $(seq 1 14); do sleep 5; code=$(curl -s -o /dev/null -w '%{http_code}' -m 4 http://127.0.0.1:8000/health || true); [ \"$code\" = 200 ] && break; done; echo health:$code" },
   },
   {
+    id: "ec2:matrx-files",
+    label: "Matrx Files service (EC2) — /etc/matrx-files.env",
+    kind: "ec2",
+    host: "matrx-sandbox-host-dev",
+    path: "/etc/matrx-files.env",
+    note: "Env is read at container RUN time only — use Apply (it re-runs the container at the current version; a plain docker restart would keep the old env).",
+    remote: true,
+    restart: { type: "ssm", command: "V=$(cat /opt/matrx-files/CURRENT 2>/dev/null || sudo docker inspect matrx-files --format '{{.Config.Image}}' | cut -d: -f2); sudo docker rm -f matrx-files >/dev/null 2>&1 || true; sudo docker run -d --name matrx-files --restart unless-stopped -p 127.0.0.1:8080:8080 -v /data/matrx-files:/data/matrx-files --env-file /etc/matrx-files.env matrx-files:$V >/dev/null && for i in $(seq 1 20); do sleep 3; code=$(curl -s -o /dev/null -w '%{http_code}' -m 4 http://127.0.0.1:8080/files-service/health || true); [ \"$code\" = 200 ] && break; done; echo health:$code version:$V" },
+  },
+  {
     id: "ec2:sandbox-orchestrator",
     label: "EC2 sandbox orchestrator — orchestrator/.env",
     kind: "ec2",
@@ -4656,6 +4798,7 @@ app.post("/api/secrets/restart", authMiddleware, requireSuperadmin, async (req, 
     // Register BEFORE the restart runs — the point is to cover the down
     // window; registering after completion misses it (verified live).
     if (s.id === "ec2:aidream-app") noteExpectedRestart("aidream-dedicated", s.label);
+    if (s.id === "ec2:matrx-files") noteExpectedRestart("matrx-files", s.label);
     if (s.id === "ec2:sandbox-orchestrator" || s.id === "infra:orchestrator") noteExpectedRestart("orchestrator-drift", s.label);
     let output = "";
     if (s.restart.type === "compose") {
