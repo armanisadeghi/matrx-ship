@@ -2934,34 +2934,38 @@ async function buildVersionsReport() {
   try {
     const bi = getBuildInfo();
     const latest = inspectImage("matrx-ship:latest");
+    const ghcr = inspectImage("ghcr.io/armanisadeghi/matrx-ship:latest");
+    const currentShipId = ghcr.id || latest.id || null;
     const cfg = loadDeployments();
     const apps = [];
     let behind = 0;
     for (const [name, info] of Object.entries(cfg.instances || {})) {
       const img = exec(`docker inspect ${name} --format '{{.Image}}' 2>/dev/null`);
       const runId = (img.output || "").replace("sha256:", "").slice(0, 12);
-      const onLatest = !!(latest.present && runId && runId === latest.id);
+      const onLatest = !!(currentShipId && runId && runId === currentShipId);
       if (!onLatest) behind++;
       apps.push({ name, display_name: info.display_name || name, on_latest: onLatest });
     }
-    const sourceAhead = !!bi.has_changes;
-    const pendingCount = bi.pending_commits?.length || 0;
+    // Since 2026-07-07 the ship image is NOT built from local source — CI
+    // builds it to GHCR on push and the host poller deploys the digest. The
+    // truth for "current" is therefore the GHCR image; the local
+    // matrx-ship:latest tag is just the alias compose files use (the poller
+    // self-heals it if untagged). The old source-vs-image comparison showed
+    // "N commits behind + Rebuild from source" — a button that would CREATE
+    // drift in the poller world. CI failures are surfaced by Fleet Health
+    // (deploys / hosted-deploy checks), not this row.
+    const aliasOk = !!latest.id && (!ghcr.id || latest.id === ghcr.id);
 
-    // 1a) The image itself — is it built from current source?
+    // 1a) The shared image — is the local alias pointing at the tracked GHCR build?
     systems.push({
       id: "ship-image", name: "matrx-ship image (shared)", kind: "ship-image",
-      current: `image ${bi.current_image?.id || "?"}${bi.current_image?.age ? ` · ${bi.current_image.age} old` : ""}`,
-      latest: `source @ ${bi.source?.head_commit || "?"}`,
-      status: sourceAhead ? "behind" : "ok",
-      detail: sourceAhead
-        ? `The matrx-ship image is ${pendingCount || "some"} commit(s) behind source. Rebuild it, then recreate the apps onto the new image. (Per-app DBs are separate volumes — untouched.)`
-        : "Image is built from the current source commit.",
-      update: sourceAhead
-        ? {
-          action: "ship-rebuild", label: "Rebuild image + redeploy all apps", data_safe: true,
-          note: "docker build matrx-ship:latest from current source, then recreate every app container onto it. App DB volumes are untouched."
-        }
-        : null,
+      current: latest.id ? `local alias @ ${latest.id}` : "local alias MISSING (poller self-heals within ~2 min)",
+      latest: ghcr.id ? `GHCR @ ${ghcr.id}${ghcr.age ? ` · ${ghcr.age} old` : ""}` : "GHCR image not present on host yet",
+      status: aliasOk ? "ok" : "behind",
+      detail: aliasOk
+        ? "Deploys are automatic: push to main → CI builds to GHCR → the host poller retags + recreates apps within ~2 min. Nothing to do here."
+        : "The local matrx-ship:latest alias is missing or stale vs the tracked GHCR image — the deploy poller self-heals this on its next 2-min tick; if it persists, check journalctl -u matrx-ship-deploy.service.",
+      update: null,
     });
 
     // 1b) Per-app rollout — are apps actually running the image we just built?

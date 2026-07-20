@@ -54,6 +54,18 @@ SHIP_STATE="$(pull_if_changed "$REGISTRY/matrx-ship:latest")"
 DEPLOY_STATE="$(pull_if_changed "$REGISTRY/matrx-ship-deploy:latest")"
 MANAGER_STATE="$(pull_if_changed "$REGISTRY/matrx-ship-manager:latest")"
 
+# Self-heal the local alias tags. Compose files reference matrx-ship*:latest
+# (the local names); if an alias gets untagged (manual rmi, cleanup), every
+# comparison against it breaks (Versions page showed "0/11 apps current" with
+# ALL apps actually current, 2026-07-14) even though containers keep running.
+# Cheap and idempotent: re-point missing aliases at the GHCR image we track.
+for pair in "matrx-ship:latest" "matrx-ship-deploy:latest" "matrx-ship-manager:latest"; do
+  if ! docker image inspect "$pair" >/dev/null 2>&1 && docker image inspect "$REGISTRY/$pair" >/dev/null 2>&1; then
+    docker tag "$REGISTRY/$pair" "$pair"
+    log "self-healed missing local tag $pair (re-pointed at $REGISTRY/$pair)"
+  fi
+done
+
 if [ "$SHIP_STATE" != "changed" ] && [ "$DEPLOY_STATE" != "changed" ] && [ "$MANAGER_STATE" != "changed" ]; then
   # Quiet no-op — this runs every 2 minutes.
   exit 0
