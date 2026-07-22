@@ -1,5 +1,15 @@
 # TASK: manage the matrx-files microservice from the Server Manager dashboard
 
+> **STATUS 2026-07-21 — DONE, and generalised.** §4's "add matrx-files to whatever
+> service registry you build" is now the `MICROSERVICES` registry in
+> [server-manager/src/index.js](server-manager/src/index.js): one entry per service
+> (host, container, port, health/ready paths, optDir, envFile, PyPI package,
+> Dockerfile path, build arg, docker-run extras, auto-deploy toggle, attempts ledger)
+> driving PyPI polling, SSM upgrade+rollback, fleet-health, the Secrets store, and the
+> `/api/microservices/*` routes. `matrx-seo` is the second entry. The original
+> `/api/matrx-files/*` routes remain as aliases. Add the next vertical by adding a
+> registry entry — no new code path.
+
 **For:** an agent working in `matrx-ship/server-manager/`.
 **Goal:** make the operator able to see, control, and configure the new **matrx-files**
 microservice (running on the EC2 sandbox host) from the Manager admin UI — status, logs,

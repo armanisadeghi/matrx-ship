@@ -3483,11 +3483,12 @@ async function checkHostedDeployFreshness() {
 }
 
 async function computeFleetHealth() {
-  const [drift, deploys, aidreamHealth, aidreamPipeline, hostedDeploy, matrxFiles] = await Promise.all([
-    checkOrchestratorDrift(), checkRecentDeploys(), checkDedicatedAidream(), checkAidreamPipeline(), checkHostedDeployFreshness(), checkMatrxFiles(),
+  const [drift, deploys, aidreamHealth, aidreamPipeline, hostedDeploy, ...micro] = await Promise.all([
+    checkOrchestratorDrift(), checkRecentDeploys(), checkDedicatedAidream(), checkAidreamPipeline(), checkHostedDeployFreshness(),
+    ...Object.values(MICROSERVICES).map((svc) => checkMicroservice(svc)),
   ]);
   const images = checkSandboxImages();
-  const checks = [drift, images, deploys, aidreamHealth, aidreamPipeline, hostedDeploy, matrxFiles];
+  const checks = [drift, images, deploys, aidreamHealth, aidreamPipeline, hostedDeploy, ...micro];
   for (const c of checks) {
     if (c.status !== "critical" && c.status !== "warning") continue;
     const e = expectedRestart(c.id);
@@ -3507,9 +3508,9 @@ app.get("/api/fleet-health", authMiddleware, async (_req, res) => {
   res.json(await computeFleetHealth());
 });
 
-// ── matrx-files: PyPI-driven auto-deploy + management ───────────────────────
-// The standalone file service (https://files.matrxserver.com, container
-// matrx-files on matrx-sandbox-host-dev) publishes to PyPI automatically on
+// ── Microservices: PyPI-driven auto-deploy + management ─────────────────────
+// The standalone microservices on matrx-sandbox-host-dev (matrx-files,
+// matrx-seo) publish to PyPI automatically on
 // tag (aidream repo, matrx-files/v*), but deploying required an operator
 // laptop with AWS SSO — so it sat NINE versions stale (0.1.5 vs 0.1.14,
 // 2026-07-12) the moment attention moved on. The Manager now owns it:
@@ -3520,147 +3521,266 @@ app.get("/api/fleet-health", authMiddleware, async (_req, res) => {
 // is only read at run time), health-poll, auto-rollback to the previous
 // version on failure. One auto-attempt per version (persistent ledger) so a
 // broken release stays loudly stuck instead of loop-building.
-const MATRX_FILES = {
-  host: "matrx-sandbox-host-dev",
-  publicBase: "https://files.matrxserver.com",
-  optDir: "/opt/matrx-files",
-  envFile: "/etc/matrx-files.env",
-  dockerfileRepoPath: "AI-Matrix-Engine/aidream/contents/packages/matrx-files/Dockerfile",
+// One registry, one code path. Everything that differs between services lives
+// in the entry below; every function takes `svc`. matrx-seo (the first domain
+// vertical) is NOT deployed yet — its PyPI package 404s and the box has no
+// container, so it degrades to "not deployed" everywhere instead of alarming.
+const MICROSERVICES = {
+  "matrx-files": {
+    id: "matrx-files",
+    label: "Matrx Files service (files.matrxserver.com)",
+    impact: "File operations are failing.",
+    host: "matrx-sandbox-host-dev",
+    container: "matrx-files",
+    tlsContainer: "matrx-files-tls", // shared Caddy for the box (both services)
+    port: 8080,
+    publicBase: "https://files.matrxserver.com",
+    healthPath: "/files-service/health",
+    readyPath: "/files-service/ready",
+    optDir: "/opt/matrx-files",
+    envFile: "/etc/matrx-files.env",
+    pypiPackage: "matrx-files",
+    dockerfileRepoPath: "AI-Matrix-Engine/aidream/contents/packages/matrx-files/Dockerfile",
+    buildArgName: "MATRX_FILES_VERSION",
+    dockerRunExtraArgs: "-v /data/matrx-files:/data/matrx-files",
+    autoDeployEnvVar: "MATRX_FILES_AUTO_DEPLOY",
+    autoDeploy: (process.env.MATRX_FILES_AUTO_DEPLOY ?? "1") === "1",
+    attemptsFile: "/host-srv/apps/deploy-state/matrx-files-attempts.json",
+  },
+  "matrx-seo": {
+    id: "matrx-seo",
+    label: "Matrx SEO service (seo.matrxserver.com)",
+    impact: "SEO measurement is failing.",
+    host: "matrx-sandbox-host-dev",
+    container: "matrx-seo",
+    tlsContainer: "matrx-files-tls", // same Caddy — :443 is taken, by design
+    port: 8081,
+    publicBase: "https://seo.matrxserver.com",
+    healthPath: "/health",
+    readyPath: "/health/ready",
+    optDir: "/opt/matrx-seo",
+    envFile: "/etc/matrx-seo.env",
+    pypiPackage: "matrx-seo",
+    dockerfileRepoPath: "AI-Matrix-Engine/aidream/contents/packages/matrx-seo/Dockerfile",
+    buildArgName: "MATRX_SEO_VERSION",
+    dockerRunExtraArgs: "", // no volume — the SEO service is stateless on disk
+    autoDeployEnvVar: "MATRX_SEO_AUTO_DEPLOY",
+    autoDeploy: (process.env.MATRX_SEO_AUTO_DEPLOY ?? "1") === "1",
+    attemptsFile: "/host-srv/apps/deploy-state/matrx-seo-attempts.json",
+  },
 };
-const MATRX_FILES_AUTO_DEPLOY = (process.env.MATRX_FILES_AUTO_DEPLOY ?? "1") === "1";
-const MATRX_FILES_ATTEMPTS_FILE = "/host-srv/apps/deploy-state/matrx-files-attempts.json";
-let _matrxFilesDeployed = null; // cache of last-known deployed version
+const _msDeployed = {}; // id -> cache of last-known deployed version
 
-async function matrxFilesPypiLatest() {
-  const r = await fetch("https://pypi.org/pypi/matrx-files/json", { signal: AbortSignal.timeout(8000) });
+function microservice(id) { return MICROSERVICES[id] || null; }
+
+// The one `docker run` line for a service, shared by the upgrade swap, the
+// rollback, and the Secrets "Apply" restart — so they can never drift.
+function msDockerRun(svc, tag) {
+  const extra = svc.dockerRunExtraArgs ? `${svc.dockerRunExtraArgs} ` : "";
+  return `sudo docker run -d --name ${svc.container} --restart unless-stopped -p 127.0.0.1:${svc.port}:${svc.port} ${extra}--env-file ${svc.envFile} ${svc.container}:${tag} >/dev/null`;
+}
+function msLocalHealthUrl(svc) { return `http://127.0.0.1:${svc.port}${svc.healthPath}`; }
+
+// Re-runs the container at its current version (env is read at RUN time only —
+// a plain `docker restart` would keep the old env). Used by the Secrets store.
+function msRestartCommand(svc) {
+  return `V=$(cat ${svc.optDir}/CURRENT 2>/dev/null || sudo docker inspect ${svc.container} --format '{{.Config.Image}}' | cut -d: -f2); sudo docker rm -f ${svc.container} >/dev/null 2>&1 || true; ${msDockerRun(svc, "$V")} && for i in $(seq 1 20); do sleep 3; code=$(curl -s -o /dev/null -w '%{http_code}' -m 4 ${msLocalHealthUrl(svc)} || true); [ "$code" = 200 ] && break; done; echo health:$code version:$V`;
+}
+
+// null (not an error) when the package has never been published — that is how
+// an undeployed service stays quiet instead of throwing on every sweep.
+async function msPypiLatest(svc) {
+  const r = await fetch(`https://pypi.org/pypi/${svc.pypiPackage}/json`, { signal: AbortSignal.timeout(8000) });
+  if (r.status === 404) return null;
   if (!r.ok) throw new Error(`PyPI ${r.status}`);
   return (await r.json()).info.version;
 }
 
-async function matrxFilesDeployedVersion() {
-  const h = FLEET_HOSTS[MATRX_FILES.host];
+async function msDeployedVersion(svc) {
+  const h = FLEET_HOSTS[svc.host];
   const r = await ssmRun(h.instanceId,
-    `cat ${MATRX_FILES.optDir}/CURRENT 2>/dev/null || sudo docker inspect matrx-files --format '{{.Config.Image}}' 2>/dev/null | cut -d: -f2`,
-    { timeout: 60, comment: "matrx-files:version" });
+    `cat ${svc.optDir}/CURRENT 2>/dev/null || sudo docker inspect ${svc.container} --format '{{.Config.Image}}' 2>/dev/null | cut -d: -f2`,
+    { timeout: 60, comment: `${svc.id}:version` });
   const v = (r.stdout || "").trim().split("\n").pop();
-  if (r.status === "Success" && v) { _matrxFilesDeployed = v; return v; }
+  if (r.status === "Success" && v) { _msDeployed[svc.id] = v; return v; }
   return null;
 }
 
 // The swap script — deploy.sh's steps 2-6, SSM-ified. Dockerfile arrives
 // base64'd from GitHub main so an on-box edit can never silently pin a
 // version again (that was the 2026-07-14 half-deploy).
-function matrxFilesUpgradeScript(version, dockerfileB64) {
-  const d = MATRX_FILES.optDir;
+function msUpgradeScript(svc, version, dockerfileB64) {
+  const d = svc.optDir, c = svc.container;
   return [
     `set -e`,
     `echo '${dockerfileB64}' | base64 -d | sudo tee ${d}/Dockerfile >/dev/null`,
-    `sudo docker build --build-arg MATRX_FILES_VERSION="==${version}" -t matrx-files:${version} ${d}`,
-    `GOT=$(sudo docker run --rm --entrypoint python matrx-files:${version} -c "import importlib.metadata as m; print(m.version('matrx-files'))" | tr -d "[:space:]")`,
+    `sudo docker build --build-arg ${svc.buildArgName}="==${version}" -t ${c}:${version} ${d}`,
+    `GOT=$(sudo docker run --rm --entrypoint python ${c}:${version} -c "import importlib.metadata as m; print(m.version('${svc.pypiPackage}'))" | tr -d "[:space:]")`,
     `[ "$GOT" = "${version}" ] || { echo "VERIFY_FAILED image contains $GOT"; exit 1; }`,
-    `PREV=$(cat ${d}/CURRENT 2>/dev/null || sudo docker inspect matrx-files --format '{{.Config.Image}}' | cut -d: -f2)`,
-    `sudo docker rm -f matrx-files >/dev/null 2>&1 || true`,
-    `sudo docker run -d --name matrx-files --restart unless-stopped -p 127.0.0.1:8080:8080 -v /data/matrx-files:/data/matrx-files --env-file ${MATRX_FILES.envFile} matrx-files:${version} >/dev/null`,
-    `ok=""; for i in $(seq 1 20); do sleep 3; code=$(curl -s -o /dev/null -w '%{http_code}' -m 4 http://127.0.0.1:8080/files-service/health || true); [ "$code" = 200 ] && { ok=1; break; }; done`,
-    `if [ -z "$ok" ]; then echo "HEALTH_FAILED rolling back to $PREV"; sudo docker rm -f matrx-files >/dev/null 2>&1 || true; sudo docker run -d --name matrx-files --restart unless-stopped -p 127.0.0.1:8080:8080 -v /data/matrx-files:/data/matrx-files --env-file ${MATRX_FILES.envFile} matrx-files:$PREV >/dev/null; exit 1; fi`,
+    `PREV=$(cat ${d}/CURRENT 2>/dev/null || sudo docker inspect ${c} --format '{{.Config.Image}}' | cut -d: -f2)`,
+    `sudo docker rm -f ${c} >/dev/null 2>&1 || true`,
+    msDockerRun(svc, version),
+    `ok=""; for i in $(seq 1 20); do sleep 3; code=$(curl -s -o /dev/null -w '%{http_code}' -m 4 ${msLocalHealthUrl(svc)} || true); [ "$code" = 200 ] && { ok=1; break; }; done`,
+    `if [ -z "$ok" ]; then echo "HEALTH_FAILED rolling back to $PREV"; sudo docker rm -f ${c} >/dev/null 2>&1 || true; ${msDockerRun(svc, "$PREV")}; exit 1; fi`,
     `echo "$PREV" | sudo tee ${d}/PREVIOUS >/dev/null`,
     `echo "${version}" | sudo tee ${d}/CURRENT >/dev/null`,
     `echo "UPGRADE_OK ${version} (was $PREV)"`,
   ].join("\n");
 }
 
-async function deployMatrxFiles(version) {
+async function msDeploy(svc, version) {
   const token = process.env.GITHUB_PAT || process.env.GH_TOKEN || "";
-  const dfR = await fetch(`https://api.github.com/repos/${MATRX_FILES.dockerfileRepoPath}?ref=main`, {
+  const dfR = await fetch(`https://api.github.com/repos/${svc.dockerfileRepoPath}?ref=main`, {
     headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github.raw", "User-Agent": "matrx-manager" },
     signal: AbortSignal.timeout(10000),
   });
   if (!dfR.ok) throw new Error(`Dockerfile fetch from GitHub failed: ${dfR.status}`);
   const dockerfileB64 = Buffer.from(await dfR.text(), "utf-8").toString("base64");
-  const h = FLEET_HOSTS[MATRX_FILES.host];
-  const r = await ssmRun(h.instanceId, matrxFilesUpgradeScript(version, dockerfileB64), { timeout: 420, comment: `matrx-files:deploy ${version}` });
+  const h = FLEET_HOSTS[svc.host];
+  const r = await ssmRun(h.instanceId, msUpgradeScript(svc, version, dockerfileB64), { timeout: 420, comment: `${svc.id}:deploy ${version}` });
   const ok = r.status === "Success" && (r.stdout || "").includes("UPGRADE_OK");
-  if (ok) _matrxFilesDeployed = version;
+  if (ok) _msDeployed[svc.id] = version;
   // Confirm through Cloudflare too — local health can pass while the edge 502s.
   let edge = null;
-  try { edge = (await fetch(`${MATRX_FILES.publicBase}/files-service/health`, { signal: AbortSignal.timeout(8000) })).status; } catch { /* */ }
-  try { auditLog("system", "matrx_files_deploy", version, { ok, edge, tail: (r.stdout || r.stderr || "").slice(-300) }); } catch { /* */ }
+  try { edge = (await fetch(`${svc.publicBase}${svc.healthPath}`, { signal: AbortSignal.timeout(8000) })).status; } catch { /* */ }
+  try { auditLog("system", `${svc.id.replace(/-/g, "_")}_deploy`, version, { ok, edge, tail: (r.stdout || r.stderr || "").slice(-300) }); } catch { /* */ }
   return { ok, edge, output: (r.stdout || "").slice(-500), error: ok ? null : (r.stderr || r.stdout || "").slice(-300) };
 }
 
-async function maybeAutoDeployMatrxFiles() {
-  if (!MATRX_FILES_AUTO_DEPLOY) return;
+async function msMaybeAutoDeploy(svc) {
+  if (!svc.autoDeploy) return;
   try {
-    const latest = await matrxFilesPypiLatest();
-    const deployed = _matrxFilesDeployed || await matrxFilesDeployedVersion();
-    if (!deployed || deployed === latest) return;
+    const latest = await msPypiLatest(svc);
+    if (!latest) return; // never published — nothing to deploy, nothing to say
+    const deployed = _msDeployed[svc.id] || await msDeployedVersion(svc);
+    if (!deployed || deployed === latest) return; // no first install, only upgrades
     let attempts;
-    try { attempts = JSON.parse(readFileSync(MATRX_FILES_ATTEMPTS_FILE, "utf-8")); } catch { attempts = { tried: [] }; }
+    try { attempts = JSON.parse(readFileSync(svc.attemptsFile, "utf-8")); } catch { attempts = { tried: [] }; }
     if (attempts.tried.includes(latest)) return; // one auto-attempt per version
     attempts.tried = attempts.tried.slice(-50); attempts.tried.push(latest);
-    try { mkdirSync(dirname(MATRX_FILES_ATTEMPTS_FILE), { recursive: true }); writeFileSync(MATRX_FILES_ATTEMPTS_FILE, JSON.stringify(attempts, null, 2)); } catch { /* */ }
-    console.log(`[matrx-files] ${deployed} -> ${latest}: auto-deploy starting`);
-    const res = await deployMatrxFiles(latest);
-    console.log(`[matrx-files] auto-deploy ${latest}: ${res.ok ? "OK" : "FAILED"} ${res.error || ""}`);
+    try { mkdirSync(dirname(svc.attemptsFile), { recursive: true }); writeFileSync(svc.attemptsFile, JSON.stringify(attempts, null, 2)); } catch { /* */ }
+    console.log(`[${svc.id}] ${deployed} -> ${latest}: auto-deploy starting`);
+    const res = await msDeploy(svc, latest);
+    console.log(`[${svc.id}] auto-deploy ${latest}: ${res.ok ? "OK" : "FAILED"} ${res.error || ""}`);
   } catch (e) {
-    console.error("[matrx-files] auto-deploy sweep failed:", e.message);
+    console.error(`[${svc.id}] auto-deploy sweep failed:`, e.message);
   }
 }
 
+// ── Routes. Generic `/api/microservices/*` is canonical; the original
+// `/api/matrx-files/*` paths stay as thin delegations so no caller breaks.
+// Handlers take the resolved service; the two wirings below decide where it
+// comes from (`:id` for the generic routes, a fixed id for the legacy ones).
+function msByParam(handler) {
+  return (req, res) => {
+    const id = String(req.params.id || "");
+    const svc = microservice(id);
+    if (!svc) return res.status(404).json({ error: `Unknown microservice '${id}'` });
+    return handler(svc, req, res);
+  };
+}
+function msPinned(id, handler) { return (req, res) => handler(MICROSERVICES[id], req, res); }
+
+// Cheap list — registry + edge health + PyPI, no SSM round-trip per service.
+app.get("/api/microservices", authMiddleware, async (_req, res) => {
+  const rows = await Promise.all(Object.values(MICROSERVICES).map(async (svc) => {
+    let edge = null, latest = null;
+    try { edge = (await fetch(`${svc.publicBase}${svc.healthPath}`, { signal: AbortSignal.timeout(6000) })).status; } catch { /* */ }
+    try { latest = await msPypiLatest(svc); } catch { /* */ }
+    return {
+      id: svc.id, label: svc.label, host: svc.host, container: svc.container, port: svc.port,
+      public_base: svc.publicBase, health_path: svc.healthPath, ready_path: svc.readyPath,
+      env_file: svc.envFile, pypi_package: svc.pypiPackage, edge_health: edge, pypi_latest: latest,
+      deployed: _msDeployed[svc.id] || null, auto_deploy: svc.autoDeploy,
+      published: latest !== null,
+    };
+  }));
+  res.json({ services: rows });
+});
+
 // Status + logs (per MATRX_FILES_SERVER_MANAGER_TASK.md §1) — both containers,
 // versions, and the health triad, without anyone opening a terminal.
-app.get("/api/matrx-files/status", authMiddleware, async (_req, res) => {
+const msStatusHandler = async (svc, req, res) => {
   try {
-    const h = FLEET_HOSTS[MATRX_FILES.host];
+    const h = FLEET_HOSTS[svc.host];
     const r = await ssmRun(h.instanceId,
-      `sudo docker ps -a --format '{{.Names}}|{{.Image}}|{{.Status}}' | grep -E 'matrx-files'; echo ---; cat ${MATRX_FILES.optDir}/CURRENT 2>/dev/null; cat ${MATRX_FILES.optDir}/PREVIOUS 2>/dev/null; echo ---; curl -s -o /dev/null -w '%{http_code}' -m 4 http://127.0.0.1:8080/files-service/health; echo; curl -s -o /dev/null -w '%{http_code}' -m 4 http://127.0.0.1:8080/files-service/ready`,
-      { timeout: 60, comment: "matrx-files:status" });
+      `sudo docker ps -a --format '{{.Names}}|{{.Image}}|{{.Status}}' | grep -E '${svc.container}'; echo ---; cat ${svc.optDir}/CURRENT 2>/dev/null; cat ${svc.optDir}/PREVIOUS 2>/dev/null; echo ---; curl -s -o /dev/null -w '%{http_code}' -m 4 http://127.0.0.1:${svc.port}${svc.healthPath}; echo; curl -s -o /dev/null -w '%{http_code}' -m 4 http://127.0.0.1:${svc.port}${svc.readyPath}`,
+      { timeout: 60, comment: `${svc.id}:status` });
     let edge = null, latest = null;
-    try { edge = (await fetch(`${MATRX_FILES.publicBase}/files-service/health`, { signal: AbortSignal.timeout(6000) })).status; } catch { /* */ }
-    try { latest = await matrxFilesPypiLatest(); } catch { /* */ }
-    res.json({ host: MATRX_FILES.host, public_base: MATRX_FILES.publicBase, edge_health: edge, pypi_latest: latest, deployed: _matrxFilesDeployed, auto_deploy: MATRX_FILES_AUTO_DEPLOY, raw: (r.stdout || "").trim() });
+    try { edge = (await fetch(`${svc.publicBase}${svc.healthPath}`, { signal: AbortSignal.timeout(6000) })).status; } catch { /* */ }
+    try { latest = await msPypiLatest(svc); } catch { /* */ }
+    res.json({ id: svc.id, host: svc.host, container: svc.container, public_base: svc.publicBase, edge_health: edge, pypi_latest: latest, deployed: _msDeployed[svc.id] || null, auto_deploy: svc.autoDeploy, raw: (r.stdout || "").trim() });
   } catch (e) { res.status(502).json({ error: e.message }); }
-});
+};
 
-app.get("/api/matrx-files/logs", authMiddleware, requireSuperadmin, async (req, res) => {
+const msLogsHandler = async (svc, req, res) => {
   const lines = Math.min(500, Math.max(10, Number(req.query.lines) || 100));
-  const container = req.query.container === "tls" ? "matrx-files-tls" : "matrx-files";
+  const container = req.query.container === "tls" && svc.tlsContainer ? svc.tlsContainer : svc.container;
   try {
-    const h = FLEET_HOSTS[MATRX_FILES.host];
-    const r = await ssmRun(h.instanceId, `sudo docker logs --tail ${lines} ${container} 2>&1 | tail -c 20000`, { timeout: 60, comment: "matrx-files:logs" });
+    const h = FLEET_HOSTS[svc.host];
+    const r = await ssmRun(h.instanceId, `sudo docker logs --tail ${lines} ${container} 2>&1 | tail -c 20000`, { timeout: 60, comment: `${svc.id}:logs` });
     res.type("text/plain").send(r.stdout || r.stderr || "");
   } catch (e) { res.status(502).json({ error: e.message }); }
-});
+};
 
-// Manual/agent trigger + status.
-app.post("/api/matrx-files/deploy", authMiddleware, requireSuperadmin, async (req, res) => {
+// Manual/agent trigger.
+const msDeployHandler = async (svc, req, res) => {
   const version = String(req.query.version || req.body?.version || "").trim();
   try {
-    const target = version || await matrxFilesPypiLatest();
-    const r = await deployMatrxFiles(target);
+    const target = version || await msPypiLatest(svc);
+    if (!target) return res.status(409).json({ error: `${svc.pypiPackage} has no PyPI release yet — publish it before deploying.` });
+    const r = await msDeploy(svc, target);
     res.status(r.ok ? 200 : 500).json({ version: target, ...r });
   } catch (e) { res.status(500).json({ error: e.message }); }
-});
+};
 
-async function checkMatrxFiles() {
-  const id = "matrx-files", label = "Matrx Files service (files.matrxserver.com)";
+app.get("/api/microservices/:id/status", authMiddleware, msByParam(msStatusHandler));
+app.get("/api/microservices/:id/logs", authMiddleware, requireSuperadmin, msByParam(msLogsHandler));
+app.post("/api/microservices/:id/deploy", authMiddleware, requireSuperadmin, msByParam(msDeployHandler));
+
+// Legacy aliases — identical behaviour, pinned to matrx-files.
+app.get("/api/matrx-files/status", authMiddleware, msPinned("matrx-files", msStatusHandler));
+app.get("/api/matrx-files/logs", authMiddleware, requireSuperadmin, msPinned("matrx-files", msLogsHandler));
+app.post("/api/matrx-files/deploy", authMiddleware, requireSuperadmin, msPinned("matrx-files", msDeployHandler));
+
+async function checkMicroservice(svc) {
+  const { id, label } = svc;
   try {
     const t0 = Date.now();
-    const r = await fetch(`${MATRX_FILES.publicBase}/files-service/health`, { signal: AbortSignal.timeout(8000) });
+    const r = await fetch(`${svc.publicBase}${svc.healthPath}`, { signal: AbortSignal.timeout(8000) });
     const ms = Date.now() - t0;
     if (!r.ok) {
-      return { id, label, status: "critical", detail: `${MATRX_FILES.publicBase}/files-service/health -> HTTP ${r.status}. File operations are failing. Container matrx-files on ${MATRX_FILES.host} (Hosts page / terminal): sudo docker logs matrx-files.`, actions: [] };
+      const nd = await msNotDeployed(svc);
+      if (nd) return nd;
+      return { id, label, status: "critical", detail: `${svc.publicBase}${svc.healthPath} -> HTTP ${r.status}. ${svc.impact} Container ${svc.container} on ${svc.host} (Hosts page / terminal): sudo docker logs ${svc.container}.`, actions: [] };
     }
     let latest = null;
-    try { latest = await matrxFilesPypiLatest(); } catch { /* */ }
-    const deployed = _matrxFilesDeployed; // refreshed by deploys + the auto sweep
+    try { latest = await msPypiLatest(svc); } catch { /* */ }
+    const deployed = _msDeployed[svc.id]; // refreshed by deploys + the auto sweep
     if (latest && deployed && deployed !== latest) {
-      return { id, label, status: "warning", detail: `Healthy (${ms}ms) but running ${deployed} while PyPI has ${latest}. Auto-deploy ${MATRX_FILES_AUTO_DEPLOY ? "tries each version once — check the audit log / Manager logs for the failure" : "is DISABLED (MATRX_FILES_AUTO_DEPLOY=0)"}. Manual: POST /api/matrx-files/deploy.`, actions: [] };
+      return { id, label, status: "warning", detail: `Healthy (${ms}ms) but running ${deployed} while PyPI has ${latest}. Auto-deploy ${svc.autoDeploy ? "tries each version once — check the audit log / Manager logs for the failure" : `is DISABLED (${svc.autoDeployEnvVar}=0)`}. Manual: POST /api/microservices/${id}/deploy.`, actions: [] };
     }
     return { id, label, status: "ok", detail: `Healthy in ${ms}ms${deployed ? `, version ${deployed}` : ""}${latest ? ` (PyPI latest ${latest})` : ""}.`, actions: [] };
   } catch (e) {
-    return { id, label, status: "critical", detail: `${MATRX_FILES.publicBase} unreachable (${e.message}). File operations are failing.`, actions: [] };
+    const nd = await msNotDeployed(svc);
+    if (nd) return nd;
+    return { id, label, status: "critical", detail: `${svc.publicBase} unreachable (${e.message}). ${svc.impact}`, actions: [] };
   }
+}
+
+// A service that has never been deployed must not alarm. Only consulted on the
+// unhealthy path, and skipped entirely once a deployed version is known — so a
+// live service (matrx-files) never pays for this.
+async function msNotDeployed(svc) {
+  if (_msDeployed[svc.id]) return null;
+  let latest;
+  try { latest = await msPypiLatest(svc); } catch { return null; } // PyPI itself down -> report the real failure
+  if (latest !== null) return null;
+  return {
+    id: svc.id, label: svc.label, status: "unknown",
+    detail: `Not deployed yet — ${svc.pypiPackage} has no PyPI release. This check goes live on the first publish + deploy (see aidream packages/${svc.pypiPackage}/DEPLOY.md).`,
+    actions: [],
+  };
 }
 
 // ── Auto-retry transiently-failed deploy workflows ──────────────────────────
@@ -3736,7 +3856,7 @@ if (FLEET_OPS_SYNC_SECONDS > 0) {
       console.error("[fleet-ops-sync] sweep failed:", e.message);
     }
     await maybeRetryFailedDeploys();
-    await maybeAutoDeployMatrxFiles();
+    for (const svc of Object.values(MICROSERVICES)) await msMaybeAutoDeploy(svc);
   };
   setTimeout(sweep, 45000);
   setInterval(sweep, FLEET_OPS_SYNC_SECONDS * 1000);
@@ -4569,7 +4689,17 @@ const REMOTE_SECRET_STORES = [
     path: "/etc/matrx-files.env",
     note: "Env is read at container RUN time only — use Apply (it re-runs the container at the current version; a plain docker restart would keep the old env).",
     remote: true,
-    restart: { type: "ssm", command: "V=$(cat /opt/matrx-files/CURRENT 2>/dev/null || sudo docker inspect matrx-files --format '{{.Config.Image}}' | cut -d: -f2); sudo docker rm -f matrx-files >/dev/null 2>&1 || true; sudo docker run -d --name matrx-files --restart unless-stopped -p 127.0.0.1:8080:8080 -v /data/matrx-files:/data/matrx-files --env-file /etc/matrx-files.env matrx-files:$V >/dev/null && for i in $(seq 1 20); do sleep 3; code=$(curl -s -o /dev/null -w '%{http_code}' -m 4 http://127.0.0.1:8080/files-service/health || true); [ \"$code\" = 200 ] && break; done; echo health:$code version:$V" },
+    restart: { type: "ssm", command: msRestartCommand(MICROSERVICES["matrx-files"]) },
+  },
+  {
+    id: "ec2:matrx-seo",
+    label: "Matrx SEO service (EC2) — /etc/matrx-seo.env",
+    kind: "ec2",
+    host: "matrx-sandbox-host-dev",
+    path: "/etc/matrx-seo.env",
+    note: "Env is read at container RUN time only — use Apply (it re-runs the container at the current version; a plain docker restart would keep the old env). Not deployed yet — Apply will fail until the first deploy.",
+    remote: true,
+    restart: { type: "ssm", command: msRestartCommand(MICROSERVICES["matrx-seo"]) },
   },
   {
     id: "ec2:sandbox-orchestrator",
@@ -4828,6 +4958,7 @@ app.post("/api/secrets/restart", authMiddleware, requireSuperadmin, async (req, 
     // window; registering after completion misses it (verified live).
     if (s.id === "ec2:aidream-app") noteExpectedRestart("aidream-dedicated", s.label);
     if (s.id === "ec2:matrx-files") noteExpectedRestart("matrx-files", s.label);
+    if (s.id === "ec2:matrx-seo") noteExpectedRestart("matrx-seo", s.label);
     if (s.id === "ec2:sandbox-orchestrator" || s.id === "infra:orchestrator") noteExpectedRestart("orchestrator-drift", s.label);
     let output = "";
     if (s.restart.type === "compose") {

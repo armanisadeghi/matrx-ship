@@ -10,7 +10,7 @@ verified 2026-05-26 from live `docker ps` + Traefik labels.
 | Machine | Address | What it is |
 |---|---|---|
 | **`/srv` dev host** | `srv504398.hstgr.cloud` · `77.37.62.64` · `*.dev.codematrx.com` | The main box. Runs the control plane, all the per-project apps, the shared DB, and the hosted sandbox tier. **This is what the Server Manager manages.** |
-| **EC2 `matrx-sandbox-host-dev`** | AWS `i-084f757c1e47d4efb` · `54.144.86.132` | The **EC2 sandbox tier** — runs its own sandbox orchestrator (systemd) + the sandboxes it spawns. **Also now hosts the `matrx-files` microservice** (docker `matrx-files` + `matrx-files-tls` Caddy; `https://files.matrxserver.com` — see §EC2 services). |
+| **EC2 `matrx-sandbox-host-dev`** | AWS `i-084f757c1e47d4efb` · `54.144.86.132` | The **EC2 sandbox tier** — runs its own sandbox orchestrator (systemd) + the sandboxes it spawns. **Also hosts the microservices**: `matrx-files` and `matrx-seo`, both behind the one `matrx-files-tls` Caddy container on :443 (`https://files.matrxserver.com`, `https://seo.matrxserver.com` — see §EC2 services). |
 | **EC2 `matrx-python-server`** | AWS `i-0241f4fee60fb02f6` · `54.166.106.252` | The **AI Dream backend** (the real aidream.ai API). Also hosts the OAuth broker. A different system — not a sandbox host. |
 
 > Both EC2 boxes are in AWS account `872515272894`, region `us-east-1`.
@@ -22,6 +22,7 @@ verified 2026-05-26 from live `docker ps` + Traefik labels.
 | Host | Service | Runs as | Endpoint | What it is |
 |---|---|---|---|---|
 | `matrx-sandbox-host-dev` (`i-084f757c1e47d4efb`, `54.144.86.132`) | **Matrx Files** | docker container `matrx-files` (`matrx-files[standalone]==0.1.1` from PyPI, uvicorn :8080, `--restart unless-stopped`) | `https://files.matrxserver.com` (Cloudflare-proxied → Caddy TLS :443 → app 127.0.0.1:8080) · health `GET /files-service/health` | The independent file microservice carved out of aidream (all cloud storage / media / PDF / sharing). Own matrx-orm pool onto the shared Supabase `files` schema; Supabase-JWT auth. Env at `/etc/matrx-files.env` (root 600). First matrx-package-template package. Deployed 2026-07-13. Manage via the Manager's host exec (`POST /api/hosts/matrx-sandbox-host-dev/exec` → `sudo docker …`). |
+| `matrx-sandbox-host-dev` (`i-084f757c1e47d4efb`, `54.144.86.132`) | **Matrx SEO** | docker container `matrx-seo` (`matrx-seo[standalone]` from PyPI, uvicorn :8081, `--restart unless-stopped`) | `https://seo.matrxserver.com` (Cloudflare-proxied → the SHARED `matrx-files-tls` Caddy :443 → app 127.0.0.1:8081) · health `GET /health` · readiness `GET /health/ready` | The **first domain vertical** — SEO measurement (rankings, search/analytics performance, page performance) for the subset of clients who buy it. Owns the `seo.*` schema on the ONE database and connects as the **`svc_seo` role**, granted only its schema + the platform surfaces in the package's `db/grants.yaml`; it **refuses to boot on a broad role**. Same `SUPABASE_MATRIX_*` env names as every other service — only USER/PASSWORD differ. Env at `/etc/matrx-seo.env` (root 600). Runbook: `aidream/packages/matrx-seo/DEPLOY.md`; deploy/rollback `./deploy.sh <version>`. **LIVE since 2026-07-22** (`0.1.0`) — readiness all-green, public HTTPS 200, anon 401, DB boundary verified (ungranted table → permission denied). Manage via the Manager's host exec, same as matrx-files. |
 
 
 ---
@@ -92,6 +93,7 @@ Not for browsing — the admin UI calls these. Grouped by area:
 - **Sandboxes (hosted):** create / list / detail / logs / diagnostics / fs / reset / extend / resume / destroy / migrate / drift.
 - **Builds & images:** rebuild `matrx-ship` (streamed) / rollback / cleanup; sandbox image health + per-variant rebuilds; orchestrator restart/rebuild.
 - **Hosts & access (super-admin):** EC2 SSM exec + power; local-host + container exec; live terminals (`/api/terminal` WS); agent gateway (grant/exec/fs/revoke + target catalog).
+- **Microservices (the EC2 PyPI-deployed services — §1 "EC2-hosted services"):** `GET /api/microservices` (list + edge health + PyPI latest), `GET /api/microservices/:id/status`, `GET /api/microservices/:id/logs` (super-admin; `?container=tls` for the shared Caddy), `POST /api/microservices/:id/deploy` (super-admin; `?version=` or PyPI latest). Ids come from the `MICROSERVICES` registry in [server-manager/src/index.js](server-manager/src/index.js) — currently `matrx-files`, `matrx-seo`. Legacy `/api/matrx-files/{status,logs,deploy}` still work as aliases pinned to `matrx-files`. Each service also gets a fleet-health check and an `ec2:<id>` Secrets store; a service with no PyPI release reports "not deployed" instead of alarming.
 - **Monitoring:** system / fleet-health / db-health / activity (audit log).
 - **Auth:** `/api/me`, `/api/auth-config`; tokens CRUD (super-admin).
 
