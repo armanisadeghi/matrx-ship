@@ -3466,15 +3466,31 @@ async function checkHostedDeployFreshness() {
     });
     if (!r.ok) return { id, label, status: "unknown", detail: `GitHub API ${r.status}`, actions: [] };
     const mainSha = (await r.json()).sha || "";
-    if (mainSha === deployed) {
-      return { id, label, status: "ok", detail: `Hosted tier is at origin/main (${deployed.slice(0, 7)}).`, actions: [] };
+    // Since the 2026-07-22 promotion redesign the poller follows the
+    // deploy/hosted ref (promoted by the Deploy workflow ONLY when tests
+    // pass), never raw main. "Behind main" is therefore NOT stuck — it can be
+    // the test gate correctly holding a broken commit off production.
+    let approved = null;
+    try {
+      const ar = await fetch("https://api.github.com/repos/armanisadeghi/matrx-sandbox/git/ref/heads/deploy%2Fhosted", {
+        headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", "User-Agent": "matrx-manager" },
+        signal: AbortSignal.timeout(8000),
+      });
+      if (ar.ok) approved = (await ar.json()).object?.sha || null;
+    } catch { /* */ }
+    if (!approved) {
+      return { id, label, status: "warning", detail: `No approved release exists (deploy/hosted ref missing) — the Deploy workflow's test gate has not passed since the promotion redesign. Hosted stays safely at ${deployed.slice(0, 7)}. Check the latest matrx-sandbox Deploy run.`, actions: [] };
+    }
+    if (approved === deployed) {
+      const gateNote = mainSha !== deployed ? ` main is ahead (${mainSha.slice(0, 7)}) — the test gate hasn't approved it yet (see the 'deploys' check).` : "";
+      return { id, label, status: "ok", detail: `Hosted tier is at the approved release (${deployed.slice(0, 7)}).${gateNote}`, actions: [] };
     }
     if (ageMin < HOSTED_DEPLOY_STUCK_MINUTES) {
-      return { id, label, status: "ok", detail: `Deploying: hosted at ${deployed.slice(0, 7)}, main at ${mainSha.slice(0, 7)} (state ${ageMin}m old — poller has ${HOSTED_DEPLOY_STUCK_MINUTES - ageMin}m before this goes critical).`, actions: [] };
+      return { id, label, status: "ok", detail: `Deploying: hosted at ${deployed.slice(0, 7)}, approved release is ${approved.slice(0, 7)} (state ${ageMin}m old — poller has ${HOSTED_DEPLOY_STUCK_MINUTES - ageMin}m before this goes critical).`, actions: [] };
     }
     return {
       id, label, status: "critical",
-      detail: `Hosted deploy poller STUCK: last successful deploy is ${deployed.slice(0, 7)} (${ageMin} min ago) but origin/main is ${mainSha.slice(0, 7)}. Every 2-min tick is failing the same way. Diagnose: journalctl -u matrx-hosted-deploy.service -n 100 (look for the FIRST error in a run — usually an image build).`,
+      detail: `Hosted deploy poller STUCK: approved release is ${approved.slice(0, 7)} but hosted has been at ${deployed.slice(0, 7)} for ${ageMin} min. Every 2-min tick is failing the same way. Diagnose: journalctl -u matrx-hosted-deploy.service -n 100 (look for the FIRST error in a run — usually an image build).`,
       actions: [],
     };
   } catch (e) {

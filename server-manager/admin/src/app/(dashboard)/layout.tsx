@@ -2,7 +2,7 @@
 
 import { usePathname } from "next/navigation";
 import Link from "next/link";
-import { Loader2 , FolderOpen } from "lucide-react";
+import { Loader2 , FolderOpen, Rocket } from "lucide-react";
 import {
   Layers,
   Terminal,
@@ -43,6 +43,7 @@ const navGroups: NavGroup[] = [
       { id: "versions", href: "/versions", label: "Versions & Updates", icon: ArrowUpCircle },
       { id: "instances", href: "/instances", label: "Apps", icon: Layers },
       { id: "orchestrator-sandboxes", href: "/orchestrator-sandboxes", label: "Sandboxes", icon: Boxes },
+      { id: "services", href: "/services", label: "Services", icon: Rocket },
       { id: "sandboxes", href: "/sandboxes", label: "Starter pool", icon: Terminal },
     ],
   },
