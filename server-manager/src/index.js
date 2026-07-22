@@ -3211,8 +3211,11 @@ app.get("/api/sandbox-images/health", authMiddleware, async (_req, res) => {
 const IMAGE_STALE_DAYS = Number(process.env.MATRX_IMAGE_STALE_DAYS || 14);
 
 async function fetchOrchestratorRoot(url) {
-  // Public `/` — no auth. Returns the bits we diff for drift.
-  const r = await fetch(`${url}/`, { signal: AbortSignal.timeout(8000) });
+  // `/` requires auth since the 2026-07-22 "authenticated release contract"
+  // hardening — send the tier's API key (the unauthenticated probe 401'd and
+  // the drift check misread a healthy orchestrator as unreachable).
+  const key = url === EC2_ORCH_URL ? EC2_ORCH_KEY : ORCH_KEY;
+  const r = await fetch(`${url}/`, { headers: key ? { "X-API-Key": key } : {}, signal: AbortSignal.timeout(8000) });
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
   const d = await r.json();
   const ap = (d.integrations && d.integrations.aidream_passthrough) || {};
