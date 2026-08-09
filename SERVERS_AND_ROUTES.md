@@ -15,6 +15,27 @@ verified 2026-05-26 from live `docker ps` + Traefik labels.
 
 > Both EC2 boxes are in AWS account `872515272894`, region `us-east-1`.
 
+### ⚠️ `matrx-coolify-2` — the MCP VPS (was missing from this inventory until 2026-08-09)
+
+| Machine | Address | What it is |
+|---|---|---|
+| **`matrx-coolify-2`** | `191.101.15.190` · `srv1350760.hstgr.cloud` · `*.mcp.aimatrx.com` | Hostinger KVM 2 (Ubuntu 24.04) running **its own Coolify** — the `matrx-mcp-template` deployment target. Serves `coolify.mcp.aimatrx.com`, `seo-tools-python.mcp.aimatrx.com`, `seo-tools-ts.mcp.aimatrx.com`. **Not** managed by the Server Manager, not the same as aidream's Coolify (`matrx-main` / `89.116.187.5`). |
+
+**🔐 OPEN SECURITY ITEM (2026-08-09):** its **SSH host key changed** —
+`known_hosts` holds `SHA256:THIoyvaHTI1yQj/Z9y4kHRv6CvR2u0xizY/CmBrrgnI`, the box
+now presents `SHA256:FMEYfCmbm+uy4lr8K77uQS1/qcY9yNgtxxN+RepbLRw`. **A rebuild
+was NOT confirmed** — CT logs show only a routine 60-day cert renewal (2026-06-09
+→ 2026-08-08), all services stayed up, and the SSH banner only moved
+`Ubuntu-3ubuntu13.14` → `13.18` (a patch, which does *not* regenerate host keys).
+Every provider credential for this box is empty in `matrx-mcp-template/.env`
+(moved to Doppler), so hPanel could not be reached. **Do not re-key or connect**
+until the fingerprint is verified against the Hostinger VNC/serial console.
+Full write-up: `aidream/FOUND_DEFECTS.md` → "matrx-coolify-2 SSH host key changed".
+
+> Health note: `seo-tools-ts.mcp.aimatrx.com` returns **404** (Traefik routes it,
+> app not answering). Unrelated to the key issue but unowned — nothing monitors
+> this host.
+
 ### EC2-hosted services (not on `/srv`)
 
 > Cross-repo system-of-record: `/Users/armanisadeghi/code/common-docs/matrx-files-service/FEATURE.md` — full contract, deploy state, and cutover plan for matrx-files.
