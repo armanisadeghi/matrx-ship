@@ -222,9 +222,13 @@ export default function FleetHealthPage() {
         <BuildStreamDialog
           open={buildOpen}
           onOpenChange={setBuildOpen}
-          url={API.SANDBOX_IMAGES_REBUILD_MISSING_STREAM(buildVariant)}
-          title={buildVariant ? `Rebuilding ${buildVariant} sandbox image` : "Rebuilding missing sandbox images"}
-          description={buildVariant === "aidream"
+          url={buildVariant === "orchestrator" ? API.ORCH_BUILD_STREAM : API.SANDBOX_IMAGES_REBUILD_MISSING_STREAM(buildVariant)}
+          title={buildVariant === "orchestrator"
+            ? "Rebuilding hosted orchestrator image"
+            : buildVariant ? `Rebuilding ${buildVariant} sandbox image` : "Rebuilding missing sandbox images"}
+          description={buildVariant === "orchestrator"
+            ? "Builds the hosted orchestrator image, applies its database migrations, then recreates the service. Running sandboxes are untouched."
+            : buildVariant === "aidream"
             ? "Builds matrx-sandbox:core first if needed, then matrx-sandbox:aidream. The aidream build is large — expect several minutes."
             : "Builds the missing required sandbox image(s) in dependency order."}
           onComplete={() => load()}

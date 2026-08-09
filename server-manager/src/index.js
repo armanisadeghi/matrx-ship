@@ -3188,9 +3188,11 @@ app.get("/api/sandbox-images/health", authMiddleware, async (_req, res) => {
     ...inspectImage(spec.tag),
   }));
   const orchestrator = inspectImage(ORCH_IMAGE_TAG);
-  // `missing` = every absent variant (informational). `missing_required` =
-  // absent variants the orchestrator actually spawns from (+ the orchestrator
-  // image) — this is the real "spawning is/'ll-be broken" alarm the banner uses.
+  // `missing` = every absent sandbox variant (informational).
+  // `missing_required` = absent templates the orchestrator actually spawns.
+  // The orchestrator image is reported separately: losing its local tag makes
+  // the next recreate unsafe, but does not stop the running service spawning
+  // sandboxes from templates that are still present.
   const missing = images.filter((i) => !i.present).map((i) => i.variant);
   // A variant that's missing BUT currently rebuilding shouldn't count as a
   // "required missing" alarm — it's mid-fix. Surface those separately as
@@ -3200,8 +3202,12 @@ app.get("/api/sandbox-images/health", authMiddleware, async (_req, res) => {
     .filter((i) => i.required && !i.present)
     .filter((i) => { const b = imageBuildInProgress(i.variant); if (b) { rebuilding.push(b); return false; } return true; })
     .map((i) => i.variant);
-  if (!orchestrator.present && !imageBuildInProgress("orchestrator")) missing_required.push("orchestrator");
-  res.json({ images, orchestrator, missing, missing_required, rebuilding, checked_at: new Date().toISOString() });
+  let orchestrator_missing = false;
+  if (!orchestrator.present) {
+    const b = imageBuildInProgress("orchestrator");
+    if (b) rebuilding.push(b); else orchestrator_missing = true;
+  }
+  res.json({ images, orchestrator, missing, missing_required, orchestrator_missing, rebuilding, checked_at: new Date().toISOString() });
 });
 
 // ── Fleet Health (read-only monitor) ────────────────────────────────────────
@@ -3288,13 +3294,18 @@ function checkSandboxImages() {
     const b = imageBuildInProgress(i.variant);
     if (b) rebuilding.push(b); else missingRequired.push(i.variant);
   }
-  if (!orch.present) { const b = imageBuildInProgress("orchestrator"); if (b) rebuilding.push(b); else missingRequired.push("orchestrator"); }
+  let orchestratorMissing = false;
+  if (!orch.present) {
+    const b = imageBuildInProgress("orchestrator");
+    if (b) rebuilding.push(b); else orchestratorMissing = true;
+  }
   const staleRequired = imgs.filter((i) => i.required && i.present && i.age_days != null && i.age_days > IMAGE_STALE_DAYS).map((i) => `${i.variant} (${i.age_days}d)`);
   let status = "ok", detail = "All required images present and fresh.";
   const actions = [];
   if (missingRequired.length) {
     status = "critical";
     detail = `Missing required image(s): ${missingRequired.join(", ")}. Sandboxes that spawn from these will fail until rebuilt.`;
+    if (orchestratorMissing) detail += " The hosted orchestrator recovery image is also missing; its next recreate will fail until rebuilt.";
     if (rebuilding.length) detail += ` (Also rebuilding now: ${rebuilding.map((b) => `${b.variant} ${b.age_seconds}s`).join(", ")}.)`;
     // One button per missing variant — each takes the user to the live-log
     // rebuild page (the build is heavy + streamed; one-shot wouldn't give
@@ -3308,11 +3319,30 @@ function checkSandboxImages() {
         note: `Opens the Sandboxes page where ${v} rebuilds with live build logs.`,
       });
     }
+    if (orchestratorMissing) {
+      actions.push({
+        label: "Rebuild orchestrator image",
+        action: "sandbox-image-rebuild",
+        variant: "orchestrator",
+        data_safe: true,
+        note: "Builds the hosted orchestrator image, applies its DB migrations, and recreates the service.",
+      });
+    }
   } else if (rebuilding.length) {
     // Nothing permanently missing — just builds in flight. Surface as a calm
     // "in progress" warning so the banner shows movement, not a red alarm.
     status = "warning";
     detail = `Rebuilding sandbox image(s): ${rebuilding.map((b) => `${b.variant} (${b.age_seconds}s, via ${b.source})`).join(", ")}. This clears automatically when the build finishes.`;
+  } else if (orchestratorMissing) {
+    status = "warning";
+    detail = "The hosted orchestrator recovery image is missing. The running service can still spawn sandboxes, but its next recreate will fail until the image is rebuilt.";
+    actions.push({
+      label: "Rebuild orchestrator image",
+      action: "sandbox-image-rebuild",
+      variant: "orchestrator",
+      data_safe: true,
+      note: "Builds the hosted orchestrator image, applies its DB migrations, and recreates the service.",
+    });
   } else if (staleRequired.length) {
     status = "warning";
     detail = `Stale required image(s) older than ${IMAGE_STALE_DAYS}d: ${staleRequired.join(", ")} — consider rebuilding.`;

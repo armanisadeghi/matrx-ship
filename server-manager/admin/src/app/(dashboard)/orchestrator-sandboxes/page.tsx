@@ -85,6 +85,7 @@ interface ImageHealth {
   orchestrator: ImageInfo;
   missing: string[];
   missing_required: string[];
+  orchestrator_missing: boolean;
   checked_at: string;
 }
 
@@ -516,6 +517,25 @@ export default function OrchestratorSandboxesPage() {
                 disabled={building !== null}
               >
                 <Hammer className="size-3" /> Rebuild all missing
+              </Button>
+            </div>
+          )}
+
+          {images?.orchestrator_missing && (
+            <div className="mt-3 flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/5 p-2 text-xs">
+              <AlertTriangle className="size-4 text-amber-500 shrink-0 mt-0.5" />
+              <span className="flex-1">
+                The hosted orchestrator recovery image is missing. The running service can still spawn sandboxes,
+                but its next recreate will fail until the image is rebuilt.
+              </span>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7"
+                onClick={() => runBuild("orchestrator image build", API.ORCH_BUILD_STREAM)}
+                disabled={building !== null}
+              >
+                <Hammer className="size-3" /> Rebuild orchestrator
               </Button>
             </div>
           )}
