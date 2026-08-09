@@ -3498,7 +3498,8 @@ async function checkHostedDeployFreshness() {
       signal: AbortSignal.timeout(8000),
     });
     if (!r.ok) return { id, label, status: "unknown", detail: `GitHub API ${r.status}`, actions: [] };
-    const mainSha = (await r.json()).sha || "";
+    const mainCommit = await r.json();
+    const mainSha = mainCommit.sha || "";
     // Since the 2026-07-22 promotion redesign the poller follows the
     // deploy/hosted ref (promoted by the Deploy workflow ONLY when tests
     // pass), never raw main. "Behind main" is therefore NOT stuck — it can be
@@ -3518,12 +3519,51 @@ async function checkHostedDeployFreshness() {
       const gateNote = mainSha !== deployed ? ` main is ahead (${mainSha.slice(0, 7)}) — the test gate hasn't approved it yet (see the 'deploys' check).` : "";
       return { id, label, status: "ok", detail: `Hosted tier is at the approved release (${deployed.slice(0, 7)}).${gateNote}`, actions: [] };
     }
-    if (ageMin < HOSTED_DEPLOY_STUCK_MINUTES) {
-      return { id, label, status: "ok", detail: `Deploying: hosted at ${deployed.slice(0, 7)}, approved release is ${approved.slice(0, 7)} (state ${ageMin}m old — poller has ${HOSTED_DEPLOY_STUCK_MINUTES - ageMin}m before this goes critical).`, actions: [] };
+
+    // The deployed-state file can be hours or days old simply because no
+    // releases happened. Its age is NOT the time the newly approved SHA has
+    // been waiting. Prefer the deploy-hosted build markers, which span the
+    // complete candidate-build -> live-promotion window. A fresh marker is
+    // positive proof that the poller is working, regardless of state-file age.
+    const activeBuilds = [...Object.keys(SANDBOX_IMAGE_VARIANTS), "orchestrator"]
+      .map((variant) => imageBuildInProgress(variant))
+      .filter(Boolean);
+    if (activeBuilds.length) {
+      return {
+        id, label, status: "warning",
+        detail: `Deploy in progress: approved ${approved.slice(0, 7)}, currently ${deployed.slice(0, 7)}; active build(s): ${activeBuilds.map((b) => `${b.variant} ${b.age_seconds}s`).join(", ")}.`,
+        actions: [],
+      };
+    }
+
+    // Between ref promotion and the first 2-minute poller tick there may be no
+    // marker yet. Use the approved commit's age for that grace window; never
+    // inherit the old deployed-state file's age onto a brand-new release.
+    let approvedAt = approved === mainSha
+      ? (mainCommit.commit?.committer?.date || mainCommit.commit?.author?.date)
+      : null;
+    if (!approvedAt) {
+      try {
+        const cr = await fetch(`https://api.github.com/repos/armanisadeghi/matrx-sandbox/commits/${encodeURIComponent(approved)}`, {
+          headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", "User-Agent": "matrx-manager" },
+          signal: AbortSignal.timeout(8000),
+        });
+        if (cr.ok) {
+          const commit = await cr.json();
+          approvedAt = commit.commit?.committer?.date || commit.commit?.author?.date || null;
+        }
+      } catch { /* state-file fallback below */ }
+    }
+    const approvedAgeMin = approvedAt
+      ? Math.max(0, Math.round((Date.now() - Date.parse(approvedAt)) / 60000))
+      : null;
+    const waitingMin = approvedAgeMin ?? ageMin;
+    if (waitingMin < HOSTED_DEPLOY_STUCK_MINUTES) {
+      return { id, label, status: "ok", detail: `Deploy queued: hosted at ${deployed.slice(0, 7)}, approved release is ${approved.slice(0, 7)} (${waitingMin}m into the ${HOSTED_DEPLOY_STUCK_MINUTES}m grace window).`, actions: [] };
     }
     return {
       id, label, status: "critical",
-      detail: `Hosted deploy poller STUCK: approved release is ${approved.slice(0, 7)} but hosted has been at ${deployed.slice(0, 7)} for ${ageMin} min. Every 2-min tick is failing the same way. Diagnose: journalctl -u matrx-hosted-deploy.service -n 100 (look for the FIRST error in a run — usually an image build).`,
+      detail: `Hosted deploy poller STUCK: approved release ${approved.slice(0, 7)} has waited ${waitingMin} min with no active build, while hosted remains at ${deployed.slice(0, 7)}. Diagnose: journalctl -u matrx-hosted-deploy.service -n 100 (look for the FIRST error in a run — usually an image build).`,
       actions: [],
     };
   } catch (e) {
