@@ -30,6 +30,12 @@ both running tiers with the tested `deploy/hosted` approval ref. The latest
 successful Deploy workflow is useful context, but it is neither the desired
 release nor proof of what is running.
 
+Legacy EC2 orchestrators may not expose `source_sha` yet. In that case the
+Manager reads `/home/ec2-user/orchestrator/.source-sha` over SSM while also
+requiring the systemd service to be active. If the GitHub approval ref cannot
+be read, say so and compare the two observed running tiers; never translate an
+authorization/API failure into “no approved release exists.”
+
 The separate **Recent deploys** check reports GitHub Actions history only; it
 must not claim that a workflow record proves a process is running that commit.
 

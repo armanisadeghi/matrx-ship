@@ -2869,7 +2869,7 @@ async function getSandboxRepoState() {
   const pat = process.env.GITHUB_PAT || "";
   const s = {
     mainSha: null, mainShort: null, hostedHead: null, hostedShort: null, hostedBehind: null,
-    approvedSha: null, approvedShort: null,
+    approvedSha: null, approvedShort: null, approvedError: null,
     deploySha: null, deployShort: null, deployWhen: null, deployUrl: null, deployFailures: 0,
     deployBehindMain: null, ghError: null,
   };
@@ -2889,7 +2889,13 @@ async function getSandboxRepoState() {
         const approved = await gh("/git/ref/heads/deploy%2Fhosted");
         s.approvedSha = approved.object?.sha || null;
         s.approvedShort = s.approvedSha ? s.approvedSha.slice(0, 7) : null;
-      } catch { /* absence is reported by the callers that need the ref */ }
+      } catch (refError) {
+        try {
+          const approvedCommit = await gh("/commits/deploy%2Fhosted");
+          s.approvedSha = approvedCommit.sha || null;
+          s.approvedShort = s.approvedSha ? s.approvedSha.slice(0, 7) : null;
+        } catch (commitError) { s.approvedError = `${refError.message}; commit fallback: ${commitError.message}`; }
+      }
       const runs = await gh("/actions/runs?per_page=20");
       const deploys = (runs.workflow_runs || []).filter((r) => r.name === "Deploy");
       const lastOk = deploys.find((r) => r.conclusion === "success");
@@ -3027,21 +3033,23 @@ async function buildVersionsReport() {
   // 3) EC2 orchestrator — compare the RUNNING source SHA with the tested
   //    approval ref. The successful workflow record is context, not truth.
   try {
-    let runtime = null;
-    try { runtime = await fetchOrchestratorRoot(EC2_ORCH_URL); } catch { /* */ }
-    const behind = !!runtime?.source_sha && !!repo.approvedSha ? runtime.source_sha !== repo.approvedSha : null;
+    let runtime = null, hostedRuntime = null;
+    try { runtime = await fetchEc2OrchestratorRuntime(); } catch { /* */ }
+    if (!repo.approvedSha) { try { hostedRuntime = await fetchOrchestratorRoot(ORCH_URL); } catch { /* */ } }
+    const expectedSha = repo.approvedSha || hostedRuntime?.source_sha || null;
+    const behind = !!runtime?.source_sha && !!expectedSha ? runtime.source_sha !== expectedSha : null;
     const status = !runtime ? "error" : behind == null ? "unknown" : behind ? "behind" : "ok";
     const when = repo.deployWhen ? new Date(repo.deployWhen).toLocaleString() : "?";
     systems.push({
       id: "orch-ec2", name: "Sandbox orchestrator — EC2 tier", kind: "orchestrator-ec2",
       current: `running source @ ${runtime?.source_sha?.slice(0, 7) || "?"}${runtime?.version ? ` (reports v${runtime.version})` : ""}`,
-      latest: `approved release @ ${repo.approvedShort || "?"}`,
+      latest: repo.approvedSha ? `approved release @ ${repo.approvedShort}` : `hosted runtime @ ${hostedRuntime?.source_sha?.slice(0, 7) || "?"} (approval ref unavailable)`,
       status,
       detail: (!runtime ? "EC2 orchestrator not responding. " : "")
         + (!runtime?.source_sha ? "The running service did not report source_sha, so freshness cannot be verified."
-          : !repo.approvedSha ? `Actually running ${runtime.source_sha.slice(0, 7)}, but the tested approval ref could not be read.`
-            : behind ? `Actually running ${runtime.source_sha.slice(0, 7)}, behind approved release ${repo.approvedShort}. The latest successful Deploy record is ${repo.deployShort || "missing"} (${when}) — trigger a deploy.`
-              : `Actually running ${runtime.source_sha.slice(0, 7)}, matching approved release ${repo.approvedShort}. Latest successful Deploy record: ${repo.deployShort || "missing"} (${when}).`)
+          : !expectedSha ? `Actually running ${runtime.source_sha.slice(0, 7)} via ${runtime.source_sha_via || "runtime observation"}, but neither the approval ref nor hosted runtime could be read.`
+            : behind ? `Actually running ${runtime.source_sha.slice(0, 7)} via ${runtime.source_sha_via || "runtime observation"}, behind ${repo.approvedSha ? `approved release ${repo.approvedShort}` : `hosted runtime ${hostedRuntime.source_sha.slice(0, 7)}`}. The latest successful Deploy record is ${repo.deployShort || "missing"} (${when}) — trigger a deploy.`
+              : `Actually running ${runtime.source_sha.slice(0, 7)}, matching ${repo.approvedSha ? `approved release ${repo.approvedShort}` : "the hosted runtime"}. Latest successful Deploy record: ${repo.deployShort || "missing"} (${when}).`)
         + (repo.deployFailures ? ` ⚠ ${repo.deployFailures} of the last 5 deploys failed.` : "")
         + " (Note: the version NUMBER it reports is not a freshness signal — it's been reset across commits.)",
       update: behind
@@ -3239,13 +3247,27 @@ async function fetchOrchestratorRoot(url) {
   return { version: d.version, source_sha: d.source_sha || null, tier: d.tier, passthrough_total: ap.total_keys, passthrough_configured: ap.configured_count };
 }
 
+async function fetchEc2OrchestratorRuntime() {
+  const runtime = await fetchOrchestratorRoot(EC2_ORCH_URL);
+  if (runtime.source_sha) return { ...runtime, source_sha_via: "service API" };
+  // Older EC2 orchestrators predate source_sha in `/`. The atomic deploy
+  // writes the live release marker beside the running code, so read that real
+  // host state over SSM instead of falling back to a workflow record.
+  const h = FLEET_HOSTS["matrx-sandbox-host-dev"];
+  const r = await ssmRun(h.instanceId,
+    "test \"$(systemctl is-active matrx-orchestrator)\" = active && cat /home/ec2-user/orchestrator/.source-sha 2>/dev/null",
+    { timeout: 60, comment: "orchestrator:observe-source-sha" });
+  const sha = (r.stdout || "").trim().split("\n").pop();
+  return { ...runtime, source_sha: r.status === "Success" && /^[0-9a-f]{40}$/.test(sha) ? sha : null, source_sha_via: "host SSM marker" };
+}
+
 async function checkOrchestratorDrift() {
   // Freshness is judged by the source SHA reported by each RUNNING
   // orchestrator, never by a deploy record or version string. Both tiers are
   // expected to run the tested approval ref.
   let hosted, ec2, hErr, eErr;
   try { hosted = await fetchOrchestratorRoot(ORCH_URL); } catch (e) { hErr = e.message; }
-  try { ec2 = await fetchOrchestratorRoot(EC2_ORCH_URL); } catch (e) { eErr = e.message; }
+  try { ec2 = await fetchEc2OrchestratorRuntime(); } catch (e) { eErr = e.message; }
   const repo = await getSandboxRepoState();
   const actions = [];
   if (hErr) {
@@ -3278,8 +3300,11 @@ async function checkOrchestratorDrift() {
     actions.push({ label: "Trigger GitHub Deploy (EC2)", action: "ec2-trigger-deploy", data_safe: true, note: "Dispatches the matrx-sandbox 'Deploy' workflow on main; redeploys EC2 in ~3-5 min via SSM." });
   } else if (!ec2?.source_sha) {
     warnings.push("EC2 orchestrator did not report its running source SHA, so freshness cannot be verified.");
+  } else if (!repo.approvedSha && hosted?.source_sha && ec2.source_sha !== hosted.source_sha) {
+    warnings.push(`Cross-tier runtime drift: hosted is actually running ${hosted.source_sha.slice(0, 7)}, while EC2 is actually running ${ec2.source_sha.slice(0, 7)} (observed via ${ec2.source_sha_via}). The approval ref is unavailable (${repo.approvedError || "unknown reason"}).`);
+    actions.push({ label: "Trigger GitHub Deploy (EC2)", action: "ec2-trigger-deploy", data_safe: true, note: "Dispatches the matrx-sandbox 'Deploy' workflow on main; redeploys EC2 in ~3-5 min via SSM." });
   } else if (!repo.approvedSha) {
-    warnings.push(`EC2 orchestrator is running ${ec2.source_sha.slice(0, 7)}, but the tested approval ref could not be read.`);
+    warnings.push(`Both running tiers report ${ec2.source_sha.slice(0, 7)}, but the tested approval ref could not be read (${repo.approvedError || "unknown reason"}), so intended-release freshness is unverified.`);
   } else if (ec2.source_sha !== repo.approvedSha) {
     warnings.push(`EC2 orchestrator is actually running ${ec2.source_sha.slice(0, 7)}, not approved release ${repo.approvedShort}. The latest successful Deploy record is ${repo.deployShort || "missing"}.`);
     actions.push({ label: "Trigger GitHub Deploy (EC2)", action: "ec2-trigger-deploy", data_safe: true, note: "Dispatches the matrx-sandbox 'Deploy' workflow on main; redeploys EC2 in ~3-5 min via SSM." });
@@ -3524,16 +3549,25 @@ async function checkHostedDeployFreshness() {
     // deploy/hosted ref (promoted by the Deploy workflow ONLY when tests
     // pass), never raw main. "Behind main" is therefore NOT stuck — it can be
     // the test gate correctly holding a broken commit off production.
-    let approved = null;
+    let approved = null, approvedError = null;
     try {
       const ar = await fetch("https://api.github.com/repos/armanisadeghi/matrx-sandbox/git/ref/heads/deploy%2Fhosted", {
         headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", "User-Agent": "matrx-manager" },
         signal: AbortSignal.timeout(8000),
       });
       if (ar.ok) approved = (await ar.json()).object?.sha || null;
-    } catch { /* */ }
+      else approvedError = `ref API HTTP ${ar.status}`;
+      if (!approved) {
+        const cr = await fetch("https://api.github.com/repos/armanisadeghi/matrx-sandbox/commits/deploy%2Fhosted", {
+          headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", "User-Agent": "matrx-manager" },
+          signal: AbortSignal.timeout(8000),
+        });
+        if (cr.ok) approved = (await cr.json()).sha || null;
+        else approvedError = `${approvedError || "ref unavailable"}; commit API HTTP ${cr.status}`;
+      }
+    } catch (e) { approvedError = e.message; }
     if (!approved) {
-      return { id, label, status: "warning", detail: `No approved release exists (deploy/hosted ref missing) — the Deploy workflow's test gate has not passed since the promotion redesign. Hosted stays safely at ${deployed.slice(0, 7)}. Check the latest matrx-sandbox Deploy run.`, actions: [] };
+      return { id, label, status: "unknown", detail: `Could not read the tested deploy/hosted approval ref (${approvedError || "no SHA returned"}). Hosted is observed at ${deployed.slice(0, 7)}, but intended-release freshness cannot be verified.`, actions: [] };
     }
     if (approved === deployed) {
       const gateNote = mainSha !== deployed ? ` main is ahead (${mainSha.slice(0, 7)}) — the test gate hasn't approved it yet (see the 'deploys' check).` : "";
