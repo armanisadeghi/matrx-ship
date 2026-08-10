@@ -16,7 +16,15 @@ import { api, API, ApiError } from "@/lib/api";
 
 interface Store { id: string; label: string; kind: "app" | "infra" | "ec2"; exists: boolean; key_count: number | null; note: string | null; remote?: boolean; host?: string; can_restart?: boolean }
 interface Entry { key: string; value: string; masked: boolean; length: number }
-interface EntriesResp { id: string; label: string; kind: string; note: string | null; exists: boolean; entries: Entry[] }
+interface ObservedService {
+  deployed: boolean; exists: boolean; running: boolean; image: string | null; version: string | null;
+  version_source: string | null; recorded_version: string | null; record_matches_runtime: boolean | null;
+  local_health: number | null; edge_health?: number | null; observed_at: string;
+}
+interface EntriesResp {
+  id: string; label: string; kind: string; note: string | null; note_level?: "success" | "info" | "warning" | "error";
+  exists: boolean; entries: Entry[]; can_apply?: boolean; apply_state?: "available" | "unavailable" | "unknown"; observed?: ObservedService | null;
+}
 
 export default function SecretsPage() {
   const { isSuperadmin } = useAuth();
@@ -42,11 +50,13 @@ export default function SecretsPage() {
   const [applying, setApplying] = useState(false);
 
   async function applyRestart() {
-    if (!selected) return;
+    if (!selected || applying || data?.can_apply === false) return;
     setApplying(true);
     try {
-      await api(`/api/secrets/restart?id=${encodeURIComponent(selected)}`, { method: "POST" });
-      toast.success("Service restarted — env changes are live.");
+      const r = await api<{ observed?: ObservedService | null }>(`/api/secrets/restart?id=${encodeURIComponent(selected)}`, { method: "POST" });
+      const runtime = r.observed?.image ? ` Running ${r.observed.image}, health ${r.observed.local_health}.` : "";
+      toast.success(`Service restarted — env changes are live.${runtime}`);
+      await loadEntries(selected, revealed);
     } catch (e) {
       toast.error(e instanceof ApiError ? e.message : String(e));
     } finally {
@@ -75,12 +85,12 @@ export default function SecretsPage() {
   const loadEntries = useCallback(async (id: string, reveal: boolean) => {
     setEntriesLoading(true);
     try { setData(await api<EntriesResp>(API.SECRET_ENTRIES(id, reveal))); }
-    catch (e) { toast.error(e instanceof Error ? e.message : String(e)); }
+    catch (e) { setData(null); toast.error(e instanceof Error ? e.message : String(e)); }
     finally { setEntriesLoading(false); }
   }, []);
 
   useEffect(() => { if (isSuperadmin) loadStores(); }, [isSuperadmin, loadStores]);
-  useEffect(() => { if (selected) { setEditKey(null); setAdding(false); loadEntries(selected, revealed); } }, [selected, revealed, loadEntries]);
+  useEffect(() => { if (selected) { setData(null); setEditKey(null); setAdding(false); loadEntries(selected, revealed); } }, [selected, revealed, loadEntries]);
 
   async function save(key: string, value: string) {
     if (!selected) return;
@@ -123,6 +133,14 @@ export default function SecretsPage() {
   if (!isSuperadmin) return null; // layout shows the super-admin gate
 
   const shown = (data?.entries || []).filter((e) => !filter || e.key.toLowerCase().includes(filter.toLowerCase()));
+  const selectedStore = stores.find((s) => s.id === selected);
+  const showApply = !!selectedStore?.can_restart;
+  const applyAvailable = data?.can_apply ?? false;
+  const noteClass = data?.note_level === "success"
+    ? "text-emerald-800 dark:text-emerald-300 bg-emerald-500/10"
+    : data?.note_level === "error"
+      ? "text-destructive bg-destructive/10"
+      : "text-amber-700 dark:text-amber-400 bg-amber-500/10";
 
   return (
     <PageShell
@@ -174,15 +192,23 @@ export default function SecretsPage() {
                 {revealed ? <EyeOff className="size-4" /> : <Eye className="size-4" />} {revealed ? "Hide" : "Reveal"} values
               </Button>
               <Button size="sm" onClick={() => { setAdding(true); setEditKey(null); }}><Plus className="size-4" /> Add</Button>
-              {stores.find((s) => s.id === selected)?.can_restart && (
-                <Button size="sm" variant="destructive" onClick={applyRestart} disabled={applying}>
-                  {applying ? <Loader2 className="size-4 animate-spin" /> : <RotateCcw className="size-4" />} Apply (restart)
+              {showApply && (
+                <Button
+                  size="sm"
+                  variant={applying ? "default" : applyAvailable ? "destructive" : "outline"}
+                  className={applying ? "disabled:opacity-100 bg-blue-600 text-white cursor-wait" : ""}
+                  onClick={applyRestart}
+                  disabled={applying || entriesLoading || !applyAvailable}
+                  title={data?.note || undefined}
+                >
+                  {applying ? <Loader2 className="size-4 animate-spin" /> : <RotateCcw className="size-4" />}
+                  {applying ? "Applying — waiting for health…" : entriesLoading ? "Checking Apply…" : applyAvailable ? "Apply (restart)" : "Apply unavailable"}
                 </Button>
               )}
             </div>
 
             {data?.note && (
-              <div className="text-xs text-amber-700 dark:text-amber-400 bg-amber-500/10 rounded px-3 py-1.5 flex items-center gap-1.5">
+              <div className={`text-xs rounded px-3 py-1.5 flex items-center gap-1.5 ${noteClass}`}>
                 <ShieldAlert className="size-3.5 shrink-0" /> {data.note}
               </div>
             )}

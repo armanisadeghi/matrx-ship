@@ -27,6 +27,13 @@ interface Service {
   id: string; label: string; host: string; container: string; port: number;
   public_base: string; health_path: string; env_file: string; pypi_package: string;
   edge_health: number | null; pypi_latest: string | null; deployed: string | null;
+  deployment_state: "deployed" | "unhealthy" | "stopped" | "not_deployed" | "unknown";
+  observed: {
+    observed_at: string; exists: boolean; running: boolean; deployed: boolean; image: string | null;
+    package_version: string | null; version: string | null; version_source: string | null;
+    recorded_version: string | null; record_matches_runtime: boolean | null; local_health: number | null;
+  } | null;
+  observation_error: string | null;
   auto_deploy: boolean; published: boolean;
 }
 
@@ -100,8 +107,8 @@ export default function ServicesPage() {
           </CardContent></Card>
         )}
         {services.map((s) => {
-          const healthy = s.edge_health === 200;
-          const current = !!s.deployed && !!s.pypi_latest && s.deployed === s.pypi_latest;
+          const healthy = s.deployment_state === "deployed" && s.edge_health === 200;
+          const current = healthy && !!s.deployed && !!s.pypi_latest && s.deployed === s.pypi_latest;
           const unpublished = !s.published;
           return (
             <Card key={s.id}>
@@ -109,9 +116,11 @@ export default function ServicesPage() {
                 <div className="flex items-center gap-2 flex-wrap">
                   <Boxes className="size-4 shrink-0" />
                   <span className="font-semibold">{s.label}</span>
-                  {healthy
+                  {s.observation_error
+                    ? <Badge variant="secondary"><AlertTriangle className="size-3 mr-1" /> runtime unknown</Badge>
+                    : healthy
                     ? <Badge variant="success"><CheckCircle2 className="size-3 mr-1" /> healthy</Badge>
-                    : <Badge variant="destructive"><AlertTriangle className="size-3 mr-1" /> {s.edge_health ? `HTTP ${s.edge_health}` : "unreachable"}</Badge>}
+                    : <Badge variant="destructive"><AlertTriangle className="size-3 mr-1" /> {s.deployment_state === "not_deployed" ? "not deployed (observed)" : s.deployment_state === "stopped" ? "container stopped" : s.edge_health ? `unhealthy · edge ${s.edge_health}` : "unhealthy · edge unreachable"}</Badge>}
                   {unpublished
                     ? <Badge variant="secondary">not published to PyPI yet</Badge>
                     : current
@@ -141,6 +150,19 @@ export default function ServicesPage() {
                     <KeySquare className="size-3" /> env: {s.env_file}
                   </Link>
                 </div>
+                {s.observed && (
+                  <div className="text-xs rounded bg-muted/40 px-3 py-2 flex flex-wrap gap-x-4 gap-y-1">
+                    <span>Observed image <code>{s.observed.image || "none"}</code></span>
+                    <span>local health {s.observed.local_health || "unreachable"}</span>
+                    <span>{s.observed.version_source || "runtime version"}: {s.observed.version || "unknown"}</span>
+                    <span>{s.observed.recorded_version
+                      ? s.observed.record_matches_runtime === false
+                        ? `CURRENT record ${s.observed.recorded_version} does not match runtime`
+                        : `CURRENT record ${s.observed.recorded_version} matches runtime`
+                      : "No CURRENT version record; runtime inspection is authoritative"}</span>
+                  </div>
+                )}
+                {s.observation_error && <div className="text-xs text-destructive">Host observation failed: {s.observation_error}</div>}
                 {logsFor === s.id && (
                   <div className="space-y-1">
                     <div className="flex items-center justify-between">

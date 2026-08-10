@@ -2858,10 +2858,9 @@ app.post("/api/orchestrator-sandboxes-migrate-all", authMiddleware, requireRole(
 // Truthful freshness for the matrx-sandbox repo, by GIT COMMIT — NOT the version
 // string (which has been reset across commits, e.g. 0.3.0 -> 0.1.2, so version
 // numbers are NOT monotonic and must never be used to judge "newer"). Compares:
-//   • origin/main HEAD sha (GitHub API)
-//   • the EC2 deploy: the latest SUCCESSFUL "Deploy" run's commit (EC2 deploys
-//     via GitHub Actions). EC2 is current when that == main HEAD.
-//   • the hosted orchestrator: the /srv clone's HEAD (it's built from there).
+//   • origin/main HEAD + the tested deploy/hosted approval ref (GitHub API)
+//   • the latest SUCCESSFUL "Deploy" run's commit (a record for comparison)
+// Running truth comes separately from each orchestrator's / source_sha.
 // Cached 60s (this is hit by Versions + the 30s-refresh Fleet Health).
 let _sbxRepoCache = { ts: 0, data: null };
 async function getSandboxRepoState() {
@@ -2870,8 +2869,9 @@ async function getSandboxRepoState() {
   const pat = process.env.GITHUB_PAT || "";
   const s = {
     mainSha: null, mainShort: null, hostedHead: null, hostedShort: null, hostedBehind: null,
+    approvedSha: null, approvedShort: null,
     deploySha: null, deployShort: null, deployWhen: null, deployUrl: null, deployFailures: 0,
-    ec2Behind: null, ghError: null,
+    deployBehindMain: null, ghError: null,
   };
   const h = exec(`git -C ${SANDBOX_PROJECT} rev-parse HEAD 2>/dev/null`);
   s.hostedHead = (h.output || "").trim() || null;
@@ -2885,12 +2885,17 @@ async function getSandboxRepoState() {
       };
       const main = await gh("/commits/main");
       s.mainSha = main.sha; s.mainShort = (main.sha || "").slice(0, 7);
+      try {
+        const approved = await gh("/git/ref/heads/deploy%2Fhosted");
+        s.approvedSha = approved.object?.sha || null;
+        s.approvedShort = s.approvedSha ? s.approvedSha.slice(0, 7) : null;
+      } catch { /* absence is reported by the callers that need the ref */ }
       const runs = await gh("/actions/runs?per_page=20");
       const deploys = (runs.workflow_runs || []).filter((r) => r.name === "Deploy");
       const lastOk = deploys.find((r) => r.conclusion === "success");
       if (lastOk) { s.deploySha = lastOk.head_sha; s.deployShort = (lastOk.head_sha || "").slice(0, 7); s.deployWhen = lastOk.created_at; s.deployUrl = lastOk.html_url; }
       s.deployFailures = deploys.slice(0, 5).filter((r) => r.conclusion === "failure").length;
-      s.ec2Behind = s.mainSha && s.deploySha ? s.deploySha !== s.mainSha : null;
+      s.deployBehindMain = s.mainSha && s.deploySha ? s.deploySha !== s.mainSha : null;
     } catch (e) { s.ghError = e.message; }
   }
   s.hostedBehind = s.mainSha && s.hostedHead ? s.hostedHead !== s.mainSha : null;
@@ -2902,20 +2907,24 @@ async function getSandboxRepoState() {
 async function buildVersionsReport() {
   const systems = [];
 
-  // 0) The Server Manager itself (THIS admin UI). It's a separate image
-  //    (matrx-ship-manager) that's rebuilt + redeployed on every change, so it's
-  //    current by construction. Shown first so it's clear the tool you're using
-  //    is NOT the same thing as the app-portal image below.
+  // 0) The Server Manager itself (THIS admin UI). Compare the running
+  //    container image ID with the local latest image; never call it current
+  //    merely because the deploy pipeline is supposed to recreate it.
   try {
     const mgr = inspectImage("matrx-ship-manager:latest");
+    const running = exec("docker inspect matrx-manager --format '{{.Image}}' 2>/dev/null");
+    const runningId = (running.output || "").trim().replace("sha256:", "").slice(0, 12) || null;
+    const current = !!runningId && !!mgr.id && runningId === mgr.id;
     const ageH = mgr.created ? Math.floor((Date.now() - new Date(mgr.created).getTime()) / 3600000) : null;
     const age = ageH == null ? "" : ageH < 24 ? `${ageH}h old` : `${Math.floor(ageH / 24)}d old`;
     systems.push({
       id: "manager", name: "Server Manager (this admin UI)", kind: "manager",
-      current: `image ${mgr.id || "?"}${age ? ` · ${age}` : ""}`,
-      latest: "rebuilt on every deploy",
-      status: "ok",
-      detail: "This very app. It's its own image and is rebuilt + redeployed whenever a change ships, so it's always current — it is NOT the 'app portals' image below.",
+      current: `running image ${runningId || "unknown"}`,
+      latest: `local latest ${mgr.id || "unknown"}${age ? ` · ${age}` : ""}`,
+      status: current ? "ok" : runningId && mgr.id ? "behind" : "unknown",
+      detail: current
+        ? "Observed the running matrx-manager container on the current matrx-ship-manager:latest image."
+        : "The running Manager image could not be verified as matrx-ship-manager:latest. The host deploy poller should recreate it; if this persists, inspect matrx-ship-deploy.service.",
       update: null,
     });
   } catch { /* */ }
@@ -2989,22 +2998,23 @@ async function buildVersionsReport() {
 
   const repo = await getSandboxRepoState();
 
-  // 2) Hosted orchestrator — is the /srv clone it's built from at origin/main?
-  //    (By git commit, NOT version string — see getSandboxRepoState.)
+  // 2) Hosted orchestrator — compare the RUNNING source SHA reported by the
+  //    service with the tested deploy/hosted approval ref.
   try {
-    let reachable = false;
-    try { await fetchOrchestratorRoot(ORCH_URL); reachable = true; } catch { /* */ }
-    const behind = repo.hostedBehind === true;
-    const status = !reachable ? "error" : repo.hostedBehind == null ? "unknown" : behind ? "behind" : "ok";
+    let runtime = null;
+    try { runtime = await fetchOrchestratorRoot(ORCH_URL); } catch { /* */ }
+    const behind = !!runtime?.source_sha && !!repo.approvedSha ? runtime.source_sha !== repo.approvedSha : null;
+    const status = !runtime ? "error" : behind == null ? "unknown" : behind ? "behind" : "ok";
     systems.push({
       id: "orch-hosted", name: "Sandbox orchestrator — hosted", kind: "orchestrator",
-      current: `code @ ${repo.hostedShort || "?"}`,
-      latest: `origin/main @ ${repo.mainShort || "?"}`,
+      current: `running source @ ${runtime?.source_sha?.slice(0, 7) || "?"}`,
+      latest: `approved release @ ${repo.approvedShort || "?"}`,
       status,
-      detail: !reachable ? "Orchestrator not responding."
-        : repo.hostedBehind == null ? "Couldn't compare to origin (GitHub check unavailable)."
-          : behind ? "The /srv source it's built from is behind origin/main — pull latest, rebuild, and restart."
-            : "Built from origin/main — current.",
+      detail: !runtime ? "Orchestrator not responding."
+        : !runtime.source_sha ? "The running orchestrator did not report source_sha, so freshness cannot be verified."
+          : !repo.approvedSha ? `Running ${runtime.source_sha.slice(0, 7)}, but the deploy/hosted approval ref could not be read.`
+            : behind ? `Actually running ${runtime.source_sha.slice(0, 7)}, behind approved release ${repo.approvedShort}.`
+              : `Running source ${runtime.source_sha.slice(0, 7)} matches the tested deploy/hosted approval ref.`,
       update: behind
         ? {
           action: "orch-pull-redeploy", label: "Pull latest + rebuild + restart", data_safe: true,
@@ -3014,23 +3024,24 @@ async function buildVersionsReport() {
     });
   } catch (e) { systems.push({ id: "orch-hosted", name: "Sandbox orchestrator — hosted", kind: "orchestrator", status: "error", detail: String(e.message), update: null }); }
 
-  // 3) EC2 orchestrator — deploys via GitHub Actions. Current when the latest
-  //    SUCCESSFUL Deploy run shipped origin/main HEAD (by commit, not version).
+  // 3) EC2 orchestrator — compare the RUNNING source SHA with the tested
+  //    approval ref. The successful workflow record is context, not truth.
   try {
-    let reachable = false; let runningVer = null;
-    try { runningVer = (await fetchOrchestratorRoot(EC2_ORCH_URL)).version; reachable = true; } catch { /* */ }
-    const behind = repo.ec2Behind === true;
-    const status = !reachable ? "error" : repo.ec2Behind == null ? "unknown" : behind ? "behind" : "ok";
+    let runtime = null;
+    try { runtime = await fetchOrchestratorRoot(EC2_ORCH_URL); } catch { /* */ }
+    const behind = !!runtime?.source_sha && !!repo.approvedSha ? runtime.source_sha !== repo.approvedSha : null;
+    const status = !runtime ? "error" : behind == null ? "unknown" : behind ? "behind" : "ok";
     const when = repo.deployWhen ? new Date(repo.deployWhen).toLocaleString() : "?";
     systems.push({
       id: "orch-ec2", name: "Sandbox orchestrator — EC2 tier", kind: "orchestrator-ec2",
-      current: `deployed @ ${repo.deployShort || "?"}${runningVer ? ` (reports v${runningVer})` : ""}`,
-      latest: `origin/main @ ${repo.mainShort || "?"}`,
+      current: `running source @ ${runtime?.source_sha?.slice(0, 7) || "?"}${runtime?.version ? ` (reports v${runtime.version})` : ""}`,
+      latest: `approved release @ ${repo.approvedShort || "?"}`,
       status,
-      detail: (!reachable ? "EC2 orchestrator not responding. " : "")
-        + (repo.ec2Behind == null ? "Couldn't compare to origin (GitHub check unavailable)."
-          : behind ? `The latest deploy (${repo.deployShort}, ${when}) is behind origin/main (${repo.mainShort}) — trigger a deploy.`
-            : `Up to date — latest GitHub Actions deploy shipped origin/main (${repo.deployShort}) on ${when}.`)
+      detail: (!runtime ? "EC2 orchestrator not responding. " : "")
+        + (!runtime?.source_sha ? "The running service did not report source_sha, so freshness cannot be verified."
+          : !repo.approvedSha ? `Actually running ${runtime.source_sha.slice(0, 7)}, but the tested approval ref could not be read.`
+            : behind ? `Actually running ${runtime.source_sha.slice(0, 7)}, behind approved release ${repo.approvedShort}. The latest successful Deploy record is ${repo.deployShort || "missing"} (${when}) — trigger a deploy.`
+              : `Actually running ${runtime.source_sha.slice(0, 7)}, matching approved release ${repo.approvedShort}. Latest successful Deploy record: ${repo.deployShort || "missing"} (${when}).`)
         + (repo.deployFailures ? ` ⚠ ${repo.deployFailures} of the last 5 deploys failed.` : "")
         + " (Note: the version NUMBER it reports is not a freshness signal — it's been reset across commits.)",
       update: behind
@@ -3225,13 +3236,13 @@ async function fetchOrchestratorRoot(url) {
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
   const d = await r.json();
   const ap = (d.integrations && d.integrations.aidream_passthrough) || {};
-  return { version: d.version, tier: d.tier, passthrough_total: ap.total_keys, passthrough_configured: ap.configured_count };
+  return { version: d.version, source_sha: d.source_sha || null, tier: d.tier, passthrough_total: ap.total_keys, passthrough_configured: ap.configured_count };
 }
 
 async function checkOrchestratorDrift() {
-  // Freshness is judged by GIT COMMIT vs origin/main — NOT the version string
-  // (which has been reset across commits and is therefore meaningless for
-  // "newer/older"). See getSandboxRepoState.
+  // Freshness is judged by the source SHA reported by each RUNNING
+  // orchestrator, never by a deploy record or version string. Both tiers are
+  // expected to run the tested approval ref.
   let hosted, ec2, hErr, eErr;
   try { hosted = await fetchOrchestratorRoot(ORCH_URL); } catch (e) { hErr = e.message; }
   try { ec2 = await fetchOrchestratorRoot(EC2_ORCH_URL); } catch (e) { eErr = e.message; }
@@ -3251,17 +3262,26 @@ async function checkOrchestratorDrift() {
 
   const warnings = [];
 
-  // Hosted: built from the /srv clone — flag if that's behind origin/main.
-  if (repo.hostedBehind === true) {
-    warnings.push(`Hosted orchestrator is built from a /srv clone that is behind origin/main (${repo.hostedShort} vs ${repo.mainShort}).`);
+  if (!hosted?.source_sha) {
+    warnings.push("Hosted orchestrator did not report its running source SHA, so freshness cannot be verified.");
+  } else if (!repo.approvedSha) {
+    warnings.push(`Hosted orchestrator is running ${hosted.source_sha.slice(0, 7)}, but the deploy/hosted approval ref could not be read.`);
+  } else if (hosted.source_sha !== repo.approvedSha) {
+    warnings.push(`Hosted orchestrator is actually running ${hosted.source_sha.slice(0, 7)}, not approved release ${repo.approvedShort}.`);
     actions.push({ label: "Pull + rebuild hosted orchestrator", action: "orch-pull-redeploy", data_safe: true, note: "git pull /srv clone to origin/main, rebuild image, recreate container. No user data on the orchestrator." });
   }
-  // EC2: GHA-deployed — flag if the last successful deploy isn't origin/main.
+  // EC2: compare the running process' source SHA with the same tested approval
+  // ref. Keep the successful workflow record as context only; it is not the
+  // desired release and cannot prove what is running.
   if (eErr) {
     warnings.push(`EC2 orchestrator unreachable (${eErr}).`);
     actions.push({ label: "Trigger GitHub Deploy (EC2)", action: "ec2-trigger-deploy", data_safe: true, note: "Dispatches the matrx-sandbox 'Deploy' workflow on main; redeploys EC2 in ~3-5 min via SSM." });
-  } else if (repo.ec2Behind === true) {
-    warnings.push(`EC2's last successful deploy (${repo.deployShort}) is behind origin/main (${repo.mainShort}).`);
+  } else if (!ec2?.source_sha) {
+    warnings.push("EC2 orchestrator did not report its running source SHA, so freshness cannot be verified.");
+  } else if (!repo.approvedSha) {
+    warnings.push(`EC2 orchestrator is running ${ec2.source_sha.slice(0, 7)}, but the tested approval ref could not be read.`);
+  } else if (ec2.source_sha !== repo.approvedSha) {
+    warnings.push(`EC2 orchestrator is actually running ${ec2.source_sha.slice(0, 7)}, not approved release ${repo.approvedShort}. The latest successful Deploy record is ${repo.deployShort || "missing"}.`);
     actions.push({ label: "Trigger GitHub Deploy (EC2)", action: "ec2-trigger-deploy", data_safe: true, note: "Dispatches the matrx-sandbox 'Deploy' workflow on main; redeploys EC2 in ~3-5 min via SSM." });
   }
   if (repo.deployFailures) {
@@ -3273,7 +3293,7 @@ async function checkOrchestratorDrift() {
   }
 
   const status = warnings.length ? "warning" : "ok";
-  const detail = warnings.join("; ") || "Orchestrators are on origin/main. (Version numbers reported by each tier are not freshness signals.)";
+  const detail = warnings.join("; ") || `Running source SHAs verified: hosted ${hosted.source_sha.slice(0, 7)} and EC2 ${ec2.source_sha.slice(0, 7)} both match approved release ${repo.approvedShort}. Version numbers and workflow records are not runtime freshness signals.`;
   return { id: "orchestrator-drift", label: "Orchestrator freshness", status, detail, hosted, ec2, repo, actions };
 }
 
@@ -3611,9 +3631,9 @@ app.get("/api/fleet-health", authMiddleware, async (_req, res) => {
 // version on failure. One auto-attempt per version (persistent ledger) so a
 // broken release stays loudly stuck instead of loop-building.
 // One registry, one code path. Everything that differs between services lives
-// in the entry below; every function takes `svc`. matrx-seo (the first domain
-// vertical) is NOT deployed yet — its PyPI package 404s and the box has no
-// container, so it degrades to "not deployed" everywhere instead of alarming.
+// in the entry below; every function takes `svc`. Deployment and version state
+// always come from the live container; CURRENT is reported only as a separate
+// operator record and is never allowed to impersonate runtime truth.
 const MICROSERVICES = {
   "matrx-files": {
     id: "matrx-files",
@@ -3658,22 +3678,23 @@ const MICROSERVICES = {
     attemptsFile: "/host-srv/apps/deploy-state/matrx-seo-attempts.json",
   },
 };
-const _msDeployed = {}; // id -> cache of last-known deployed version
-
 function microservice(id) { return MICROSERVICES[id] || null; }
 
 // The one `docker run` line for a service, shared by the upgrade swap, the
 // rollback, and the Secrets "Apply" restart — so they can never drift.
-function msDockerRun(svc, tag) {
+function msDockerRunImage(svc, image) {
   const extra = svc.dockerRunExtraArgs ? `${svc.dockerRunExtraArgs} ` : "";
-  return `sudo docker run -d --name ${svc.container} --restart unless-stopped -p 127.0.0.1:${svc.port}:${svc.port} ${extra}--env-file ${svc.envFile} ${svc.container}:${tag} >/dev/null`;
+  return `sudo docker run -d --name ${svc.container} --restart unless-stopped -p 127.0.0.1:${svc.port}:${svc.port} ${extra}--env-file ${svc.envFile} ${image} >/dev/null`;
 }
+function msDockerRun(svc, tag) { return msDockerRunImage(svc, `${svc.container}:${tag}`); }
 function msLocalHealthUrl(svc) { return `http://127.0.0.1:${svc.port}${svc.healthPath}`; }
 
 // Re-runs the container at its current version (env is read at RUN time only —
-// a plain `docker restart` would keep the old env). Used by the Secrets store.
+// a plain `docker restart` would keep the old env). The image reference comes
+// from docker inspect, never CURRENT; a missing container fails before anything
+// is removed. Used by the Secrets store.
 function msRestartCommand(svc) {
-  return `V=$(cat ${svc.optDir}/CURRENT 2>/dev/null || sudo docker inspect ${svc.container} --format '{{.Config.Image}}' | cut -d: -f2); sudo docker rm -f ${svc.container} >/dev/null 2>&1 || true; ${msDockerRun(svc, "$V")} && for i in $(seq 1 20); do sleep 3; code=$(curl -s -o /dev/null -w '%{http_code}' -m 4 ${msLocalHealthUrl(svc)} || true); [ "$code" = 200 ] && break; done; echo health:$code version:$V`;
+  return `IMAGE=$(sudo docker inspect ${svc.container} --format '{{.Config.Image}}' 2>/dev/null); [ -n "$IMAGE" ] || { echo 'APPLY_UNAVAILABLE: live container image not found'; exit 3; }; sudo docker image inspect "$IMAGE" >/dev/null 2>&1 || { echo "APPLY_UNAVAILABLE: image $IMAGE is not present"; exit 3; }; sudo docker rm -f ${svc.container} >/dev/null; ${msDockerRunImage(svc, '"$IMAGE"')} || exit 1; code=000; for i in $(seq 1 20); do sleep 3; code=$(curl -s -o /dev/null -w '%{http_code}' -m 4 ${msLocalHealthUrl(svc)} || true); [ "$code" = 200 ] && break; done; [ "$code" = 200 ] || { echo "APPLY_FAILED health:$code image:$IMAGE"; exit 1; }; echo "APPLY_OK health:$code image:$IMAGE"`;
 }
 
 // null (not an error) when the package has never been published — that is how
@@ -3685,14 +3706,36 @@ async function msPypiLatest(svc) {
   return (await r.json()).info.version;
 }
 
-async function msDeployedVersion(svc) {
+async function msObservedState(svc) {
   const h = FLEET_HOSTS[svc.host];
   const r = await ssmRun(h.instanceId,
-    `cat ${svc.optDir}/CURRENT 2>/dev/null || sudo docker inspect ${svc.container} --format '{{.Config.Image}}' 2>/dev/null | cut -d: -f2`,
-    { timeout: 60, comment: `${svc.id}:version` });
-  const v = (r.stdout || "").trim().split("\n").pop();
-  if (r.status === "Success" && v) { _msDeployed[svc.id] = v; return v; }
-  return null;
+    `EXISTS=false; sudo docker inspect ${svc.container} >/dev/null 2>&1 && EXISTS=true; if [ "$EXISTS" = true ]; then RUNNING=$(sudo docker inspect ${svc.container} --format '{{.State.Running}}'); IMAGE=$(sudo docker inspect ${svc.container} --format '{{.Config.Image}}'); IMAGE_ID=$(sudo docker inspect ${svc.container} --format '{{.Image}}'); STARTED=$(sudo docker inspect ${svc.container} --format '{{.State.StartedAt}}'); PACKAGE=""; [ "$RUNNING" = true ] && PACKAGE=$(sudo docker exec ${svc.container} python -c "import importlib.metadata as m; print(m.version('${svc.pypiPackage}'))" 2>/dev/null || true); HEALTH=000; [ "$RUNNING" = true ] && HEALTH=$(curl -s -o /dev/null -w '%{http_code}' -m 4 ${msLocalHealthUrl(svc)} || true); else RUNNING=false; IMAGE=""; IMAGE_ID=""; STARTED=""; PACKAGE=""; HEALTH=000; fi; RECORDED=$(cat ${svc.optDir}/CURRENT 2>/dev/null || true); printf 'MATRX_STATE|%s|%s|%s|%s|%s|%s|%s|%s\n' "$EXISTS" "$RUNNING" "$IMAGE" "$IMAGE_ID" "$STARTED" "$PACKAGE" "$RECORDED" "$HEALTH"`,
+    { timeout: 60, comment: `${svc.id}:observe-runtime` });
+  if (r.status !== "Success") throw new Error(`SSM observation failed: ${r.status} ${(r.stderr || "").slice(0, 200)}`);
+  const line = (r.stdout || "").split("\n").find((x) => x.startsWith("MATRX_STATE|"));
+  if (!line) throw new Error("SSM observation returned no runtime state");
+  const [, existsRaw, runningRaw, image, imageId, startedAt, packageVersion, recordedVersion, healthRaw] = line.split("|");
+  const exists = existsRaw === "true";
+  const running = runningRaw === "true";
+  const localHealth = Number(healthRaw) || null;
+  const imageVersion = image && image.includes(":") ? image.slice(image.lastIndexOf(":") + 1) : null;
+  const version = packageVersion || imageVersion || null;
+  return {
+    observed_at: new Date().toISOString(),
+    exists,
+    running,
+    deployed: exists && running && localHealth === 200,
+    image: image || null,
+    image_id: imageId || null,
+    started_at: startedAt || null,
+    package_version: packageVersion || null,
+    image_version: imageVersion,
+    version,
+    version_source: packageVersion ? "running package" : imageVersion ? "running image" : null,
+    recorded_version: recordedVersion || null,
+    record_matches_runtime: !!recordedVersion && !!version ? recordedVersion === version : null,
+    local_health: localHealth,
+  };
 }
 
 // The swap script — deploy.sh's steps 2-6, SSM-ified. Dockerfile arrives
@@ -3706,14 +3749,15 @@ function msUpgradeScript(svc, version, dockerfileB64) {
     `sudo docker build --build-arg ${svc.buildArgName}="==${version}" -t ${c}:${version} ${d}`,
     `GOT=$(sudo docker run --rm --entrypoint python ${c}:${version} -c "import importlib.metadata as m; print(m.version('${svc.pypiPackage}'))" | tr -d "[:space:]")`,
     `[ "$GOT" = "${version}" ] || { echo "VERIFY_FAILED image contains $GOT"; exit 1; }`,
-    `PREV=$(cat ${d}/CURRENT 2>/dev/null || sudo docker inspect ${c} --format '{{.Config.Image}}' | cut -d: -f2)`,
+    `PREV_IMAGE=$(sudo docker inspect ${c} --format '{{.Config.Image}}' 2>/dev/null)`,
+    `[ -n "$PREV_IMAGE" ] || { echo "VERIFY_FAILED live image not found"; exit 1; }`,
     `sudo docker rm -f ${c} >/dev/null 2>&1 || true`,
     msDockerRun(svc, version),
     `ok=""; for i in $(seq 1 20); do sleep 3; code=$(curl -s -o /dev/null -w '%{http_code}' -m 4 ${msLocalHealthUrl(svc)} || true); [ "$code" = 200 ] && { ok=1; break; }; done`,
-    `if [ -z "$ok" ]; then echo "HEALTH_FAILED rolling back to $PREV"; sudo docker rm -f ${c} >/dev/null 2>&1 || true; ${msDockerRun(svc, "$PREV")}; exit 1; fi`,
-    `echo "$PREV" | sudo tee ${d}/PREVIOUS >/dev/null`,
+    `if [ -z "$ok" ]; then echo "HEALTH_FAILED rolling back to $PREV_IMAGE"; sudo docker rm -f ${c} >/dev/null 2>&1 || true; ${msDockerRunImage(svc, '"$PREV_IMAGE"')}; exit 1; fi`,
+    `echo "\${PREV_IMAGE##*:}" | sudo tee ${d}/PREVIOUS >/dev/null`,
     `echo "${version}" | sudo tee ${d}/CURRENT >/dev/null`,
-    `echo "UPGRADE_OK ${version} (was $PREV)"`,
+    `echo "UPGRADE_OK ${version} (was $PREV_IMAGE)"`,
   ].join("\n");
 }
 
@@ -3728,7 +3772,6 @@ async function msDeploy(svc, version) {
   const h = FLEET_HOSTS[svc.host];
   const r = await ssmRun(h.instanceId, msUpgradeScript(svc, version, dockerfileB64), { timeout: 420, comment: `${svc.id}:deploy ${version}` });
   const ok = r.status === "Success" && (r.stdout || "").includes("UPGRADE_OK");
-  if (ok) _msDeployed[svc.id] = version;
   // Confirm through Cloudflare too — local health can pass while the edge 502s.
   let edge = null;
   try { edge = (await fetch(`${svc.publicBase}${svc.healthPath}`, { signal: AbortSignal.timeout(8000) })).status; } catch { /* */ }
@@ -3741,7 +3784,8 @@ async function msMaybeAutoDeploy(svc) {
   try {
     const latest = await msPypiLatest(svc);
     if (!latest) return; // never published — nothing to deploy, nothing to say
-    const deployed = _msDeployed[svc.id] || await msDeployedVersion(svc);
+    const observed = await msObservedState(svc);
+    const deployed = observed.version;
     if (!deployed || deployed === latest) return; // no first install, only upgrades
     let attempts;
     try { attempts = JSON.parse(readFileSync(svc.attemptsFile, "utf-8")); } catch { attempts = { tried: [] }; }
@@ -3770,17 +3814,20 @@ function msByParam(handler) {
 }
 function msPinned(id, handler) { return (req, res) => handler(MICROSERVICES[id], req, res); }
 
-// Cheap list — registry + edge health + PyPI, no SSM round-trip per service.
+// List state is live: edge + PyPI + an SSM observation of the actual container.
+// A cached deploy record must never make this screen claim a version is running.
 app.get("/api/microservices", authMiddleware, async (_req, res) => {
   const rows = await Promise.all(Object.values(MICROSERVICES).map(async (svc) => {
-    let edge = null, latest = null;
+    let edge = null, latest = null, observed = null, observationError = null;
     try { edge = (await fetch(`${svc.publicBase}${svc.healthPath}`, { signal: AbortSignal.timeout(6000) })).status; } catch { /* */ }
     try { latest = await msPypiLatest(svc); } catch { /* */ }
+    try { observed = await msObservedState(svc); } catch (e) { observationError = e.message; }
     return {
       id: svc.id, label: svc.label, host: svc.host, container: svc.container, port: svc.port,
       public_base: svc.publicBase, health_path: svc.healthPath, ready_path: svc.readyPath,
       env_file: svc.envFile, pypi_package: svc.pypiPackage, edge_health: edge, pypi_latest: latest,
-      deployed: _msDeployed[svc.id] || null, auto_deploy: svc.autoDeploy,
+      deployed: observed?.version || null, deployment_state: observationError ? "unknown" : observed?.deployed ? "deployed" : observed?.exists ? (observed.running ? "unhealthy" : "stopped") : "not_deployed",
+      observed, observation_error: observationError, auto_deploy: svc.autoDeploy,
       published: latest !== null,
     };
   }));
@@ -3791,14 +3838,11 @@ app.get("/api/microservices", authMiddleware, async (_req, res) => {
 // versions, and the health triad, without anyone opening a terminal.
 const msStatusHandler = async (svc, req, res) => {
   try {
-    const h = FLEET_HOSTS[svc.host];
-    const r = await ssmRun(h.instanceId,
-      `sudo docker ps -a --format '{{.Names}}|{{.Image}}|{{.Status}}' | grep -E '${svc.container}'; echo ---; cat ${svc.optDir}/CURRENT 2>/dev/null; cat ${svc.optDir}/PREVIOUS 2>/dev/null; echo ---; curl -s -o /dev/null -w '%{http_code}' -m 4 http://127.0.0.1:${svc.port}${svc.healthPath}; echo; curl -s -o /dev/null -w '%{http_code}' -m 4 http://127.0.0.1:${svc.port}${svc.readyPath}`,
-      { timeout: 60, comment: `${svc.id}:status` });
+    const observed = await msObservedState(svc);
     let edge = null, latest = null;
     try { edge = (await fetch(`${svc.publicBase}${svc.healthPath}`, { signal: AbortSignal.timeout(6000) })).status; } catch { /* */ }
     try { latest = await msPypiLatest(svc); } catch { /* */ }
-    res.json({ id: svc.id, host: svc.host, container: svc.container, public_base: svc.publicBase, edge_health: edge, pypi_latest: latest, deployed: _msDeployed[svc.id] || null, auto_deploy: svc.autoDeploy, raw: (r.stdout || "").trim() });
+    res.json({ id: svc.id, host: svc.host, container: svc.container, public_base: svc.publicBase, edge_health: edge, pypi_latest: latest, deployed: observed.version, observed, auto_deploy: svc.autoDeploy });
   } catch (e) { res.status(502).json({ error: e.message }); }
 };
 
@@ -3836,40 +3880,33 @@ async function checkMicroservice(svc) {
   const { id, label } = svc;
   try {
     const t0 = Date.now();
-    const r = await fetch(`${svc.publicBase}${svc.healthPath}`, { signal: AbortSignal.timeout(8000) });
+    const [observed, r] = await Promise.all([
+      msObservedState(svc),
+      fetch(`${svc.publicBase}${svc.healthPath}`, { signal: AbortSignal.timeout(8000) }),
+    ]);
     const ms = Date.now() - t0;
-    if (!r.ok) {
-      const nd = await msNotDeployed(svc);
-      if (nd) return nd;
-      return { id, label, status: "critical", detail: `${svc.publicBase}${svc.healthPath} -> HTTP ${r.status}. ${svc.impact} Container ${svc.container} on ${svc.host} (Hosts page / terminal): sudo docker logs ${svc.container}.`, actions: [] };
-    }
     let latest = null;
     try { latest = await msPypiLatest(svc); } catch { /* */ }
-    const deployed = _msDeployed[svc.id]; // refreshed by deploys + the auto sweep
-    if (latest && deployed && deployed !== latest) {
-      return { id, label, status: "warning", detail: `Healthy (${ms}ms) but running ${deployed} while PyPI has ${latest}. Auto-deploy ${svc.autoDeploy ? "tries each version once — check the audit log / Manager logs for the failure" : `is DISABLED (${svc.autoDeployEnvVar}=0)`}. Manual: POST /api/microservices/${id}/deploy.`, actions: [] };
+    if (!observed.exists) {
+      if (latest === null) return { id, label, status: "unknown", detail: `Observed the host over SSM: container ${svc.container} does not exist, and ${svc.pypiPackage} has no PyPI release. This service is not deployed yet.`, observed, actions: [] };
+      return { id, label, status: "critical", detail: `Observed the host over SSM: container ${svc.container} does not exist although PyPI has ${latest}. ${svc.impact}`, observed, actions: [] };
     }
-    return { id, label, status: "ok", detail: `Healthy in ${ms}ms${deployed ? `, version ${deployed}` : ""}${latest ? ` (PyPI latest ${latest})` : ""}.`, actions: [] };
+    if (!observed.running) return { id, label, status: "critical", detail: `Observed container ${svc.container} on ${svc.host}, but it is stopped (image ${observed.image || "unknown"}). ${svc.impact}`, observed, actions: [] };
+    if (observed.local_health !== 200) return { id, label, status: "critical", detail: `Observed ${svc.container} running ${observed.image || "an unknown image"}, but host-local health returned ${observed.local_health || "no response"}. ${svc.impact}`, observed, actions: [] };
+    if (!r.ok) return { id, label, status: "critical", detail: `Observed ${svc.container} running ${observed.image || "an unknown image"} with local health 200, but ${svc.publicBase}${svc.healthPath} -> HTTP ${r.status}. ${svc.impact}`, observed, actions: [] };
+    const deployed = observed.version;
+    const record = !observed.recorded_version
+      ? ` No CURRENT version record exists; freshness is based on the inspected ${observed.version_source || "container image"}.`
+      : observed.record_matches_runtime === false
+        ? ` CURRENT records ${observed.recorded_version}, but the running ${observed.version_source || "container"} is ${deployed}; runtime wins.`
+        : "";
+    if (latest && deployed && deployed !== latest) {
+      return { id, label, status: "warning", detail: `Observed healthy (${ms}ms), running ${deployed} from ${observed.image}, while PyPI has ${latest}.${record} Auto-deploy ${svc.autoDeploy ? "tries each version once — check the audit log / Manager logs for the failure" : `is DISABLED (${svc.autoDeployEnvVar}=0)`}. Manual: POST /api/microservices/${id}/deploy.`, observed, actions: [] };
+    }
+    return { id, label, status: "ok", detail: `Observed deployed and healthy in ${ms}ms: ${observed.image || svc.container}${deployed ? `, ${observed.version_source} version ${deployed}` : ""}${latest ? ` (PyPI latest ${latest})` : ""}.${record}`, observed, actions: [] };
   } catch (e) {
-    const nd = await msNotDeployed(svc);
-    if (nd) return nd;
-    return { id, label, status: "critical", detail: `${svc.publicBase} unreachable (${e.message}). ${svc.impact}`, actions: [] };
+    return { id, label, status: "critical", detail: `Could not observe ${svc.container} on ${svc.host} and its edge health (${e.message}). ${svc.impact}`, actions: [] };
   }
-}
-
-// A service that has never been deployed must not alarm. Only consulted on the
-// unhealthy path, and skipped entirely once a deployed version is known — so a
-// live service (matrx-files) never pays for this.
-async function msNotDeployed(svc) {
-  if (_msDeployed[svc.id]) return null;
-  let latest;
-  try { latest = await msPypiLatest(svc); } catch { return null; } // PyPI itself down -> report the real failure
-  if (latest !== null) return null;
-  return {
-    id: svc.id, label: svc.label, status: "unknown",
-    detail: `Not deployed yet — ${svc.pypiPackage} has no PyPI release. This check goes live on the first publish + deploy (see aidream packages/${svc.pypiPackage}/DEPLOY.md).`,
-    actions: [],
-  };
 }
 
 // ── Auto-retry transiently-failed deploy workflows ──────────────────────────
@@ -4776,8 +4813,9 @@ const REMOTE_SECRET_STORES = [
     kind: "ec2",
     host: "matrx-sandbox-host-dev",
     path: "/etc/matrx-files.env",
-    note: "Env is read at container RUN time only — use Apply (it re-runs the container at the current version; a plain docker restart would keep the old env).",
+    note: "Env is read at container run time only. Select this store to inspect the live container, image, version, and Apply availability.",
     remote: true,
+    microserviceId: "matrx-files",
     restart: { type: "ssm", command: msRestartCommand(MICROSERVICES["matrx-files"]) },
   },
   {
@@ -4786,8 +4824,9 @@ const REMOTE_SECRET_STORES = [
     kind: "ec2",
     host: "matrx-sandbox-host-dev",
     path: "/etc/matrx-seo.env",
-    note: "Env is read at container RUN time only — use Apply (it re-runs the container at the current version; a plain docker restart would keep the old env). Not deployed yet — Apply will fail until the first deploy.",
+    note: "Env is read at container run time only. Select this store to inspect the live container, image, version, and Apply availability.",
     remote: true,
+    microserviceId: "matrx-seo",
     restart: { type: "ssm", command: msRestartCommand(MICROSERVICES["matrx-seo"]) },
   },
   {
@@ -4803,6 +4842,51 @@ const REMOTE_SECRET_STORES = [
 ];
 
 function findSecretStore(id) { return [...secretStores(), ...REMOTE_SECRET_STORES].find((s) => s.id === id); }
+
+async function secretStorePresentation(store) {
+  if (!store.microserviceId) {
+    return { note: store.note || null, note_level: "info", can_apply: !!store.restart, apply_state: store.restart ? "available" : "unavailable", observed: null };
+  }
+  const svc = microservice(store.microserviceId);
+  if (!svc) return { note: `Unknown service '${store.microserviceId}'.`, note_level: "error", can_apply: false, apply_state: "unavailable", observed: null };
+  try {
+    const observed = await msObservedState(svc);
+    let edgeHealth = null;
+    try { edgeHealth = (await fetch(`${svc.publicBase}${svc.healthPath}`, { signal: AbortSignal.timeout(6000) })).status; } catch { /* reported below */ }
+    observed.edge_health = edgeHealth;
+    const runtime = observed.image
+      ? `${svc.container} is ${observed.running ? "running" : "stopped"} as ${observed.image}${observed.version ? ` (${observed.version_source} version ${observed.version})` : ""}`
+      : `no ${svc.container} container exists`;
+    const health = observed.running
+      ? `host-local health ${observed.local_health || "unreachable"}, edge health ${edgeHealth || "unreachable"}`
+      : "health is not running";
+    const record = !observed.recorded_version
+      ? `No version is recorded in ${svc.optDir}/CURRENT; runtime inspection is the source of truth.`
+      : observed.record_matches_runtime === false
+        ? `${svc.optDir}/CURRENT records ${observed.recorded_version}, but the live runtime is ${observed.version || "unknown"}; runtime inspection is the source of truth.`
+        : `${svc.optDir}/CURRENT records the same version (${observed.recorded_version}).`;
+    const canApply = observed.exists && !!observed.image;
+    const deployment = observed.deployed ? "Observed deployed" : observed.exists ? "Observed container is not healthy" : "Observed not deployed";
+    const action = canApply
+      ? `Apply will remove and re-run this exact image (${observed.image}) so it reads the edited env; it then requires host-local health 200.`
+      : "Apply is unavailable because there is no live container image to re-run; deploy the service first.";
+    return {
+      note: `Env is read at container run time only — a plain docker restart keeps the old env. ${deployment}: ${runtime}; ${health}. ${record} ${action}`,
+      note_level: observed.deployed ? "success" : observed.exists ? "warning" : "error",
+      can_apply: canApply,
+      apply_state: canApply ? "available" : "unavailable",
+      observed,
+    };
+  } catch (e) {
+    return {
+      note: `Could not verify ${svc.container} on ${svc.host}: ${e.message}. Apply is unavailable until the live state can be checked.`,
+      note_level: "error",
+      can_apply: false,
+      apply_state: "unknown",
+      observed: null,
+    };
+  }
+}
 
 async function remoteReadFileB64(store) {
   const h = FLEET_HOSTS[store.host];
@@ -5043,6 +5127,12 @@ app.post("/api/secrets/restart", authMiddleware, requireSuperadmin, async (req, 
   if (!s) return res.status(404).json({ error: "Unknown secret store" });
   if (!s.restart) return res.status(400).json({ error: s.note || "This store has no one-click apply; see its note." });
   try {
+    if (s.microserviceId) {
+      const before = await msObservedState(microservice(s.microserviceId));
+      if (!before.exists || !before.image) {
+        return res.status(409).json({ error: `Apply unavailable: no ${s.microserviceId} container image was observed on the host. Deploy the service first.` });
+      }
+    }
     // Register BEFORE the restart runs — the point is to cover the down
     // window; registering after completion misses it (verified live).
     if (s.id === "ec2:aidream-app") noteExpectedRestart("aidream-dedicated", s.label);
@@ -5064,8 +5154,13 @@ app.post("/api/secrets/restart", authMiddleware, requireSuperadmin, async (req, 
     } else {
       return res.status(400).json({ error: `Unknown restart type '${s.restart.type}'` });
     }
-    try { auditLog(req.tokenEntry?.label || "admin", "secrets_apply_restart", s.id, {}); } catch { /* */ }
-    res.json({ ok: true, id: s.id, output });
+    let observed = null;
+    if (s.microserviceId) {
+      observed = await msObservedState(microservice(s.microserviceId));
+      if (!observed.deployed) return res.status(502).json({ error: `Apply completed but ${s.microserviceId} did not return to healthy deployed state.`, observed, output });
+    }
+    try { auditLog(req.tokenEntry?.label || "admin", "secrets_apply_restart", s.id, { observed_image: observed?.image || null, observed_version: observed?.version || null }); } catch { /* */ }
+    res.json({ ok: true, id: s.id, output, observed });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -5088,17 +5183,18 @@ app.get("/api/secrets/entries", authMiddleware, requireSuperadmin, async (req, r
   const s = findSecretStore(String(req.query.id || ""));
   if (!s) return res.status(404).json({ error: "Unknown secret store" });
   const reveal = req.query.reveal === "1";
+  const presentation = await secretStorePresentation(s);
   let pairs;
   if (s.remote) {
     try { pairs = await remoteParseEnv(s); }
     catch (e) { return res.status(502).json({ error: `Remote read failed (${s.host}): ${e.message}` }); }
   } else {
-    if (!existsSync(s.path)) return res.json({ id: s.id, label: s.label, kind: s.kind, note: s.note || null, exists: false, entries: [] });
+    if (!existsSync(s.path)) return res.json({ id: s.id, label: s.label, kind: s.kind, ...presentation, exists: false, entries: [] });
     pairs = parseEnvFile(s.path);
   }
   const entries = pairs.map(({ key, value }) => ({ key, value: reveal ? value : maskSecret(value), masked: !reveal, length: value.length }));
   try { auditLog(req.tokenEntry?.label || "admin", reveal ? "secrets_reveal" : "secrets_view", s.id, { keys: entries.length }); } catch { /* */ }
-  res.json({ id: s.id, label: s.label, kind: s.kind, note: s.note || null, exists: true, entries });
+  res.json({ id: s.id, label: s.label, kind: s.kind, ...presentation, exists: true, entries });
 });
 
 app.put("/api/secrets/entries", authMiddleware, requireSuperadmin, async (req, res) => {
