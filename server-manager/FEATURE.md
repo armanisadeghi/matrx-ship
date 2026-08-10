@@ -32,9 +32,12 @@ release nor proof of what is running.
 
 Legacy EC2 orchestrators may not expose `source_sha` yet. In that case the
 Manager reads `/home/ec2-user/orchestrator/.source-sha` over SSM while also
-requiring the systemd service to be active. If the GitHub approval ref cannot
-be read, say so and compare the two observed running tiers; never translate an
-authorization/API failure into “no approved release exists.”
+requiring the systemd service to be active. If the moving GitHub approval ref
+is missing, recover the newest approved commit on `main` from the immutable
+`deploy-approved/<sha>` tags. Still warn that the hosted poller cannot discover
+future releases without its moving ref. If neither source can be read, say so
+and compare the observed running tiers; never translate an authorization/API
+failure into “no approved release exists.”
 
 The separate **Recent deploys** check reports GitHub Actions history only; it
 must not claim that a workflow record proves a process is running that commit.

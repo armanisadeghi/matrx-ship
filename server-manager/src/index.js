@@ -2866,10 +2866,10 @@ let _sbxRepoCache = { ts: 0, data: null };
 async function getSandboxRepoState() {
   if (_sbxRepoCache.data && Date.now() - _sbxRepoCache.ts < 60000) return _sbxRepoCache.data;
   const repo = "armanisadeghi/matrx-sandbox";
-  const pat = process.env.GITHUB_PAT || "";
+  const pat = process.env.GITHUB_PAT || process.env.GH_TOKEN || "";
   const s = {
     mainSha: null, mainShort: null, hostedHead: null, hostedShort: null, hostedBehind: null,
-    approvedSha: null, approvedShort: null, approvedError: null,
+    approvedSha: null, approvedShort: null, approvedSource: null, approvedError: null, approvedRefError: null,
     deploySha: null, deployShort: null, deployWhen: null, deployUrl: null, deployFailures: 0,
     deployBehindMain: null, ghError: null,
   };
@@ -2888,13 +2888,24 @@ async function getSandboxRepoState() {
       try {
         const approved = await gh("/git/ref/heads/deploy%2Fhosted");
         s.approvedSha = approved.object?.sha || null;
+        s.approvedSource = s.approvedSha ? "deploy/hosted ref" : null;
         s.approvedShort = s.approvedSha ? s.approvedSha.slice(0, 7) : null;
       } catch (refError) {
+        s.approvedRefError = refError.message;
         try {
-          const approvedCommit = await gh("/commits/deploy%2Fhosted");
-          s.approvedSha = approvedCommit.sha || null;
+          // The moving branch has disappeared before while the immutable
+          // approval tags remained. Find the newest approved commit on main,
+          // rather than declaring that no approved release exists.
+          const [approvalRefs, mainCommits] = await Promise.all([
+            gh("/git/matching-refs/tags/deploy-approved"),
+            gh("/commits?sha=main&per_page=100"),
+          ]);
+          const approvedShas = new Set((approvalRefs || []).map((x) => x.object?.sha).filter(Boolean));
+          s.approvedSha = (mainCommits || []).find((x) => approvedShas.has(x.sha))?.sha || null;
+          s.approvedSource = s.approvedSha ? "immutable deploy-approved tag" : null;
           s.approvedShort = s.approvedSha ? s.approvedSha.slice(0, 7) : null;
-        } catch (commitError) { s.approvedError = `${refError.message}; commit fallback: ${commitError.message}`; }
+          if (!s.approvedSha) s.approvedError = `${refError.message}; no approved tag found on the latest 100 main commits`;
+        } catch (tagError) { s.approvedError = `${refError.message}; approval-tag fallback: ${tagError.message}`; }
       }
       const runs = await gh("/actions/runs?per_page=20");
       const deploys = (runs.workflow_runs || []).filter((r) => r.name === "Deploy");
@@ -3538,39 +3549,26 @@ async function checkHostedDeployFreshness() {
   const ageMin = Math.round((Date.now() - statSync(HOSTED_DEPLOY_STATE_FILE).mtimeMs) / 60000);
   if (!token) return { id, label, status: "unknown", detail: "GITHUB_PAT not set — cannot compare against origin/main.", actions: [] };
   try {
-    const r = await fetch("https://api.github.com/repos/armanisadeghi/matrx-sandbox/commits/main", {
-      headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", "User-Agent": "matrx-manager" },
-      signal: AbortSignal.timeout(8000),
-    });
-    if (!r.ok) return { id, label, status: "unknown", detail: `GitHub API ${r.status}`, actions: [] };
-    const mainCommit = await r.json();
-    const mainSha = mainCommit.sha || "";
+    const repo = await getSandboxRepoState();
+    if (repo.ghError) return { id, label, status: "unknown", detail: `GitHub freshness lookup failed: ${repo.ghError}`, actions: [] };
+    const mainSha = repo.mainSha || "";
     // Since the 2026-07-22 promotion redesign the poller follows the
     // deploy/hosted ref (promoted by the Deploy workflow ONLY when tests
     // pass), never raw main. "Behind main" is therefore NOT stuck — it can be
     // the test gate correctly holding a broken commit off production.
-    let approved = null, approvedError = null;
-    try {
-      const ar = await fetch("https://api.github.com/repos/armanisadeghi/matrx-sandbox/git/ref/heads/deploy%2Fhosted", {
-        headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", "User-Agent": "matrx-manager" },
-        signal: AbortSignal.timeout(8000),
-      });
-      if (ar.ok) approved = (await ar.json()).object?.sha || null;
-      else approvedError = `ref API HTTP ${ar.status}`;
-      if (!approved) {
-        const cr = await fetch("https://api.github.com/repos/armanisadeghi/matrx-sandbox/commits/deploy%2Fhosted", {
-          headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", "User-Agent": "matrx-manager" },
-          signal: AbortSignal.timeout(8000),
-        });
-        if (cr.ok) approved = (await cr.json()).sha || null;
-        else approvedError = `${approvedError || "ref unavailable"}; commit API HTTP ${cr.status}`;
-      }
-    } catch (e) { approvedError = e.message; }
+    const approved = repo.approvedSha;
     if (!approved) {
-      return { id, label, status: "unknown", detail: `Could not read the tested deploy/hosted approval ref (${approvedError || "no SHA returned"}). Hosted is observed at ${deployed.slice(0, 7)}, but intended-release freshness cannot be verified.`, actions: [] };
+      return { id, label, status: "unknown", detail: `Could not resolve a tested approval from deploy/hosted or its immutable approval tags (${repo.approvedError || repo.approvedRefError || "no SHA returned"}). Hosted is observed at ${deployed.slice(0, 7)}, but intended-release freshness cannot be verified.`, actions: [] };
     }
     if (approved === deployed) {
       const gateNote = mainSha !== deployed ? ` main is ahead (${mainSha.slice(0, 7)}) — the test gate hasn't approved it yet (see the 'deploys' check).` : "";
+      if (repo.approvedSource === "immutable deploy-approved tag") {
+        return {
+          id, label, status: "warning",
+          detail: `Hosted tier is at approved release ${deployed.slice(0, 7)}, verified from its immutable approval tag. The deploy/hosted moving ref is missing (${repo.approvedRefError || "GitHub ref unavailable"}), so the poller cannot discover future approved releases until that ref is restored.${gateNote}`,
+          actions: [],
+        };
+      }
       return { id, label, status: "ok", detail: `Hosted tier is at the approved release (${deployed.slice(0, 7)}).${gateNote}`, actions: [] };
     }
 
@@ -3593,21 +3591,17 @@ async function checkHostedDeployFreshness() {
     // Between ref promotion and the first 2-minute poller tick there may be no
     // marker yet. Use the approved commit's age for that grace window; never
     // inherit the old deployed-state file's age onto a brand-new release.
-    let approvedAt = approved === mainSha
-      ? (mainCommit.commit?.committer?.date || mainCommit.commit?.author?.date)
-      : null;
-    if (!approvedAt) {
-      try {
-        const cr = await fetch(`https://api.github.com/repos/armanisadeghi/matrx-sandbox/commits/${encodeURIComponent(approved)}`, {
-          headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", "User-Agent": "matrx-manager" },
-          signal: AbortSignal.timeout(8000),
-        });
-        if (cr.ok) {
-          const commit = await cr.json();
-          approvedAt = commit.commit?.committer?.date || commit.commit?.author?.date || null;
-        }
-      } catch { /* state-file fallback below */ }
-    }
+    let approvedAt = null;
+    try {
+      const cr = await fetch(`https://api.github.com/repos/armanisadeghi/matrx-sandbox/commits/${encodeURIComponent(approved)}`, {
+        headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", "User-Agent": "matrx-manager" },
+        signal: AbortSignal.timeout(8000),
+      });
+      if (cr.ok) {
+        const commit = await cr.json();
+        approvedAt = commit.commit?.committer?.date || commit.commit?.author?.date || null;
+      }
+    } catch { /* state-file fallback below */ }
     const approvedAgeMin = approvedAt
       ? Math.max(0, Math.round((Date.now() - Date.parse(approvedAt)) / 60000))
       : null;
