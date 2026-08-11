@@ -3537,7 +3537,22 @@ function expectedRestart(checkId) {
 // This check names the disease directly: state SHA behind origin/main with a
 // stale state file = stuck.
 const HOSTED_DEPLOY_STATE_FILE = "/host-srv/apps/deploy-state/matrx-sandbox.last-deployed-sha";
+const HOSTED_DEPLOY_FAILURE_FILE = "/host-srv/apps/deploy-state/matrx-sandbox.last-failure.json";
 const HOSTED_DEPLOY_STUCK_MINUTES = Number(process.env.MATRX_HOSTED_DEPLOY_STUCK_MINUTES || 30);
+
+// deploy-hosted.sh records why its last run died (and clears the file on a
+// successful release). Before this existed, a stuck poller could only say
+// "ssh in and read journalctl" — which is how a build that failed every 2
+// minutes stayed undiagnosed for 20 h on 2026-08-11. Only trust the record for
+// the release currently being attempted; a leftover from an older SHA is noise.
+function hostedDeployLastFailure(approvedSha) {
+  try {
+    if (!existsSync(HOSTED_DEPLOY_FAILURE_FILE)) return null;
+    const rec = JSON.parse(readFileSync(HOSTED_DEPLOY_FAILURE_FILE, "utf-8"));
+    if (!rec?.reason || (approvedSha && rec.sha && rec.sha !== approvedSha)) return null;
+    return rec;
+  } catch { return null; }
+}
 
 async function checkHostedDeployFreshness() {
   const id = "hosted-deploy", label = "Hosted deploy poller (matrx-sandbox)";
@@ -3609,9 +3624,13 @@ async function checkHostedDeployFreshness() {
     if (waitingMin < HOSTED_DEPLOY_STUCK_MINUTES) {
       return { id, label, status: "ok", detail: `Deploy queued: hosted at ${deployed.slice(0, 7)}, approved release is ${approved.slice(0, 7)} (${waitingMin}m into the ${HOSTED_DEPLOY_STUCK_MINUTES}m grace window).`, actions: [] };
     }
+    const failure = hostedDeployLastFailure(approved);
+    const why = failure
+      ? ` Last run failed at ${failure.at}: "${failure.reason}".`
+      : " No failure was recorded by deploy-hosted.sh — the poller may not be running at all (systemctl status matrx-hosted-deploy.timer).";
     return {
       id, label, status: "critical",
-      detail: `Hosted deploy poller STUCK: approved release ${approved.slice(0, 7)} has waited ${waitingMin} min with no active build, while hosted remains at ${deployed.slice(0, 7)}. Diagnose: journalctl -u matrx-hosted-deploy.service -n 100 (look for the FIRST error in a run — usually an image build).`,
+      detail: `Hosted deploy poller STUCK: approved release ${approved.slice(0, 7)} has waited ${waitingMin} min with no active build, while hosted remains at ${deployed.slice(0, 7)}.${why} Full log: journalctl -u matrx-hosted-deploy.service -n 100 (look for the FIRST error in a run — usually an image build).`,
       actions: [],
     };
   } catch (e) {
