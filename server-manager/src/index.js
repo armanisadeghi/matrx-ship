@@ -2643,6 +2643,17 @@ const SANDBOX_IMAGE_VARIANTS = {
 };
 const ORCH_IMAGE_TAG = "matrx-orchestrator:latest";
 
+// How long ago the hosted orchestrator container was (re)started, in ms.
+// Runtime truth from Docker — null when the container is absent or unreadable,
+// which must never be mistaken for "just restarted".
+function orchestratorStartedAgoMs() {
+  const r = exec(`docker inspect matrx-orchestrator --format '{{.State.StartedAt}}'`, { timeout: 5000 });
+  if (!r.success || !r.output) return null;
+  const started = Date.parse(r.output.trim());
+  if (!Number.isFinite(started)) return null;
+  return Math.max(0, Date.now() - started);
+}
+
 // Inspect one image tag; returns presence + size + age (read-only).
 function inspectImage(tag) {
   const r = exec(`docker image inspect ${tag} --format '{{.Id}}|{{.Size}}|{{.Created}}'`);
@@ -3282,6 +3293,20 @@ async function checkOrchestratorDrift() {
   const repo = await getSandboxRepoState();
   const actions = [];
   if (hErr) {
+    // A hosted release recreates this container, and for ~a minute afterwards
+    // it answers 404/502 while Traefik re-registers it. Reporting that as
+    // critical means every healthy deploy raises a false alarm — and now that
+    // the poller runs releases back to back again, that is most of the time.
+    // Judge it on runtime truth: the container's own start time. Past the
+    // window and still unreachable, it is genuinely critical.
+    const startedAgoMs = orchestratorStartedAgoMs();
+    if (startedAgoMs !== null && startedAgoMs < 150000) {
+      return {
+        id: "orchestrator-drift", label: "Orchestrator freshness", status: "restarting",
+        detail: `Hosted orchestrator was recreated ${Math.round(startedAgoMs / 1000)}s ago and is not answering yet (${hErr}) — normal for ~a minute after a release. Goes critical if it stays down.`,
+        hosted, ec2, repo, actions: [],
+      };
+    }
     return {
       id: "orchestrator-drift", label: "Orchestrator freshness", status: "critical",
       detail: `Hosted orchestrator unreachable: ${hErr}`,
