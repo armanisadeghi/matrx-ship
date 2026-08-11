@@ -66,6 +66,21 @@ failure into “no approved release exists.”
 The separate **Recent deploys** check reports GitHub Actions history only; it
 must not claim that a workflow record proves a process is running that commit.
 
+## A stuck poller must say WHY
+
+`deploy-hosted.sh` (matrx-sandbox) records every `fail()` to
+`/srv/apps/deploy-state/matrx-sandbox.last-failure.json` (`sha`, `at`,
+`reason`) and clears it on a successful release. The hosted-deploy check quotes
+that reason, but **only when its `sha` is the release currently being
+attempted** — a leftover record from an older SHA describes a failure that is
+no longer happening. When the file is absent while the poller is stuck, say so
+and point at the timer: nothing recorded means nothing ran.
+
+"Stuck — go read journalctl" is not an alarm. That was the entire diagnosis
+available on 2026-08-11, when the aidream image build failed every 2 minutes
+for 20 h (the build deleted tracked files from the source tree it then
+certified) and the dashboard could not name it.
+
 ## Operator feedback
 
 Long-running buttons keep their action visible: applying uses a spinner, blue
