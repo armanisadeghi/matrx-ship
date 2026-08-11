@@ -3890,6 +3890,18 @@ async function msMaybeAutoDeploy(svc) {
     console.log(`[${svc.id}] ${deployed} -> ${latest}: auto-deploy starting`);
     const res = await msDeploy(svc, latest);
     console.log(`[${svc.id}] auto-deploy ${latest}: ${res.ok ? "OK" : "FAILED"} ${(res.error || "").slice(-1500)}`);
+    // The one-attempt ledger exists so a BROKEN RELEASE stays stuck instead of
+    // loop-building. A full host disk is not a broken release — burning the
+    // attempt would silently skip a perfectly good version forever, even after
+    // the disk is reclaimed. Give the version its attempt back and say why.
+    if (!res.ok && /DISK_FULL|No space left on device/.test(res.error || "")) {
+      try {
+        const back = JSON.parse(readFileSync(svc.attemptsFile, "utf-8"));
+        back.tried = (back.tried || []).filter((v) => v !== latest);
+        writeFileSync(svc.attemptsFile, JSON.stringify(back, null, 2));
+      } catch (e) { console.error(`[${svc.id}] could not release the disk-full attempt for ${latest}:`, e.message); }
+      console.error(`[${svc.id}] auto-deploy ${latest} was BLOCKED BY HOST DISK on ${svc.host}, not by the release — attempt released, it will retry once disk is reclaimed. Fleet health reports this as "deploys blocked".`);
+    }
   } catch (e) {
     console.error(`[${svc.id}] auto-deploy sweep failed:`, e.message);
   }
