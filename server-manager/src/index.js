@@ -3737,15 +3737,28 @@ async function msPypiLatest(svc) {
 async function msObservedState(svc) {
   const h = FLEET_HOSTS[svc.host];
   const r = await ssmRun(h.instanceId,
-    `EXISTS=false; sudo docker inspect ${svc.container} >/dev/null 2>&1 && EXISTS=true; if [ "$EXISTS" = true ]; then RUNNING=$(sudo docker inspect ${svc.container} --format '{{.State.Running}}'); IMAGE=$(sudo docker inspect ${svc.container} --format '{{.Config.Image}}'); IMAGE_ID=$(sudo docker inspect ${svc.container} --format '{{.Image}}'); STARTED=$(sudo docker inspect ${svc.container} --format '{{.State.StartedAt}}'); PACKAGE=""; [ "$RUNNING" = true ] && PACKAGE=$(sudo docker exec ${svc.container} python -c "import importlib.metadata as m; print(m.version('${svc.pypiPackage}'))" 2>/dev/null || true); HEALTH=000; [ "$RUNNING" = true ] && HEALTH=$(curl -s -o /dev/null -w '%{http_code}' -m 4 ${msLocalHealthUrl(svc)} || true); else RUNNING=false; IMAGE=""; IMAGE_ID=""; STARTED=""; PACKAGE=""; HEALTH=000; fi; RECORDED=$(cat ${svc.optDir}/CURRENT 2>/dev/null || true); printf 'MATRX_STATE|%s|%s|%s|%s|%s|%s|%s|%s\n' "$EXISTS" "$RUNNING" "$IMAGE" "$IMAGE_ID" "$STARTED" "$PACKAGE" "$RECORDED" "$HEALTH"`,
+    `EXISTS=false; sudo docker inspect ${svc.container} >/dev/null 2>&1 && EXISTS=true; if [ "$EXISTS" = true ]; then RUNNING=$(sudo docker inspect ${svc.container} --format '{{.State.Running}}'); IMAGE=$(sudo docker inspect ${svc.container} --format '{{.Config.Image}}'); IMAGE_ID=$(sudo docker inspect ${svc.container} --format '{{.Image}}'); STARTED=$(sudo docker inspect ${svc.container} --format '{{.State.StartedAt}}'); PACKAGE=""; [ "$RUNNING" = true ] && PACKAGE=$(sudo docker exec ${svc.container} python -c "import importlib.metadata as m; print(m.version('${svc.pypiPackage}'))" 2>/dev/null || true); HEALTH=000; [ "$RUNNING" = true ] && HEALTH=$(curl -s -o /dev/null -w '%{http_code}' -m 4 ${msLocalHealthUrl(svc)} || true); else RUNNING=false; IMAGE=""; IMAGE_ID=""; STARTED=""; PACKAGE=""; HEALTH=000; fi; RECORDED=$(cat ${svc.optDir}/CURRENT 2>/dev/null || true); PREVREC=$(cat ${svc.optDir}/PREVIOUS 2>/dev/null || true); DISK_AVAIL=$(df --output=avail / | tail -1); DISK_PCT=$(df --output=pcent / | tail -1 | tr -dc '0-9'); printf 'MATRX_STATE|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' "$EXISTS" "$RUNNING" "$IMAGE" "$IMAGE_ID" "$STARTED" "$PACKAGE" "$RECORDED" "$HEALTH" "$DISK_AVAIL" "$DISK_PCT" "$PREVREC"`,
     { timeout: 60, comment: `${svc.id}:observe-runtime` });
   if (r.status !== "Success") throw new Error(`SSM observation failed: ${r.status} ${(r.stderr || "").slice(0, 200)}`);
   const line = (r.stdout || "").split("\n").find((x) => x.startsWith("MATRX_STATE|"));
   if (!line) throw new Error("SSM observation returned no runtime state");
-  const [, existsRaw, runningRaw, image, imageId, startedAt, packageVersion, recordedVersion, healthRaw] = line.split("|");
+  const [, existsRaw, runningRaw, image, imageId, startedAt, packageVersion, recordedVersion, healthRaw, diskAvailRaw, diskPctRaw, previousVersion] = line.split("|");
   const exists = existsRaw === "true";
   const running = runningRaw === "true";
   const localHealth = Number(healthRaw) || null;
+  // Host disk is part of runtime truth: a full disk does not break the running
+  // service, it silently blocks every future deploy (2026-08-11).
+  const diskAvailKb = Number(diskAvailRaw) || null;
+  const diskUsedPct = Number(diskPctRaw) || null;
+  const disk = {
+    avail_kb: diskAvailKb,
+    avail_gb: diskAvailKb ? Number(kbGb(diskAvailKb)) : null,
+    used_pct: diskUsedPct,
+    deploy_min_gb: Number(kbGb(MS_MIN_FREE_KB)),
+    // "blocked" = a build cannot even be attempted; "low" = the next one or two
+    // releases will exhaust it.
+    status: !diskAvailKb ? "unknown" : diskAvailKb < MS_MIN_FREE_KB ? "blocked" : diskAvailKb < MS_WARN_FREE_KB ? "low" : "ok",
+  };
   const imageVersion = image && image.includes(":") ? image.slice(image.lastIndexOf(":") + 1) : null;
   const version = packageVersion || imageVersion || null;
   return {
@@ -3761,9 +3774,44 @@ async function msObservedState(svc) {
     version,
     version_source: packageVersion ? "running package" : imageVersion ? "running image" : null,
     recorded_version: recordedVersion || null,
+    previous_version: previousVersion || null,
     record_matches_runtime: !!recordedVersion && !!version ? recordedVersion === version : null,
     local_health: localHealth,
+    host_disk: disk,
   };
+}
+
+// ── Disk hygiene ────────────────────────────────────────────────────────────
+// 2026-08-11: the pipeline had NEVER pruned. Every matrx-files release left a
+// 1.7GB image behind forever (matrx-seo 262MB), the fleet host reached 100%
+// disk (86 images, 45GB, 409MB free), and deploys hard-blocked — but the only
+// visible symptom was `uv pip install` exiting 1 inside the build. A full disk
+// must now be (a) prevented after every successful deploy, (b) reclaimed and
+// then named loudly before a build, and (c) visible in status/fleet-health.
+const MS_MIN_FREE_KB = Number(process.env.MATRX_MS_MIN_FREE_KB || 6 * 1024 * 1024); // 6 GiB
+const MS_WARN_FREE_KB = Number(process.env.MATRX_MS_WARN_FREE_KB || 10 * 1024 * 1024); // 10 GiB
+function kbGb(kb) { return (Number(kb) / 1024 / 1024).toFixed(1); }
+
+// Keep the running/CURRENT image and the recorded PREVIOUS (the rollback
+// target) for this service's repo; drop every other tag of it, dangling images
+// and the build cache. Emitted as a `set +e` subshell with per-command timeouts
+// so a prune that fails, or a docker daemon that hangs, can NEVER fail or roll
+// back an otherwise-good deploy.
+function msPruneBlock(svc) {
+  const d = svc.optDir, c = svc.container;
+  return [
+    `( set +e`,
+    `  KEEP_CUR=$(cat ${d}/CURRENT 2>/dev/null); KEEP_PREV=$(cat ${d}/PREVIOUS 2>/dev/null)`,
+    `  KEEP_LIVE=$(sudo docker inspect ${c} --format '{{.Config.Image}}' 2>/dev/null | sed 's/.*://')`,
+    `  for tag in $(sudo docker images ${c} --format '{{.Tag}}' 2>/dev/null | sort -u); do`,
+    `    case "$tag" in "$KEEP_CUR"|"$KEEP_PREV"|"$KEEP_LIVE"|"<none>"|"") continue;; esac`,
+    `    if sudo timeout 60 docker rmi ${c}:"$tag" >/dev/null 2>&1; then echo "PRUNE_REMOVED ${c}:$tag"; else echo "PRUNE_KEPT ${c}:$tag (in use or busy)"; fi`,
+    `  done`,
+    `  sudo timeout 120 docker image prune -f >/dev/null 2>&1`,
+    `  sudo timeout 180 docker builder prune -f >/dev/null 2>&1`,
+    `  echo "PRUNE_DONE keep=$KEEP_CUR,$KEEP_PREV free_kb=$(df --output=avail / | tail -1)"`,
+    `) || true`,
+  ].join("\n");
 }
 
 // The swap script — deploy.sh's steps 2-6, SSM-ified. Dockerfile arrives
@@ -3774,6 +3822,16 @@ function msUpgradeScript(svc, version, dockerfileB64) {
   return [
     `set -e`,
     `echo '${dockerfileB64}' | base64 -d | sudo tee ${d}/Dockerfile >/dev/null`,
+    // Pre-build disk guard: reclaim first, and if that is not enough, say
+    // DISK_FULL in plain words instead of letting the build die inside
+    // `uv pip install` with an error nobody can read as "the disk is full".
+    `AVAIL=$(df --output=avail / | tail -1)`,
+    `if [ "$AVAIL" -lt ${MS_MIN_FREE_KB} ]; then`,
+    `  echo "DISK_LOW ${'$'}{AVAIL}KB free on / — reclaiming before build"`,
+    msPruneBlock(svc),
+    `  AVAIL=$(df --output=avail / | tail -1)`,
+    `fi`,
+    `if [ "$AVAIL" -lt ${MS_MIN_FREE_KB} ]; then echo "DISK_FULL ${'$'}AVAIL KB free on / (need ${MS_MIN_FREE_KB} KB / ${kbGb(MS_MIN_FREE_KB)}GB) on ${svc.host} — the image build WILL fail with an opaque 'No space left on device' inside pip. Reclaim disk on the host (docker images / docker system df) before retrying."; exit 1; fi`,
     `sudo docker build --build-arg ${svc.buildArgName}="==${version}" -t ${c}:${version} ${d}`,
     `GOT=$(sudo docker run --rm --entrypoint python ${c}:${version} -c "import importlib.metadata as m; print(m.version('${svc.pypiPackage}'))" | tr -d "[:space:]")`,
     `[ "$GOT" = "${version}" ] || { echo "VERIFY_FAILED image contains $GOT"; exit 1; }`,
@@ -3786,6 +3844,9 @@ function msUpgradeScript(svc, version, dockerfileB64) {
     `echo "\${PREV_IMAGE##*:}" | sudo tee ${d}/PREVIOUS >/dev/null`,
     `echo "${version}" | sudo tee ${d}/CURRENT >/dev/null`,
     `echo "UPGRADE_OK ${version} (was $PREV_IMAGE)"`,
+    // Success is recorded BEFORE the prune, and the prune cannot fail the run:
+    // reclaiming disk is housekeeping, never a reason to undo a good deploy.
+    msPruneBlock(svc),
   ].join("\n");
 }
 
@@ -3803,8 +3864,14 @@ async function msDeploy(svc, version) {
   // Confirm through Cloudflare too — local health can pass while the edge 502s.
   let edge = null;
   try { edge = (await fetch(`${svc.publicBase}${svc.healthPath}`, { signal: AbortSignal.timeout(8000) })).status; } catch { /* */ }
-  try { auditLog("system", `${svc.id.replace(/-/g, "_")}_deploy`, version, { ok, edge, tail: (r.stdout || r.stderr || "").slice(-300) }); } catch { /* */ }
-  return { ok, edge, output: (r.stdout || "").slice(-500), error: ok ? null : (r.stderr || r.stdout || "").slice(-300) };
+  // 2026-08-11: the error was truncated to 300 chars, which held only the
+  // Dockerfile frame ("uv pip install ... exit code: 1") — the actual cause,
+  // `No space left on device`, was cut off and the failure looked like a
+  // package problem for a full day. Keep enough tail to contain the real error,
+  // and always merge stderr WITH stdout (docker build writes to both).
+  const tail = [r.stdout, r.stderr].filter(Boolean).join("\n").slice(-8000);
+  try { auditLog("system", `${svc.id.replace(/-/g, "_")}_deploy`, version, { ok, edge, tail: tail.slice(-2000) }); } catch { /* */ }
+  return { ok, edge, output: (r.stdout || "").slice(-4000), error: ok ? null : tail };
 }
 
 async function msMaybeAutoDeploy(svc) {
@@ -3822,7 +3889,7 @@ async function msMaybeAutoDeploy(svc) {
     try { mkdirSync(dirname(svc.attemptsFile), { recursive: true }); writeFileSync(svc.attemptsFile, JSON.stringify(attempts, null, 2)); } catch { /* */ }
     console.log(`[${svc.id}] ${deployed} -> ${latest}: auto-deploy starting`);
     const res = await msDeploy(svc, latest);
-    console.log(`[${svc.id}] auto-deploy ${latest}: ${res.ok ? "OK" : "FAILED"} ${res.error || ""}`);
+    console.log(`[${svc.id}] auto-deploy ${latest}: ${res.ok ? "OK" : "FAILED"} ${(res.error || "").slice(-1500)}`);
   } catch (e) {
     console.error(`[${svc.id}] auto-deploy sweep failed:`, e.message);
   }
@@ -3870,7 +3937,11 @@ const msStatusHandler = async (svc, req, res) => {
     let edge = null, latest = null;
     try { edge = (await fetch(`${svc.publicBase}${svc.healthPath}`, { signal: AbortSignal.timeout(6000) })).status; } catch { /* */ }
     try { latest = await msPypiLatest(svc); } catch { /* */ }
-    res.json({ id: svc.id, host: svc.host, container: svc.container, public_base: svc.publicBase, edge_health: edge, pypi_latest: latest, deployed: observed.version, observed, auto_deploy: svc.autoDeploy });
+    const disk = observed.host_disk || {};
+    const warnings = [];
+    if (disk.status === "blocked") warnings.push(`Host disk on ${svc.host} is ${disk.used_pct ?? "?"}% used, only ${disk.avail_gb ?? "?"}GB free — below the ${disk.deploy_min_gb}GB an image build needs. Deploys will fail ("No space left on device" inside pip) until disk is reclaimed.`);
+    else if (disk.status === "low") warnings.push(`Host disk on ${svc.host} is ${disk.used_pct ?? "?"}% used, ${disk.avail_gb ?? "?"}GB free — a release or two from blocking deploys.`);
+    res.json({ id: svc.id, host: svc.host, container: svc.container, public_base: svc.publicBase, edge_health: edge, pypi_latest: latest, deployed: observed.version, observed, host_disk: disk, warnings, auto_deploy: svc.autoDeploy });
   } catch (e) { res.status(502).json({ error: e.message }); }
 };
 
@@ -3923,13 +3994,26 @@ async function checkMicroservice(svc) {
     if (observed.local_health !== 200) return { id, label, status: "critical", detail: `Observed ${svc.container} running ${observed.image || "an unknown image"}, but host-local health returned ${observed.local_health || "no response"}. ${svc.impact}`, observed, actions: [] };
     if (!r.ok) return { id, label, status: "critical", detail: `Observed ${svc.container} running ${observed.image || "an unknown image"} with local health 200, but ${svc.publicBase}${svc.healthPath} -> HTTP ${r.status}. ${svc.impact}`, observed, actions: [] };
     const deployed = observed.version;
+    // A full host disk leaves the service perfectly healthy while every future
+    // deploy dies inside the image build. It has to be its own visible state,
+    // not something only the failed build knows.
+    const disk = observed.host_disk || {};
+    const diskNote = disk.status === "blocked" || disk.status === "low"
+      ? ` Host disk on ${svc.host} is ${disk.used_pct ?? "?"}% used with only ${disk.avail_gb ?? "?"}GB free (deploys need ${disk.deploy_min_gb}GB to build) — the deploy prunes old images, but if this stays low, reclaim disk on the host.`
+      : "";
+    if (disk.status === "blocked") {
+      return { id, label, status: "warning", detail: `Observed healthy (${ms}ms) running ${deployed || observed.image}, but DEPLOYS ARE BLOCKED:${diskNote} A build attempted now fails inside pip with "No space left on device".`, observed, actions: [] };
+    }
     const record = !observed.recorded_version
       ? ` No CURRENT version record exists; freshness is based on the inspected ${observed.version_source || "container image"}.`
       : observed.record_matches_runtime === false
         ? ` CURRENT records ${observed.recorded_version}, but the running ${observed.version_source || "container"} is ${deployed}; runtime wins.`
         : "";
     if (latest && deployed && deployed !== latest) {
-      return { id, label, status: "warning", detail: `Observed healthy (${ms}ms), running ${deployed} from ${observed.image}, while PyPI has ${latest}.${record} Auto-deploy ${svc.autoDeploy ? "tries each version once — check the audit log / Manager logs for the failure" : `is DISABLED (${svc.autoDeployEnvVar}=0)`}. Manual: POST /api/microservices/${id}/deploy.`, observed, actions: [] };
+      return { id, label, status: "warning", detail: `Observed healthy (${ms}ms), running ${deployed} from ${observed.image}, while PyPI has ${latest}.${record} Auto-deploy ${svc.autoDeploy ? "tries each version once — check the audit log / Manager logs for the failure" : `is DISABLED (${svc.autoDeployEnvVar}=0)`}. Manual: POST /api/microservices/${id}/deploy.${diskNote}`, observed, actions: [] };
+    }
+    if (disk.status === "low") {
+      return { id, label, status: "warning", detail: `Observed deployed and healthy in ${ms}ms running ${deployed || observed.image}.${diskNote}`, observed, actions: [] };
     }
     return { id, label, status: "ok", detail: `Observed deployed and healthy in ${ms}ms: ${observed.image || svc.container}${deployed ? `, ${observed.version_source} version ${deployed}` : ""}${latest ? ` (PyPI latest ${latest})` : ""}.${record}`, observed, actions: [] };
   } catch (e) {

@@ -23,6 +23,30 @@ installed Python package version, host-local health, and `/opt/<service>/CURRENT
 - The Secrets banner must say what was observed and what Apply will do. Never
   predict failure from a missing record.
 
+## Microservice deploys must leave the host deployable
+
+The deploy pipeline builds images on the fleet host. Left alone it accumulated
+one image per release forever (matrx-files 1.7GB, matrx-seo 262MB) until
+2026-08-11, when the host reached 100% disk (86 images, 45GB) and every deploy
+hard-failed. Nothing said "disk" — `uv pip install` exited 1 and the reported
+error was truncated to the Dockerfile frame.
+
+- **Every successful upgrade prunes.** After `UPGRADE_OK`, images for that
+  service's repo are removed except the new `CURRENT` and the recorded
+  `PREVIOUS`, so rollback stays possible; dangling images and the build cache go
+  too. The prune runs in a `set +e` subshell with per-command `timeout`s **after**
+  success is recorded — housekeeping may never fail or roll back a good deploy.
+- **A full disk is named before it bites.** The upgrade script checks
+  `df --output=avail /` before building; below `MATRX_MS_MIN_FREE_KB` (6GB) it
+  reclaims first, and if still short it exits with `DISK_FULL …` naming the disk
+  and the opaque pip failure it prevents.
+- **Disk is runtime truth.** `msObservedState` reports `host_disk`
+  (`ok` / `low` / `blocked`); status endpoints carry it plus a `warnings` array,
+  and fleet-health reports `blocked` as a warning even while the service is
+  perfectly healthy — a full disk breaks future deploys, not the running service.
+- **Never truncate a build failure to a summary.** Deploy errors merge stdout
+  and stderr and keep 8000 chars. The 300-char slice is what hid this cause.
+
 ## Orchestrator freshness
 
 Each orchestrator's authenticated root response reports `source_sha`. Compare

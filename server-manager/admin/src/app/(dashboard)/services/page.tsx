@@ -31,7 +31,12 @@ interface Service {
   observed: {
     observed_at: string; exists: boolean; running: boolean; deployed: boolean; image: string | null;
     package_version: string | null; version: string | null; version_source: string | null;
-    recorded_version: string | null; record_matches_runtime: boolean | null; local_health: number | null;
+    recorded_version: string | null; previous_version: string | null;
+    record_matches_runtime: boolean | null; local_health: number | null;
+    host_disk: {
+      avail_kb: number | null; avail_gb: number | null; used_pct: number | null;
+      deploy_min_gb: number; status: "ok" | "low" | "blocked" | "unknown";
+    } | null;
   } | null;
   observation_error: string | null;
   auto_deploy: boolean; published: boolean;
@@ -45,6 +50,7 @@ export default function ServicesPage() {
   const [logsFor, setLogsFor] = useState<string | null>(null);
   const [logs, setLogs] = useState<string>("");
   const [logsLoading, setLogsLoading] = useState(false);
+  const [logsTitle, setLogsTitle] = useState("last 200 log lines");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -66,7 +72,16 @@ export default function ServicesPage() {
       toast.info(`Deploying ${s.pypi_package} ${s.pypi_latest || "latest"} — build + verify + swap takes a few minutes…`);
       const r = await api<{ version: string; ok: boolean; error?: string }>(`/api/microservices/${s.id}/deploy`, { method: "POST" });
       if (r.ok) toast.success(`${s.pypi_package} ${r.version} deployed (health-verified).`);
-      else toast.error(`Deploy failed: ${r.error || "see Manager logs"} — previous version restored.`);
+      else {
+        // The full build tail goes on screen. A one-line toast is exactly how a
+        // disk-full failure read as a pip failure for a day (2026-08-11).
+        const full = r.error || "see Manager logs";
+        const disk = /DISK_FULL|No space left on device/.test(full);
+        toast.error(disk
+          ? `Deploy blocked: the host is out of disk — see the build output below.`
+          : `Deploy failed — see the build output below. Previous version restored.`);
+        setLogsFor(s.id); setLogsTitle("deploy output (full build tail)"); setLogsLoading(false); setLogs(full);
+      }
       await load();
     } catch (e) {
       toast.error(e instanceof ApiError ? e.message : String(e));
@@ -77,6 +92,7 @@ export default function ServicesPage() {
 
   async function viewLogs(s: Service) {
     setLogsFor(s.id);
+    setLogsTitle("last 200 log lines");
     setLogsLoading(true);
     try {
       const res = await fetch(`/api/microservices/${s.id}/logs?lines=200`, {
@@ -126,6 +142,15 @@ export default function ServicesPage() {
                     : current
                       ? <Badge variant="success">v{s.deployed} · current</Badge>
                       : <Badge variant="secondary">{s.deployed ? `v${s.deployed}` : "version ?"} → PyPI v{s.pypi_latest}</Badge>}
+                  {/* A full host disk leaves the service healthy but blocks every
+                      future build — it has to be visible here, not only in the
+                      failure it eventually causes. */}
+                  {s.observed?.host_disk?.status === "blocked" && (
+                    <Badge variant="destructive"><AlertTriangle className="size-3 mr-1" /> deploys blocked · disk {s.observed.host_disk.used_pct ?? "?"}% full</Badge>
+                  )}
+                  {s.observed?.host_disk?.status === "low" && (
+                    <Badge variant="secondary"><AlertTriangle className="size-3 mr-1" /> disk low · {s.observed.host_disk.avail_gb ?? "?"}GB free</Badge>
+                  )}
                   <Badge variant={s.auto_deploy ? "success" : "secondary"} className="text-[10px]">
                     auto-deploy {s.auto_deploy ? "on" : "off"}
                   </Badge>
@@ -160,13 +185,21 @@ export default function ServicesPage() {
                         ? `CURRENT record ${s.observed.recorded_version} does not match runtime`
                         : `CURRENT record ${s.observed.recorded_version} matches runtime`
                       : "No CURRENT version record; runtime inspection is authoritative"}</span>
+                    {s.observed.previous_version && <span>rollback target v{s.observed.previous_version} (kept by the deploy prune)</span>}
+                    {s.observed.host_disk?.avail_gb != null && (
+                      <span className={s.observed.host_disk.status === "blocked" ? "text-destructive" : undefined}>
+                        host disk {s.observed.host_disk.avail_gb}GB free
+                        {s.observed.host_disk.used_pct != null ? ` (${s.observed.host_disk.used_pct}% used` : ""}
+                        {s.observed.host_disk.used_pct != null ? `, builds need ${s.observed.host_disk.deploy_min_gb}GB)` : ""}
+                      </span>
+                    )}
                   </div>
                 )}
                 {s.observation_error && <div className="text-xs text-destructive">Host observation failed: {s.observation_error}</div>}
                 {logsFor === s.id && (
                   <div className="space-y-1">
                     <div className="flex items-center justify-between">
-                      <span className="text-xs font-medium">last 200 log lines</span>
+                      <span className="text-xs font-medium">{logsTitle}</span>
                       <Button size="sm" variant="ghost" onClick={() => setLogsFor(null)}><X className="size-4" /></Button>
                     </div>
                     {logsLoading
