@@ -66,6 +66,17 @@ failure into “no approved release exists.”
 The separate **Recent deploys** check reports GitHub Actions history only; it
 must not claim that a workflow record proves a process is running that commit.
 
+## A normal release is not an outage
+
+The hosted orchestrator answers 404/502 for ~a minute after every release
+recreates it. That window is reported as `restarting` (rank 0 — overall stays
+green, ops-triage leaves it alone), decided by the container's own
+`State.StartedAt` read over the Docker socket, not by assuming a deploy is
+underway. Absent or unreadable container is NOT "just restarted" — it stays
+critical, as does anything still down past 150s. Alarm fatigue is a real
+failure mode: with the poller healthy, releases run back to back, so a
+false critical on each one trains the operator to ignore the banner.
+
 ## A stuck poller must say WHY
 
 `deploy-hosted.sh` (matrx-sandbox) records every `fail()` to
