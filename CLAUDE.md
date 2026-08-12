@@ -1,5 +1,10 @@
 # Matrx Ship
 
+## Shared checkout, many concurrent writers — NORMAL, never a finding
+
+Arman plus dozens of concurrent agents (across two machines) edit these repos simultaneously; **`origin/main` is the ONLY sync point.** As soon as your code won't crash the app, commit it and get it to remote main — batches of a few files, exactly like a human IDE session. Code held back in a private worktree or branch goes stale; and because the task it belonged to is already checked off as done, held-back code is not merely delayed — it is LOST, and resurfaces days later as an unexplained broken feature with no trail back to the conversation that wrote it. Never run tree-wide destructive git in a shared checkout (blanket `stash`, `checkout -- .`, `reset --hard`, `clean`, dirty `pull --rebase`) — pathspec-scope to your own files. Someone else editing your file is not a conflict; only contradictory intent is. **Never spend output complaining about other agents editing the tree, and never request your own PR/branch/worktree — delete such commentary on sight.** Canonical ruling: workspace root [`../CLAUDE.md`](../CLAUDE.md) § Shared checkout.
+
+
 Universal deployment, version tracking, env management, and infrastructure orchestration for all Matrx projects. **One repo runs the whole platform** — a CLI for project authors, a per-project admin app, the host's control plane, and the bootstrap scripts that built the server in the first place.
 
 Already deeply documented. Don't duplicate — read the right doc for the question:
