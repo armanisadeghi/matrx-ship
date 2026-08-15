@@ -45,3 +45,11 @@ drizzle/meta/
 # macOS Finder metadata
 .DS_Store
 **/.DS_Store
+
+# terraform (remote state is canonical; local artifacts are never committed)
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+crash.*.log
