@@ -17,16 +17,23 @@ async function validateTableName(name: string): Promise<boolean> {
   return result.length > 0;
 }
 
+// pg_catalog, never information_schema. The information_schema constraint views
+// are privilege-FILTERED, so under any session that is not the role we assume a
+// table with a perfectly good primary key resolves to null and every PATCH/DELETE
+// here fails with "no primary key". (aidream FOUND_DEFECTS: pooled connections
+// intermittently run as `authenticated`.)
 async function getPrimaryKeyColumn(table: string): Promise<string | null> {
   const result: Row[] = await db.execute(sql`
-    SELECT kcu.column_name
-    FROM information_schema.table_constraints tc
-    JOIN information_schema.key_column_usage kcu
-      ON tc.constraint_name = kcu.constraint_name
-      AND tc.table_schema = kcu.table_schema
-    WHERE tc.constraint_type = 'PRIMARY KEY'
-      AND tc.table_schema = 'public'
-      AND tc.table_name = ${table}
+    SELECT a.attname AS column_name
+    FROM pg_index i
+    JOIN pg_class c ON c.oid = i.indrelid
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum = ANY(i.indkey)
+    WHERE i.indisprimary
+      AND n.nspname = 'public'
+      AND c.relname = ${table}
+      AND NOT a.attisdropped
+    ORDER BY a.attnum
     LIMIT 1
   `);
   return result.length > 0 ? String(result[0].column_name) : null;
@@ -36,6 +43,12 @@ function escapeValue(val: unknown): string {
   if (val === null || val === undefined) return "NULL";
   if (typeof val === "number") return String(val);
   if (typeof val === "boolean") return val ? "TRUE" : "FALSE";
+  // Objects and arrays must be serialised as JSON. String(val) renders them
+  // "[object Object]", which a json/jsonb column rejects outright — so editing
+  // any JSONB field through this admin surface simply failed.
+  if (typeof val === "object") {
+    return `'${JSON.stringify(val).replace(/'/g, "''")}'`;
+  }
   return `'${String(val).replace(/'/g, "''")}'`;
 }
 
@@ -74,16 +87,32 @@ export async function PATCH(
     // Validate columns
     const columns = Object.keys(body);
     const colCheck: Row[] = await db.execute(sql`
-      SELECT column_name FROM information_schema.columns
-      WHERE table_schema = 'public'
-        AND table_name = ${table}
-        AND column_name = ANY(${columns})
+      SELECT a.attname AS column_name
+      FROM pg_attribute a
+      JOIN pg_class c ON c.oid = a.attrelid
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE n.nspname = 'public'
+        AND c.relname = ${table}
+        AND a.attname = ANY(${columns})
+        AND a.attnum > 0 AND NOT a.attisdropped
     `);
     const validColumns = colCheck.map((r: Row) => String(r.column_name));
 
     if (validColumns.length === 0) {
       return NextResponse.json(
         { error: "No valid columns to update" },
+        { status: 400 },
+      );
+    }
+
+    // Never write a SUBSET of what was asked for and report success. The old code
+    // silently dropped any unrecognised column and returned 200, so a partial
+    // write was indistinguishable from a complete one — the POST sibling already
+    // rejects the same case with 400.
+    const unknownColumns = columns.filter((c: string) => !validColumns.includes(c));
+    if (unknownColumns.length > 0) {
+      return NextResponse.json(
+        { error: `Invalid columns: ${unknownColumns.join(", ")}` },
         { status: 400 },
       );
     }

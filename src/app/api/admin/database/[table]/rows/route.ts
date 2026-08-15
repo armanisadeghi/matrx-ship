@@ -18,6 +18,26 @@ async function validateTableName(name: string): Promise<boolean> {
   return result.length > 0;
 }
 
+// pg_catalog, never information_schema. information_schema.columns is
+// privilege-FILTERED: it answers "exists AND I hold a privilege on it", so under
+// any session that is not the role we assume it reports real columns as absent —
+// silently. validateTableName() above already reads pg_catalog; this makes the
+// column probes agree with it. (aidream FOUND_DEFECTS: pooled connections
+// intermittently run as `authenticated`.)
+async function columnExists(table: string, column: string): Promise<boolean> {
+  const result: Row[] = await db.execute(sql`
+    SELECT 1 FROM pg_attribute a
+    JOIN pg_class c ON c.oid = a.attrelid
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public'
+      AND c.relname = ${table}
+      AND a.attname = ${column}
+      AND a.attnum > 0 AND NOT a.attisdropped
+    LIMIT 1
+  `);
+  return result.length > 0;
+}
+
 export async function GET(
   request: Request,
   { params }: { params: Promise<{ table: string }> },
@@ -50,31 +70,24 @@ export async function GET(
     // Build query with optional sorting
     let query = `SELECT * FROM public."${table}"`;
     if (sortBy) {
-      // Validate column exists
-      const colCheck: Row[] = await db.execute(sql`
-        SELECT 1 FROM information_schema.columns
-        WHERE table_schema = 'public'
-          AND table_name = ${table}
-          AND column_name = ${sortBy}
-        LIMIT 1
-      `);
-      if (colCheck.length > 0) {
-        query += ` ORDER BY "${sortBy}" ${sortOrder}`;
+      // Validate column exists. pg_catalog, never information_schema — see
+      // columnExists().
+      if (await columnExists(table, sortBy)) {
+        query += ` ORDER BY "${sortBy}" ${sortOrder}, ctid ASC`;
+      } else {
+        query += ` ORDER BY ctid ASC`;
       }
+    } else if (await columnExists(table, "created_at")) {
+      query += ` ORDER BY "created_at" DESC, ctid ASC`;
     } else {
-      // Default: try to sort by created_at desc, fallback to no order
-      const hasCreatedAt: Row[] = await db.execute(sql`
-        SELECT 1 FROM information_schema.columns
-        WHERE table_schema = 'public'
-          AND table_name = ${table}
-          AND column_name = 'created_at'
-        LIMIT 1
-      `);
-      if (hasCreatedAt.length > 0) {
-        query += ` ORDER BY "created_at" DESC`;
-      }
+      query += ` ORDER BY ctid ASC`;
     }
 
+    // ORDER BY is now unconditional and always ends in a unique tiebreaker.
+    // LIMIT/OFFSET over an unordered (or non-unique-ordered) result lets Postgres
+    // return rows in any order it likes, so paging duplicated some rows and
+    // skipped others — and the old code dropped ORDER BY entirely whenever the
+    // column probe came back empty.
     query += ` LIMIT ${pageSize} OFFSET ${offset}`;
 
     const result: Row[] = await db.execute(sql.raw(query));
@@ -123,10 +136,14 @@ export async function POST(
     // Validate columns exist
     const columns = Object.keys(body);
     const colCheck: Row[] = await db.execute(sql`
-      SELECT column_name FROM information_schema.columns
-      WHERE table_schema = 'public'
-        AND table_name = ${table}
-        AND column_name = ANY(${columns})
+      SELECT a.attname AS column_name
+      FROM pg_attribute a
+      JOIN pg_class c ON c.oid = a.attrelid
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE n.nspname = 'public'
+        AND c.relname = ${table}
+        AND a.attname = ANY(${columns})
+        AND a.attnum > 0 AND NOT a.attisdropped
     `);
 
     const validColumns = colCheck.map((r: Row) => String(r.column_name));
