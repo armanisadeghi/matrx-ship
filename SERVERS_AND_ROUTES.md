@@ -58,6 +58,7 @@ Full write-up: `aidream/FOUND_DEFECTS.md` → "matrx-coolify-2 SSH host key chan
 | `traefik.dev.codematrx.com` | **Traefik** (`traefik`) | Reverse proxy — routes ALL these URLs + manages TLS certs. |
 | `pg.dev.codematrx.com` | **pgAdmin** (`pgadmin`) | Web UI for the databases. |
 | *(no public URL)* | **Shared Postgres** (`postgres`, pgvector) | The main shared database. |
+| *(no public URL — 127.0.0.1:5499 ONLY)* | **Replay Mirror** (`matrx-replay-mirror`, `pgvector/pgvector:pg17`) | A full writable **mirror of Matrx Main** for real-execution replay (Dynamic Agent Graph D-25 / C-22). Replay executes REAL tool calls; DB writes land here instead of production. 🚨 **Contains a complete copy of production data (incl. `auth.users`, `users.user_secrets`) — it is bound to loopback only and must NEVER be published or Traefik-routed.** Volume `matrx-replay-mirror-data`; config + tooling in `/srv/matrx-replay-mirror/` (root 700; `.env.source`/`.env.mirror` root 600). Refresh: `/srv/matrx-replay-mirror/run-refresh.sh` (drops and rebuilds the DB; freshness stamped in `mirror.sync_info`). Contract: `aidream/db/mirror/FEATURE.md`. Placed here rather than on `matrx-main` because that host runs tight on storage. |
 | `agent-1.dev.codematrx.com` | **Agent VM** (`agent-1`) | A sysbox isolated VM environment (shell-only). |
 
 ---
