@@ -5,6 +5,7 @@
   "scripts": {
     "start": "node src/index.js",
     "dev": "dotenv -e .env.local -- node --watch src/index.js",
+    "test": "node --test src/*.test.js",
     "generate-token": "openssl rand -hex 32",
     "show-token": "dotenv -e .env.local -- node -e \"console.log('Current token:', process.env.MANAGER_TOKENS || 'Not set')\""
   },

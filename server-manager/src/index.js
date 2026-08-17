@@ -213,6 +213,7 @@ async function authMiddleware(req, res, next) {
       if (r.reason === "not_admin") {
         return res.status(403).json({ error: "Not an authorized admin", email: r.email });
       }
+      console.warn(`[auth] OAuth token rejected: ${r.reason}`);
     } catch {
       // fall through to 401
     }
@@ -576,8 +577,9 @@ PROJECT_NAME=${displayName}
 MATRX_SHIP_API_KEY=${apiKey}
 MATRX_SHIP_ADMIN_SECRET=
 
-# Admin OAuth (AI Matrx / Supabase). All three SUPABASE_MATRIX_* are required to
-# enable OAuth login for /admin; MATRX_SHIP_ADMIN_SECRET remains as break-glass.
+# Admin OAuth (AI Matrx / Supabase). URL and KEY enable OAuth. JWT_SECRET is
+# optional legacy HS256 compatibility; current ES256/RS256 keys use JWKS.
+# MATRX_SHIP_ADMIN_SECRET remains as break-glass.
 SUPABASE_MATRIX_JWT_SECRET=
 SUPABASE_MATRIX_URL=
 SUPABASE_MATRIX_KEY=

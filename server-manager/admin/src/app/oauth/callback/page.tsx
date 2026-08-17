@@ -6,7 +6,7 @@ import { Loader2, CheckCircle2, XCircle } from "lucide-react";
 // Receives the OAuth redirect from aidream's broker:
 //   success -> /admin/oauth/callback?access_token=<Supabase JWT>
 //   failure -> /admin/oauth/callback?error=<message>
-// Stores the token where the Manager API client reads it, then bounces to the
+// Verifies the token with the Manager before storing it, then bounces to the
 // dashboard. (Non-admins are redirected by aidream to /access-denied instead.)
 export default function OAuthCallbackPage() {
   const [status, setStatus] = useState<"working" | "ok" | "error">("working");
@@ -28,12 +28,42 @@ export default function OAuthCallbackPage() {
       return;
     }
 
-    localStorage.setItem("manager_token", token);
     // Scrub the token from the URL/history immediately.
     window.history.replaceState({}, "", window.location.pathname);
-    setStatus("ok");
-    const t = setTimeout(() => { window.location.href = "/admin/instances"; }, 600);
-    return () => clearTimeout(t);
+
+    let cancelled = false;
+    let redirectTimer: ReturnType<typeof setTimeout> | undefined;
+    (async () => {
+      try {
+        const res = await fetch("/api/me", {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const body = await res.json().catch(() => ({})) as { authenticated?: boolean; error?: string };
+        if (!res.ok || !body.authenticated) {
+          localStorage.removeItem("manager_token");
+          if (!cancelled) {
+            setMessage(body.error || "The server rejected the OAuth session.");
+            setStatus("error");
+          }
+          return;
+        }
+        localStorage.setItem("manager_token", token);
+        if (!cancelled) {
+          setStatus("ok");
+          redirectTimer = setTimeout(() => { window.location.href = "/admin/instances"; }, 600);
+        }
+      } catch {
+        localStorage.removeItem("manager_token");
+        if (!cancelled) {
+          setMessage("Network error completing sign in.");
+          setStatus("error");
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+      if (redirectTimer) clearTimeout(redirectTimer);
+    };
   }, []);
 
   return (

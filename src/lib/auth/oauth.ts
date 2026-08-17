@@ -5,21 +5,32 @@
 // which runs PKCE against aimatrx.com, checks public.admins, and only then
 // redirects back with ?access_token=<Supabase JWT>. We STILL re-verify here:
 // a Supabase JWT is accepted only if
-//   (a) its HS256 signature checks out against SUPABASE_MATRIX_JWT_SECRET,
+//   (a) its signature checks out against Supabase JWKS (ES256 / RS256), or the
+//       legacy HS256 secret while old tokens are still in use,
 //   (b) it isn't expired and has aud "authenticated", and
 //   (c) the subject is present in public.admins.
 // The SUPERADMIN gate is the admins.level column == "super_admin".
 //
-// Verification uses node:crypto (HMAC-SHA256) — no JWT dependency. Disabled
-// (every check returns "disabled") unless the three SUPABASE_MATRIX_* env vars
-// are set, so an operator break-glass secret still works when OAuth isn't wired.
+// Verification uses node:crypto — no JWT dependency. Asymmetric signing keys
+// are cached from the Supabase JWKS endpoint, with an immediate refresh on an
+// unknown kid for safe key rotation. SUPABASE_MATRIX_JWT_SECRET is optional and
+// used only for legacy HS256 tokens.
 
 import { NextResponse } from "next/server";
-import { createHmac, timingSafeEqual, createHash } from "node:crypto";
+import {
+  createHmac,
+  createPublicKey,
+  timingSafeEqual,
+  createHash,
+  verify as verifySignature,
+  type JsonWebKey as NodeJsonWebKey,
+} from "node:crypto";
 import { logger } from "@/lib/logger";
 
 const JWT_AUDIENCE = "authenticated";
 const ADMIN_CACHE_TTL_MS = 60_000;
+const JWKS_CACHE_TTL_MS = 10 * 60_000;
+const JWKS_FORCED_REFRESH_MIN_INTERVAL_MS = 30_000;
 export const ADMIN_SESSION_COOKIE = "matrx_admin_session";
 
 interface AdminInfo {
@@ -38,6 +49,9 @@ export interface AdminUser {
 
 // userId -> { level, isAdmin, ts }
 const _adminCache = new Map<string, { isAdmin: boolean; level: string | null; ts: number }>();
+type SupabaseJwk = NodeJsonWebKey & { alg?: string; kid?: string; kty?: string };
+let _jwksCache: { url: string; keys: SupabaseJwk[]; ts: number } = { url: "", keys: [], ts: 0 };
+let _lastForcedJwksRefresh = 0;
 
 function jwtSecret() {
   return process.env.SUPABASE_MATRIX_JWT_SECRET || "";
@@ -53,7 +67,7 @@ function adminSecret() {
 }
 
 export function oauthEnabled() {
-  return !!(jwtSecret() && supabaseUrl() && supabaseKey());
+  return !!(supabaseUrl() && supabaseKey());
 }
 
 export function aidreamUrl() {
@@ -76,37 +90,83 @@ interface JwtPayload {
   sub?: string;
   email?: string;
   exp?: number;
+  nbf?: number;
   aud?: string | string[];
+  iss?: string;
 }
 
-// Verify a Supabase HS256 JWT. Returns the payload, or throws Error with .code.
-export function verifySupabaseJwt(token: string): JwtPayload {
-  const secret = jwtSecret();
-  if (!secret) throw Object.assign(new Error("oauth disabled"), { code: "disabled" });
+function codedError(message: string, code: string) {
+  return Object.assign(new Error(message), { code });
+}
+
+async function fetchJwks(url: string): Promise<SupabaseJwk[]> {
+  const resp = await fetch(url, { headers: { Accept: "application/json" } });
+  if (!resp.ok) throw codedError(`JWKS request failed: HTTP ${resp.status}`, "jwks_unavailable");
+  const body = (await resp.json()) as { keys?: SupabaseJwk[] };
+  if (!Array.isArray(body.keys)) throw codedError("JWKS response has no keys", "jwks_invalid");
+  _jwksCache = { url, keys: body.keys, ts: Date.now() };
+  return body.keys;
+}
+
+async function findJwk(kid: string, alg: string): Promise<SupabaseJwk> {
+  if (!kid) throw codedError("asymmetric JWT is missing kid", "missing_kid");
+  const url = `${supabaseUrl()}/auth/v1/.well-known/jwks.json`;
+  const cacheValid = _jwksCache.url === url && Date.now() - _jwksCache.ts < JWKS_CACHE_TTL_MS;
+  let keys = cacheValid ? _jwksCache.keys : await fetchJwks(url);
+  let key = keys.find((candidate) => candidate.kid === kid && candidate.alg === alg);
+  if (!key && cacheValid && Date.now() - _lastForcedJwksRefresh >= JWKS_FORCED_REFRESH_MIN_INTERVAL_MS) {
+    _lastForcedJwksRefresh = Date.now();
+    keys = await fetchJwks(url);
+    key = keys.find((candidate) => candidate.kid === kid && candidate.alg === alg);
+  }
+  if (!key) throw codedError(`no ${alg} signing key found for kid ${kid}`, "unknown_kid");
+  return key;
+}
+
+// Verify a Supabase JWT. Modern projects use asymmetric JWKS keys; HS256 is
+// accepted only when the legacy secret is explicitly configured.
+export async function verifySupabaseJwt(token: string): Promise<JwtPayload> {
+  if (!supabaseUrl()) throw codedError("oauth disabled", "disabled");
   const parts = String(token || "").split(".");
-  if (parts.length !== 3) throw Object.assign(new Error("malformed jwt"), { code: "malformed" });
+  if (parts.length !== 3) throw codedError("malformed jwt", "malformed");
   const [h, p, sig] = parts;
 
-  let header: { alg?: string };
+  let header: { alg?: string; kid?: string };
   try { header = JSON.parse(b64urlDecode(h).toString("utf-8")); }
-  catch { throw Object.assign(new Error("malformed header"), { code: "malformed" }); }
-  if (header.alg !== "HS256") throw Object.assign(new Error(`unsupported alg ${header.alg}`), { code: "bad_alg" });
+  catch { throw codedError("malformed header", "malformed"); }
 
-  const expected = createHmac("sha256", secret).update(`${h}.${p}`).digest();
-  const got = b64urlDecode(sig);
-  if (got.length !== expected.length || !timingSafeEqual(got, expected)) {
-    throw Object.assign(new Error("bad signature"), { code: "bad_signature" });
+  const signingInput = Buffer.from(`${h}.${p}`);
+  const signature = b64urlDecode(sig);
+  let signatureOk = false;
+  if (header.alg === "HS256") {
+    const secret = jwtSecret();
+    if (!secret) throw codedError("legacy HS256 secret is not configured", "hs256_disabled");
+    const expected = createHmac("sha256", secret).update(signingInput).digest();
+    signatureOk = signature.length === expected.length && timingSafeEqual(signature, expected);
+  } else if (header.alg === "ES256" || header.alg === "RS256") {
+    const jwk = await findJwk(header.kid || "", header.alg);
+    const key = createPublicKey({ key: jwk, format: "jwk" });
+    const keyOptions = header.alg === "ES256" ? { key, dsaEncoding: "ieee-p1363" as const } : key;
+    signatureOk = verifySignature("sha256", signingInput, keyOptions, signature);
+  } else {
+    throw codedError(`unsupported alg ${header.alg}`, "bad_alg");
   }
+  if (!signatureOk) throw codedError("bad signature", "bad_signature");
 
   let payload: JwtPayload;
   try { payload = JSON.parse(b64urlDecode(p).toString("utf-8")); }
-  catch { throw Object.assign(new Error("malformed payload"), { code: "malformed" }); }
+  catch { throw codedError("malformed payload", "malformed"); }
 
   const now = Math.floor(Date.now() / 1000);
-  if (payload.exp && now >= payload.exp) throw Object.assign(new Error("token expired"), { code: "expired" });
+  if (payload.exp && now >= payload.exp) throw codedError("token expired", "expired");
+  if (payload.nbf && now < payload.nbf) throw codedError("token not active yet", "not_active");
   const aud = payload.aud;
   const audOk = aud === JWT_AUDIENCE || (Array.isArray(aud) && aud.includes(JWT_AUDIENCE));
-  if (aud && !audOk) throw Object.assign(new Error(`bad audience ${aud}`), { code: "bad_audience" });
+  if (aud && !audOk) throw codedError(`bad audience ${aud}`, "bad_audience");
+  const expectedIssuer = `${supabaseUrl()}/auth/v1`;
+  if (payload.iss && payload.iss.replace(/\/$/, "") !== expectedIssuer) {
+    throw codedError(`bad issuer ${payload.iss}`, "bad_issuer");
+  }
 
   return payload;
 }
@@ -149,7 +209,7 @@ export async function authenticateOAuthAdmin(
   if (!oauthEnabled()) return { ok: false, reason: "disabled" };
   let payload: JwtPayload;
   try {
-    payload = verifySupabaseJwt(token);
+    payload = await verifySupabaseJwt(token);
   } catch (e) {
     return { ok: false, reason: (e as { code?: string }).code || "invalid" };
   }
