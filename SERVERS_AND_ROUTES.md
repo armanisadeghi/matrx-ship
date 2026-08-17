@@ -1,7 +1,7 @@
 # Servers & Routes — what we actually have
 
 A plain map of every machine, every public URL, and what each one is. Last
-verified 2026-05-26 from live `docker ps` + Traefik labels.
+verified 2026-08-16 from live health, Cloudflare DNS, AWS, and repository configuration.
 
 ---
 
@@ -9,9 +9,10 @@ verified 2026-05-26 from live `docker ps` + Traefik labels.
 
 | Machine | Address | What it is |
 |---|---|---|
+| **`matrx-main`** | `89.116.187.5` · `server.app.matrxserver.com` | The primary AI Dream Coolify host. Runs the public `app_server` plus the coordinated dashboard, worker, Studio, scraper, and development applications. |
 | **`/srv` dev host** | `srv504398.hstgr.cloud` · `77.37.62.64` · `*.dev.codematrx.com` | The main box. Runs the control plane, all the per-project apps, the shared DB, and the hosted sandbox tier. **This is what the Server Manager manages.** |
 | **EC2 `matrx-sandbox-host-dev`** | AWS `i-084f757c1e47d4efb` · `54.144.86.132` | The **EC2 sandbox tier** — runs its own sandbox orchestrator (systemd) + the sandboxes it spawns. **Also hosts the microservices**: `matrx-files` and `matrx-seo`, both behind the one `matrx-files-tls` Caddy container on :443 (`https://files.matrxserver.com`, `https://seo.matrxserver.com` — see §EC2 services). |
-| **EC2 `matrx-python-server`** | AWS `i-0241f4fee60fb02f6` · `54.166.106.252` | The **AI Dream backend** (the real aidream.ai API). Also hosts the OAuth broker. A different system — not a sandbox host. |
+| **EC2 `matrx-python-server`** | AWS `i-0241f4fee60fb02f6` · `54.166.106.252` | The AWS-local AI Dream **`sandbox_host` replica** used by sandboxes and nearby services. It is not the primary public API and runs no app-server singletons. |
 
 > Both EC2 boxes are in AWS account `872515272894`, region `us-east-1`.
 
@@ -73,7 +74,7 @@ Postgres. Routed at `<name>.dev.codematrx.com/admin`.
 |---|---|---|
 | `matrx-ship.dev.codematrx.com` | Matrx Ship | The Ship platform's own instance. |
 | `ai-matrx-admin.dev.codematrx.com` | AI Matrx Admin | |
-| `aidream-current.dev.codematrx.com` | Aidream Current | Version tracking for AI Dream (the app itself runs on EC2, not here). |
+| `aidream-current.dev.codematrx.com` | Aidream Current | Version tracking for AI Dream (primary applications run on `matrx-main`; EC2 carries the sandbox-host replica). |
 | `ai-dream.dev.codematrx.com` | Ai Dream | |
 | `matrx-sandbox.dev.codematrx.com` | Matrx Sandbox | Version tracking for the sandbox project (≠ the orchestrator). |
 | `matrx-dev-tools.dev.codematrx.com` | Matrx Dev Tools | |
@@ -101,8 +102,8 @@ Each one also has a private `db-<name>` Postgres container (no public URL).
 
 | URL | What it is |
 |---|---|
-| `server.app.matrxserver.com` | The **AI Dream backend** API (EC2 `matrx-python-server`). Also the **OAuth broker** — `/auth/aimatrx` is what this admin logs in through. |
-| `sandbox.matrxserver.com` | The **dedicated aidream server** that sandbox-attached chat turns route to (frontend channel `ec2-dedicated`). Runs as systemd `aidream.service` on `matrx-python-server`; env at `/etc/aidream/app.env` (editable from Manager Secrets, remote store `ec2:aidream-app`). Monitored by Fleet Health check `aidream-dedicated` — it once crashlooped 3 days unseen. |
+| `server.app.matrxserver.com` | The primary **AI Dream backend** API and OAuth broker. Cloudflare-proxied to Coolify `matrx-main` (`89.116.187.5`); `/health/detailed` must report `role=app_server`. |
+| `sandbox.matrxserver.com` | The AWS-local `sandbox_host` replica for sandbox-attached work. Runs as systemd `aidream.service` on `matrx-python-server`; env at `/etc/aidream/app.env` (Manager store `ec2:aidream-app`). It must never become the public `server.app` origin. |
 | `www.aimatrx.com` | The **identity/OAuth provider** (Supabase-backed). Where you actually sign in. |
 
 ---

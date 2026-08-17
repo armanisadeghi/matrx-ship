@@ -11,7 +11,7 @@ Manager yourself — NOT Vercel-gated).
 
 `FLEET_HOSTS` in [server-manager/src/aws.js](server-manager/src/aws.js):
 - `matrx-sandbox-host-dev` — `i-084f757c1e47d4efb` — EC2-tier sandbox orchestrator (54.144.86.132, priv 172.31.91.106)
-- `matrx-python-server` — `i-0241f4fee60fb02f6` — co-located AI Dream backend (54.166.106.252, priv 172.31.83.75)
+- `matrx-python-server` — `i-0241f4fee60fb02f6` — AWS-local AI Dream `sandbox_host` replica (54.166.106.252, priv 172.31.83.75). The primary public `app_server` remains on Coolify.
 
 Both us-east-1, AWS acct 872515272894, same AZ (us-east-1d).
 

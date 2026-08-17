@@ -69,9 +69,15 @@ A Template is what a user/agent picks when spawning a Sandbox. Each maps to one 
 | **Expiry / reaper / resume** | The reaper (60s loop) tears down past-TTL Sandboxes (keeps the volume) → status `expired`. `POST /sandboxes/{id}/resume` respawns on the same volume. |
 | **Agent-binding** | `POST /sandboxes/{id}/agent-binding` → `{ sandbox_id, base_url, access_token, root_path }`. The handoff object AI Dream uses to drive a Sandbox's tools remotely. `base_url` is the Orchestrator's **private** address on EC2 (LAN-speed tool calls). |
 
-### Co-located AI Dream (the production agent-loop path)
+### Co-located AI Dream replica (the AWS-local agent-loop path)
 
-A **full AI Dream** deployment runs on its own EC2 box (`matrx-python-server`) in the **same AWS AZ** as the EC2 sandbox host, so the agent loop's tool calls to the Orchestrator ride the private LAN. This is **not** the Orchestrator and **not** the in-box `aidream` Template — it's a separate full AI Dream whose *tools* reach into lean Sandboxes via the agent-binding. See `matrx-sandbox/docs/COLOCATED_AIDREAM.md`.
+A full AI Dream `sandbox_host` replica runs on its own EC2 box
+(`matrx-python-server`) in the **same AWS AZ** as the EC2 sandbox host, so its
+tool calls to the Orchestrator ride the private LAN. This is **not** the
+primary public `app_server`, the Orchestrator, or the in-box `aidream` Template.
+It is a separate full API runtime whose *tools* reach into lean Sandboxes via
+the agent-binding. The primary public API remains on Coolify. See
+`matrx-sandbox/docs/COLOCATED_AIDREAM.md`.
 
 ---
 
@@ -102,7 +108,7 @@ The specific things people (and agents) get wrong:
 
 3. **The Orchestrator ≠ the Manager.** The Orchestrator (`matrx-orchestrator`) spawns Sandboxes. The Manager (`matrx-manager`) manages Deployments + the Server and *proxies* sandbox ops to the Orchestrator. Two services, two jobs.
 
-4. **Co-located AI Dream ≠ the Orchestrator ≠ the in-box `aidream` Template.** Three different things: (a) the Orchestrator spawns boxes; (b) the `aidream` Template is a heavy box that runs the loop *inside* itself; (c) co-located AI Dream is a *separate* full AI Dream on EC2 that drives *lean* boxes remotely. The production direction is (c) + slim boxes.
+4. **The EC2 AI Dream replica ≠ the public app server ≠ the Orchestrator ≠ the in-box `aidream` Template.** Four different things: (a) the Coolify `app_server` is the primary public brain; (b) the Orchestrator spawns boxes; (c) the `aidream` Template is a heavy box that runs the loop *inside* itself; (d) the EC2 `sandbox_host` replica drives lean AWS-local boxes remotely. The AWS-local direction is (d) + slim boxes; it never changes the public DNS authority.
 
 5. **`cloud-files` ≠ `cld_files`.** `~/cloud-files/` is the user-visible directory inside a Sandbox; `cld_files` is the AIDream Supabase schema it syncs with; `/api/cloud-files/*` is the bridge between them. Different layers, intentionally. (Slim boxes don't use this — they persist via git; the watcher sits dormant there.)
 
@@ -142,7 +148,7 @@ The proposed schema rename `infra_instances → infra_deployments` (in the Ship 
 | "warm pool / claim" | Pre-booted Sandboxes + the ~0.5s adoption call |
 | "memory" | Per-user Postgres state hydrated into `~/.matrx/memory/` |
 | "cloud-files" | `~/cloud-files/` ↔ `cld_files` bridge (heavy boxes only) |
-| "co-located AI Dream" | The full AI Dream on EC2 that drives lean boxes remotely |
+| "co-located AI Dream" | The EC2 `sandbox_host` replica that drives lean AWS-local boxes remotely; never the primary public `app_server` |
 | "tier" | `ec2` or `hosted` — where a Sandbox runs |
 
 ---
