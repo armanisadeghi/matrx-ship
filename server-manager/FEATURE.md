@@ -23,6 +23,23 @@ installed Python package version, host-local health, and `/opt/<service>/CURRENT
 - The Secrets banner must say what was observed and what Apply will do. Never
   predict failure from a missing record.
 
+## EC2 AI Dream replica
+
+The `matrx-python-server` runtime is the AWS-local `sandbox_host` replica, not
+the public Coolify `app_server`. Its stable private port `8000` and replica TLS
+hostname terminate at Nginx; `aidream-blue` and `aidream-green` alternate on
+loopback ports behind it.
+
+- Secrets Apply never runs `systemctl restart aidream`. It invokes the active
+  image SHA through `/opt/aidream/deploy.sh`, which starts the inactive slot,
+  requires ready + exact SHA + `sandbox_host`, then switches Nginx.
+- Remote secret-file bytes never appear in SSM commands. Manager uploads a
+  random-key object to the private `matrx-backups` bucket with SSE-S3, tells the
+  instance only that object name, installs it mode 600, and deletes the transfer
+  object in a `finally` block.
+- The health alarm names the active-slot, containers, and Nginx boundary. It
+  never directs an operator to the disabled legacy single-container service.
+
 ## Microservice deploys must leave the host deployable
 
 The deploy pipeline builds images on the fleet host. Left alone it accumulated

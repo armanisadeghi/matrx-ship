@@ -21,6 +21,11 @@ import {
   StopInstancesCommand,
   RebootInstancesCommand,
 } from "@aws-sdk/client-ec2";
+import {
+  S3Client,
+  PutObjectCommand,
+  DeleteObjectCommand,
+} from "@aws-sdk/client-s3";
 
 const REGION =
   process.env.MATRX_ADMIN_AWS_REGION ||
@@ -44,6 +49,7 @@ export function awsRegion() {
 
 let _ssm = null;
 let _ec2 = null;
+let _s3 = null;
 
 function requireCreds() {
   const c = creds();
@@ -60,6 +66,23 @@ export function ssm() {
 }
 export function ec2() {
   return (_ec2 ??= new EC2Client({ region: REGION, credentials: requireCreds() }));
+}
+export function s3() {
+  return (_s3 ??= new S3Client({ region: REGION, credentials: requireCreds() }));
+}
+
+export async function putPrivateTransferObject(bucket, key, body) {
+  await s3().send(new PutObjectCommand({
+    Bucket: bucket,
+    Key: key,
+    Body: body,
+    ServerSideEncryption: "AES256",
+    ContentType: "application/octet-stream",
+  }));
+}
+
+export async function deletePrivateTransferObject(bucket, key) {
+  await s3().send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
 }
 
 // ── SSM ─────────────────────────────────────────────────────────────────────
@@ -160,7 +183,7 @@ export const FLEET_HOSTS = {
   },
   "matrx-python-server": {
     instanceId: "i-0241f4fee60fb02f6",
-    role: "co-located AI Dream backend",
+    role: "AWS-local AI Dream sandbox_host replica",
     region: "us-east-1",
   },
 };

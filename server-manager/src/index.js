@@ -29,6 +29,8 @@ import {
   ssmInstances,
   ec2Describe,
   ec2Power,
+  putPrivateTransferObject,
+  deletePrivateTransferObject,
   FLEET_HOSTS,
 } from "./aws.js";
 import {
@@ -66,6 +68,7 @@ const BACKUPS_DIR = join(APPS_DIR, "backups");
 const TOKENS_FILE = join(APPS_DIR, "tokens.json");
 const DOMAIN_SUFFIX = "dev.codematrx.com";
 const BUILD_HISTORY_FILE = join(APPS_DIR, "build-history.json");
+const SECRET_TRANSFER_BUCKET = "matrx-backups";
 
 // ╔════════════════════════════════════════════════════════════════════════════╗
 // ║  TOKEN STORE                                                              ║
@@ -3480,13 +3483,13 @@ async function checkDedicatedAidream() {
     if (r.ok) return { id, label, status: "ok", detail: `${AIDREAM_DEDICATED_HEALTH_URL} -> ${r.status} in ${ms}ms.`, actions: [] };
     return {
       id, label, status: "critical",
-      detail: `${AIDREAM_DEDICATED_HEALTH_URL} -> HTTP ${r.status}. Every sandbox-attached chat turn is failing ("Failed to fetch" in the FE). Check aidream.service on matrx-python-server (Hosts page / terminal): journalctl -u aidream.service, docker logs aidream.`,
+      detail: `${AIDREAM_DEDICATED_HEALTH_URL} -> HTTP ${r.status}. Every sandbox-attached chat turn is failing ("Failed to fetch" in the FE). On matrx-python-server, compare /etc/aidream/active-slot with the aidream-blue/aidream-green containers and nginx active upstream.`,
       actions: [{ label: "Open host terminal (matrx-python-server)", action: "open-url", url: "/admin/terminal" }],
     };
   } catch (e) {
     return {
       id, label, status: "critical",
-      detail: `${AIDREAM_DEDICATED_HEALTH_URL} unreachable (${e.message}). Every sandbox-attached chat turn is failing. Check aidream.service on matrx-python-server.`,
+      detail: `${AIDREAM_DEDICATED_HEALTH_URL} unreachable (${e.message}). Every sandbox-attached chat turn is failing. Check nginx plus the active aidream-blue/aidream-green slot on matrx-python-server.`,
       actions: [{ label: "Open host terminal (matrx-python-server)", action: "open-url", url: "/admin/terminal" }],
     };
   }
@@ -4971,9 +4974,9 @@ const REMOTE_SECRET_STORES = [
     kind: "ec2",
     host: "matrx-python-server",
     path: "/etc/aidream/app.env",
-    note: "Env is re-read on service restart — use Apply after editing.",
+    note: "Apply starts the inactive blue/green slot with the edited env, health-gates it, then atomically switches nginx. The active slot stays in service until the candidate passes.",
     remote: true,
-    restart: { type: "ssm", command: "sudo systemctl restart aidream.service && for i in $(seq 1 14); do sleep 5; code=$(curl -s -o /dev/null -w '%{http_code}' -m 4 http://127.0.0.1:8000/health || true); [ \"$code\" = 200 ] && break; done; echo health:$code" },
+    restart: { type: "ssm", timeout: 600, command: "test -s /etc/aidream/active-image-tag && sudo /opt/aidream/deploy.sh \"$(cat /etc/aidream/active-image-tag)\"" },
   },
   {
     id: "ec2:matrx-files",
@@ -5067,13 +5070,28 @@ async function remoteReadFileB64(store) {
 async function remoteWriteFile(store, content) {
   const h = FLEET_HOSTS[store.host];
   if (!h) throw new Error(`Unknown fleet host '${store.host}'`);
-  const b64 = Buffer.from(content, "utf-8").toString("base64");
-  if (b64.length > 64000) throw new Error("File too large to write over SSM (64KB cap)");
+  const body = Buffer.from(content, "utf-8");
+  if (body.length > 1024 * 1024) throw new Error("Secret file exceeds the 1MB transfer cap");
+  const transferKey = `manager-secret-transfer/${Date.now()}-${randomBytes(16).toString("hex")}`;
   const p = shq(store.path);
-  const cmd = `sudo cp -a ${p} ${p}.bak-$(date +%s) 2>/dev/null; echo '${b64}' | base64 -d | sudo tee ${p} >/dev/null && sudo chmod 600 ${p} && echo WRITE_OK`;
-  const r = await ssmRun(h.instanceId, cmd, { timeout: 60, comment: "secrets:write" });
-  if (r.status !== "Success" || !(r.stdout || "").includes("WRITE_OK")) {
-    throw new Error(`SSM write failed: ${r.status} ${r.stderr?.slice(0, 200) || ""}`);
+  const source = `s3://${SECRET_TRANSFER_BUCKET}/${transferKey}`;
+  const cmd = [
+    "set -e",
+    `T=$(mktemp /tmp/matrx-secret-transfer.XXXXXX)`,
+    `trap 'rm -f \"$T\"' EXIT`,
+    `aws s3 cp ${shq(source)} \"$T\" >/dev/null`,
+    `sudo cp -a ${p} ${p}.bak-$(date +%s) 2>/dev/null || true`,
+    `sudo install -o root -g root -m 600 \"$T\" ${p}`,
+    "echo WRITE_OK",
+  ].join("; ");
+  await putPrivateTransferObject(SECRET_TRANSFER_BUCKET, transferKey, body);
+  try {
+    const r = await ssmRun(h.instanceId, cmd, { timeout: 90, comment: "secrets:write-encrypted-transfer" });
+    if (r.status !== "Success" || !(r.stdout || "").includes("WRITE_OK")) {
+      throw new Error(`SSM write failed: ${r.status} ${r.stderr?.slice(0, 200) || ""}`);
+    }
+  } finally {
+    await deletePrivateTransferObject(SECRET_TRANSFER_BUCKET, transferKey);
   }
 }
 
@@ -5316,7 +5334,7 @@ app.post("/api/secrets/restart", authMiddleware, requireSuperadmin, async (req, 
     } else if (s.restart.type === "ssm") {
       const h = FLEET_HOSTS[s.host];
       if (!h) return res.status(500).json({ error: `Unknown fleet host '${s.host}'` });
-      const r = await ssmRun(h.instanceId, s.restart.command, { timeout: 120, comment: "secrets:apply-restart" });
+      const r = await ssmRun(h.instanceId, s.restart.command, { timeout: s.restart.timeout || 120, comment: "secrets:apply-restart" });
       if (r.status !== "Success") return res.status(502).json({ error: `SSM restart failed: ${r.status} ${r.stderr?.slice(0, 200) || ""}` });
       output = (r.stdout || "").slice(-500);
     } else {
