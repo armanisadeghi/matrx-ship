@@ -103,7 +103,7 @@ Each one also has a private `db-<name>` Postgres container (no public URL).
 | URL | What it is |
 |---|---|
 | `server.app.matrxserver.com` | The primary **AI Dream backend** API and OAuth broker. Cloudflare-proxied to Coolify `matrx-main` (`89.116.187.5`); `/health/detailed` must report `role=app_server`. |
-| `sandbox.matrxserver.com` | The AWS-local `sandbox_host` replica for sandbox-attached work. Runs as systemd `aidream.service` on `matrx-python-server`; env at `/etc/aidream/app.env` (Manager store `ec2:aidream-app`). It must never become the public `server.app` origin. |
+| `sandbox.matrxserver.com` | The AWS-local `sandbox_host` replica for sandbox-attached work. Nginx provides the stable private/public boundary on `matrx-python-server`; `aidream-blue` and `aidream-green` alternate behind it after ready + exact-SHA + role gates. Env is `/etc/aidream/app.env` (Manager store `ec2:aidream-app`). It must never become the public `server.app` origin. |
 | `www.aimatrx.com` | The **identity/OAuth provider** (Supabase-backed). Where you actually sign in. |
 
 ---
