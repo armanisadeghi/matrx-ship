@@ -2927,7 +2927,9 @@ async function getSandboxRepoState() {
       const deploys = (runs.workflow_runs || []).filter((r) => r.name === "Deploy");
       const lastOk = deploys.find((r) => r.conclusion === "success");
       if (lastOk) { s.deploySha = lastOk.head_sha; s.deployShort = (lastOk.head_sha || "").slice(0, 7); s.deployWhen = lastOk.created_at; s.deployUrl = lastOk.html_url; }
-      s.deployFailures = deploys.slice(0, 5).filter((r) => r.conclusion === "failure").length;
+      // A later successful deployment supersedes older failed attempts. Keep
+      // history for display, but only the latest completed run affects health.
+      s.deployFailures = deploys[0]?.conclusion === "failure" ? 1 : 0;
       s.deployBehindMain = s.mainSha && s.deploySha ? s.deploySha !== s.mainSha : null;
     } catch (e) { s.ghError = e.message; }
   }
@@ -3452,7 +3454,6 @@ async function checkRecentDeploys() {
     const runs = ((await r.json()).workflow_runs || []).filter((x) => x.status === "completed");
     if (!runs.length) return { id: "deploys", label: "Recent deploys (matrx-sandbox)", status: "ok", detail: "No completed deploy runs found.", actions: [] };
     const latest = runs[0];
-    const failures = runs.filter((x) => x.conclusion === "failure").length;
     let status = "ok", detail = `Latest deploy ${latest.conclusion} (${(latest.head_sha || "").slice(0, 7)}, ${latest.created_at?.slice(0, 16)}).`;
     const actions = [];
     if (latest.conclusion === "failure") {
@@ -3460,9 +3461,6 @@ async function checkRecentDeploys() {
       detail = `Latest deploy FAILED (${(latest.head_sha || "").slice(0, 7)}, ${latest.created_at?.slice(0, 16)}) — EC2 may be running older code.`;
       actions.push({ label: "Trigger new GitHub Deploy", action: "ec2-trigger-deploy", data_safe: true, note: "Dispatches the matrx-sandbox 'Deploy' workflow on main; redeploys EC2 in ~3-5 min via SSM." });
       if (latest.html_url) actions.push({ label: "View failed run on GitHub", action: "open-url", url: latest.html_url });
-    } else if (failures) {
-      status = "warning";
-      detail = `Latest deploy ok, but ${failures} of last ${runs.length} failed.`;
     }
     return { id: "deploys", label: "Recent deploys (matrx-sandbox)", status, detail, runs: runs.map((x) => ({ conclusion: x.conclusion, sha: (x.head_sha || "").slice(0, 7), at: x.created_at, url: x.html_url })), actions };
   } catch (e) {

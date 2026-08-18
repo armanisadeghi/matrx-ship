@@ -82,6 +82,9 @@ failure into “no approved release exists.”
 
 The separate **Recent deploys** check reports GitHub Actions history only; it
 must not claim that a workflow record proves a process is running that commit.
+Only the latest completed deployment affects health: a later successful run
+supersedes older failed attempts, which remain visible as history but cannot
+keep the fleet degraded after runtime freshness has been verified.
 
 ## A normal release is not an outage
 
