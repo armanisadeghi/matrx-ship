@@ -109,6 +109,35 @@ containing `GRANT "svc_seo" TO "postgres";` between roles and schema. Prove the 
 probe first. The grant is restore authority, not the missing `svc_seo` login password; rotate that
 password separately before any consumer uses the role.
 
+Never replay a final schema over a stale rehearsal copy because existing constraints and indexes
+collide. Clear dormant East before the maintenance window, while the protected rehearsal artifacts
+remain its recovery copy: drop each non-system, non-Supabase-managed schema in its own committed
+statement; recreate `public`; clear non-migration Auth tables; drop objects owned by and then drop
+`svc_seo`. Preserve the managed schemas `auth`, `cron`, `extensions`, `graphql`, `graphql_public`,
+`net`, `realtime`, `storage`, and `vault`, plus their migration ledgers. A single transaction that
+drops every application schema exceeds Supabase's `max_locks_per_transaction`; do not retry that
+shape. After cleanup, prove roles, compatibility, and schema replay in a transaction ending in
+`ROLLBACK`, then verify East is still empty and read/write. The final full restore starts from that
+tested clean state.
+
+## Authoritative write freeze
+
+Never use a Supavisor/pooler endpoint to set or reset the database write freeze. Poolers retain
+already-open writable backends, so a successful `ALTER DATABASE` through the pooler is not proof of
+a freeze. Use the project's direct endpoint (`db.<project-ref>.supabase.co:5432`), connect to
+`template1`, and then:
+
+1. set `postgres` database `default_transaction_read_only` to `on`;
+2. terminate every session connected to `postgres` except the control session;
+3. verify `default_transaction_read_only=on` through both the direct endpoint and the pooler;
+4. prove a uniquely named write probe is rejected through both paths and leaves no artifact.
+
+Rollback/unfreeze uses the same direct `template1` control path: reset the database setting,
+terminate remaining `postgres` sessions, verify direct and pooled sessions both report `off`, and
+verify no probe artifact exists. A client-side maintenance page or stopped application is helpful but
+is not the database freeze. Do not begin the source freeze until the operator has explicitly announced
+the maintenance window.
+
 ## Acceptance gate
 
 Keep all validation pointed explicitly at East. Compare at minimum:
@@ -129,9 +158,17 @@ preview consumers with East credentials.
 
 Cut over only after the rehearsal has a measured duration and a clean acceptance report:
 
-1. Announce and begin the write pause; prove every writer is stopped or read-only.
-2. Take the final logical export using the exact tested versions and exclusions.
-3. Restore into the clean East destination and rerun acceptance checks.
+Before announcing maintenance, prove the staged consumer set is complete: ECS AI Dream and dormant
+workflow worker runtime JSON; the three Vercel projects; the immutable admin-dashboard image; EC2
+Matrx Files and Matrx SEO `east`/`west` env files plus switch script; and the Coolify scraper. Do not
+rotate unrelated Supabase projects or HTML/sample variables.
+
+1. Announce and begin the write pause; apply the direct-endpoint freeze above and prove every writer
+   is read-only.
+2. Take a new full logical export using the exact tested versions and exclusions. Do not patch the
+   stale rehearsal copy.
+3. Confirm the pre-cleaned East project is still empty, restore transactionally, and rerun acceptance
+   checks.
 4. Copy reviewed project-level Auth/Realtime/SSL/network settings. Rotate all consumers to East URL,
    publishable/secret keys, and database connection values. Never reuse West project API keys.
 5. Update OAuth callback registrations before enabling providers. Enable SMTP/SMS only after their
