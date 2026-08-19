@@ -44,6 +44,9 @@ The account and region checks deliberately refuse a plan against any other targe
   containers only and never stores secret values in state or source control.
 - Temporary Supabase migration credentials live in the operator-only
   `/matrx/migration/supabase-east` secret and are never granted to application tasks.
+- Protected database export artifacts are uploaded to the KMS-encrypted, versioned
+  `matrx-supabase-migration-artifacts-872515272894` bucket. Object access is recorded by CloudTrail;
+  rehearsal objects expire after 90 days and non-current versions after 30 days.
 
 ## Production boundary
 

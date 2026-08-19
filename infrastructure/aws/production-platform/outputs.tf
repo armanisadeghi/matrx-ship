@@ -48,6 +48,11 @@ output "supabase_east_migration_secret_arn" {
   value       = aws_secretsmanager_secret.supabase_east_migration.arn
 }
 
+output "supabase_migration_artifacts_bucket" {
+  description = "KMS-encrypted, versioned bucket for protected Supabase rehearsal and cutover artifacts."
+  value       = aws_s3_bucket.supabase_migration_artifacts.id
+}
+
 output "preview_load_balancer_dns_name" {
   description = "Direct preview endpoint. Admin is the default; send the documented Host header for workflow studio."
   value       = aws_lb.public.dns_name

@@ -14,6 +14,7 @@ Supabase skill before acting.
 - Source: `Matrx Main`, `txzxabzwovsujtloxrus`, `us-west-1`.
 - Destination: `AI Matrx`, `brsgrqvjdzwihsvnfqkf`, `us-east-1`.
 - Migration secret: AWS Secrets Manager `/matrx/migration/supabase-east` in `us-east-1`.
+- Protected artifact bucket: `matrx-supabase-migration-artifacts-872515272894` in `us-east-1`.
 - Runtime source credential: `/matrx/production/aidream`; use only the five
   `SUPABASE_MATRIX_*` database fields.
 
@@ -79,7 +80,9 @@ shasum -a 256 "$migration_dir"/*.sql
 
 Record hashes, byte counts, source transaction timestamp, CLI version, and exclusions without
 recording credentials or row contents. Export cron definitions separately into the protected
-directory; do not restore them during rehearsal.
+directory; do not restore them during rehearsal. Upload every dump, the cron inventory, and a
+credential-free manifest to the protected artifact bucket with each file's SHA-256 in object
+metadata. Verify KMS encryption and object size with `head-object`; multipart ETags are not hashes.
 
 ## Restore rehearsal
 
@@ -88,14 +91,23 @@ credential from `/matrx/migration/supabase-east` through stdin or environment on
 destination's Postgres client version, `ON_ERROR_STOP=1`, and one transaction in this order:
 
 1. `roles.sql`
-2. `schema.sql`
-3. `SET session_replication_role = replica`
-4. `data.sql`
+2. a separately hashed compatibility file, only when a proven managed-Supabase permission mismatch
+   requires one
+3. `schema.sql`
+4. `SET session_replication_role = replica`
+5. `data.sql`
 
 The data export already sets replica mode, but set it explicitly as the official procedure does.
 Capture stderr to a protected log. Any error aborts the transaction; never continue a partial
 restore. If the fresh destination has conflicts with Supabase-owned objects, use only the remedies
 from Supabase's current within-platform migration guide and document each exception.
+
+The source currently contains LOGIN role `svc_seo`, which owns schema objects. The destination's
+managed `postgres` role can create it but cannot replay `ALTER ... OWNER TO svc_seo` until membership
+is explicit. Keep the original dump immutable; insert a separately hashed `restore-compat.sql`
+containing `GRANT "svc_seo" TO "postgres";` between roles and schema. Prove the need with a rolled-back
+probe first. The grant is restore authority, not the missing `svc_seo` login password; rotate that
+password separately before any consumer uses the role.
 
 ## Acceptance gate
 

@@ -210,6 +210,34 @@ data "aws_iam_policy_document" "operator" {
   }
 
   statement {
+    sid = "ManageSupabaseMigrationArtifacts"
+    actions = [
+      "s3:AbortMultipartUpload",
+      "s3:GetBucketLocation",
+      "s3:GetObject",
+      "s3:ListBucket",
+      "s3:ListBucketMultipartUploads",
+      "s3:ListMultipartUploadParts",
+      "s3:PutObject",
+    ]
+    resources = [
+      aws_s3_bucket.supabase_migration_artifacts.arn,
+      "${aws_s3_bucket.supabase_migration_artifacts.arn}/*",
+    ]
+  }
+
+  statement {
+    sid = "UseSupabaseMigrationArtifactKey"
+    actions = [
+      "kms:Decrypt",
+      "kms:DescribeKey",
+      "kms:Encrypt",
+      "kms:GenerateDataKey",
+    ]
+    resources = [aws_kms_key.supabase_migration_artifacts.arn]
+  }
+
+  statement {
     sid     = "PassPlatformTaskRoles"
     actions = ["iam:PassRole"]
     resources = concat(

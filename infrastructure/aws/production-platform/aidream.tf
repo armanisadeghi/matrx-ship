@@ -206,7 +206,10 @@ resource "aws_ecs_service" "aidream" {
 
   deployment_minimum_healthy_percent = 100
   deployment_maximum_percent         = 200
-  health_check_grace_period_seconds  = 180
+  # Production startup synchronizes the platform catalog before the API is
+  # mounted and has been observed taking just over four minutes. Keep the old
+  # healthy tasks serving while replacements complete that bounded startup.
+  health_check_grace_period_seconds = 600
 
   deployment_circuit_breaker {
     enable   = true

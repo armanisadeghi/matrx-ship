@@ -213,6 +213,11 @@ resource "aws_cloudtrail" "management" {
   event_selector {
     include_management_events = true
     read_write_type           = "All"
+
+    data_resource {
+      type   = "AWS::S3::Object"
+      values = ["${aws_s3_bucket.supabase_migration_artifacts.arn}/"]
+    }
   }
 
   depends_on = [aws_s3_bucket_policy.audit]

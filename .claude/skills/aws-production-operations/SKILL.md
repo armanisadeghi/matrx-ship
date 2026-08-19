@@ -101,9 +101,17 @@ never be committed.
 
 - Build for `linux/amd64`; never copy host `node_modules` into a Docker build.
 - Push a full 40-character Git SHA tag to ECR. Never deploy `latest`.
+- AI Dream builds outside Coolify must pass Docker build args `GIT_SHA=<full SHA>` and
+  `BUILD_TIME=<UTC timestamp>`; after deployment, `/health/version` must return that SHA rather than
+  `unknown`.
 - Confirm the ECR digest, task definition image, and running task digest agree.
 - Use a circuit-breaker-protected rolling ECS deployment, wait for service stability, then exercise
   the real endpoint and dependent systems.
+- AI Dream performs catalog synchronization before mounting its API and has a measured startup time
+  just over four minutes. Its ECS service therefore uses a 600-second load-balancer health grace
+  period. During that window, require the previous healthy pair to remain in service; do not shorten
+  the grace period or treat an initializing target as capacity. A task stopped after the grace period
+  is a real failure and requires its stopped reason plus CloudWatch startup logs.
 - A deployment is complete only after task loss, rolling replacement, and rollback are proven for
   that service class.
 
