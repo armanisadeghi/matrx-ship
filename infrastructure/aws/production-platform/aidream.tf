@@ -123,6 +123,25 @@ resource "aws_lb_listener_rule" "aidream_preview" {
   }
 }
 
+resource "aws_lb_listener_rule" "aidream_https" {
+  listener_arn = aws_lb_listener.public_https.arn
+  priority     = 200
+
+  action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.aidream.arn
+  }
+
+  condition {
+    host_header {
+      values = [
+        "server-aws.app.matrxserver.com",
+        "server.app.matrxserver.com",
+      ]
+    }
+  }
+}
+
 resource "aws_ecs_task_definition" "aidream" {
   family                   = "matrx-production-aidream"
   requires_compatibilities = ["FARGATE"]

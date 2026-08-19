@@ -54,10 +54,10 @@ This root must not create or move production DNS until the parallel service pass
 canary, multi-task failover test, rolling-deployment test, and rollback rehearsal. The scraper is
 deliberately outside this stack. Supabase migration has its own rehearsal and cutover gate.
 
-The AWS-managed wildcard certificate for `*.app.matrxserver.com` is requested here but cannot be
-used until its `public_certificate_validation_records` output has been added to the authoritative
-Cloudflare zone. That validation record does not move application traffic. Production service
-records stay unchanged until the separate cutover step.
+The AWS-managed wildcard certificate for `*.app.matrxserver.com` is DNS-validated and issued. The
+load balancer accepts TLS 1.2/1.3 on port 443. The permanent ACM validation CNAME must remain in the
+authoritative Cloudflare zone so certificate renewal stays automatic. Production service records
+stay unchanged until the separate cutover step.
 
 ## Parallel static-service preview
 
@@ -66,7 +66,10 @@ zones. The public application load balancer retains access logs for 180 days, re
 tasks from service, and allows ECS to replace tasks without dropping below the existing healthy
 count. CPU and memory target tracking can grow each service from two to four tasks.
 
-No production hostname points at this load balancer. Retrieve and test the direct preview endpoint:
+No production hostname points at this load balancer. The DNS-only canaries
+`admin-aws.app.matrxserver.com`, `workflows-aws.app.matrxserver.com`, and
+`server-aws.app.matrxserver.com` provide end-to-end HTTPS testing without moving production traffic.
+The direct HTTP preview remains available for low-level routing checks:
 
 ```bash
 terraform output -raw preview_load_balancer_dns_name

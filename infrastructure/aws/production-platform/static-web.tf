@@ -11,6 +11,14 @@ resource "aws_security_group" "public_alb" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
+  ingress {
+    description = "Public HTTPS"
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
   egress {
     description = "Forward requests to private Fargate tasks"
     from_port   = 80
@@ -204,6 +212,19 @@ resource "aws_lb_listener" "preview_http" {
   }
 }
 
+resource "aws_lb_listener" "public_https" {
+  load_balancer_arn = aws_lb.public.arn
+  port              = 443
+  protocol          = "HTTPS"
+  ssl_policy        = "ELBSecurityPolicy-TLS13-1-2-2021-06"
+  certificate_arn   = aws_acm_certificate.public_services.arn
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.static_web["admin-dashboard"].arn
+  }
+}
+
 resource "aws_lb_listener_rule" "workflow_studio" {
   listener_arn = aws_lb_listener.preview_http.arn
   priority     = local.static_web_services["workflow-studio"].priority
@@ -215,6 +236,20 @@ resource "aws_lb_listener_rule" "workflow_studio" {
 
   condition {
     host_header { values = [local.static_web_services["workflow-studio"].host_header] }
+  }
+}
+
+resource "aws_lb_listener_rule" "workflow_studio_https" {
+  listener_arn = aws_lb_listener.public_https.arn
+  priority     = local.static_web_services["workflow-studio"].priority
+
+  action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.static_web["workflow-studio"].arn
+  }
+
+  condition {
+    host_header { values = ["workflows-aws.app.matrxserver.com"] }
   }
 }
 
