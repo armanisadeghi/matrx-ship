@@ -43,6 +43,11 @@ output "service_secret_arns" {
   value       = { for name, secret in aws_secretsmanager_secret.service : name => secret.arn }
 }
 
+output "supabase_east_migration_secret_arn" {
+  description = "Operator-only temporary credential container for the Supabase region migration."
+  value       = aws_secretsmanager_secret.supabase_east_migration.arn
+}
+
 output "preview_load_balancer_dns_name" {
   description = "Direct preview endpoint. Admin is the default; send the documented Host header for workflow studio."
   value       = aws_lb.public.dns_name

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Supabase Region Migration"
+  short_description: "Safely rehearse and cut over Matrx Main from West to East."
+  default_prompt: "Use $supabase-region-migration to inspect, rehearse, verify, or cut over the Matrx Main Supabase migration from us-west-1 to us-east-1."

@@ -203,7 +203,10 @@ data "aws_iam_policy_document" "operator" {
       "secretsmanager:PutSecretValue",
       "secretsmanager:UpdateSecret",
     ]
-    resources = values(aws_secretsmanager_secret.service)[*].arn
+    resources = concat(
+      values(aws_secretsmanager_secret.service)[*].arn,
+      [aws_secretsmanager_secret.supabase_east_migration.arn],
+    )
   }
 
   statement {
