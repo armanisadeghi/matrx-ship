@@ -89,3 +89,12 @@ AWS keys are deliberately absent. ECS injects its protected Secrets Manager JSON
 bootstrap value; the bootstrap expands it into the application process environment and removes the
 wrapper value before executing the image's canonical entrypoint. Terraform never reads or stores the
 secret payload.
+
+## Dormant workflow worker
+
+The workflow worker task definition and ECS service exist with desired count zero. This is
+intentional: its database claims and cron watcher are designed for multiple replicas with atomic
+`FOR UPDATE SKIP LOCKED` claims and fenced leases, but starting the AWS copy while Coolify is live
+would still make AWS an active production consumer. A controlled canary requires its own migration
+gate. The dormant task already has the same IAM-based S3/KMS access and protected runtime-secret
+injection as AI Dream, so no static AWS key or SSH setup is needed when that gate opens.

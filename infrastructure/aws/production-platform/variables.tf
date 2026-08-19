@@ -54,3 +54,14 @@ variable "aidream_image_tag" {
     error_message = "AI Dream images must be deployed by a full 40-character Git SHA."
   }
 }
+
+variable "workflow_worker_image_tag" {
+  description = "Immutable Git SHA for the dormant workflow worker task definition."
+  type        = string
+  default     = "09a4dfcaea257fcaea23e66292c28fe6f43aa2f4"
+
+  validation {
+    condition     = can(regex("^[0-9a-f]{40}$", var.workflow_worker_image_tag))
+    error_message = "Workflow worker images must be deployed by a full 40-character Git SHA."
+  }
+}
