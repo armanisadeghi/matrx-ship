@@ -67,3 +67,14 @@ output "aidream_preview_host_header" {
   description = "Host header used to test AI Dream without creating production DNS."
   value       = local.aidream_preview_host
 }
+
+output "public_certificate_validation_records" {
+  description = "DNS records required once to validate the AWS-managed wildcard certificate."
+  value = {
+    for option in aws_acm_certificate.public_services.domain_validation_options : option.domain_name => {
+      name  = option.resource_record_name
+      type  = option.resource_record_type
+      value = option.resource_record_value
+    }
+  }
+}

@@ -47,7 +47,7 @@ variable "static_web_image_tag" {
 variable "aidream_image_tag" {
   description = "Immutable Git SHA for the AI Dream preview image."
   type        = string
-  default     = "f0053941f4cfb129cedae836fd5edfaa5f7dd710"
+  default     = "76d383772195c378c3290fc7427eaa41ffeac4dc"
 
   validation {
     condition     = can(regex("^[0-9a-f]{40}$", var.aidream_image_tag))

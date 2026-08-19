@@ -54,6 +54,11 @@ This root must not create or move production DNS until the parallel service pass
 canary, multi-task failover test, rolling-deployment test, and rollback rehearsal. The scraper is
 deliberately outside this stack. Supabase migration has its own rehearsal and cutover gate.
 
+The AWS-managed wildcard certificate for `*.app.matrxserver.com` is requested here but cannot be
+used until its `public_certificate_validation_records` output has been added to the authoritative
+Cloudflare zone. That validation record does not move application traffic. Production service
+records stay unchanged until the separate cutover step.
+
 ## Parallel static-service preview
 
 The admin dashboard and workflow studio run as two Fargate tasks each across separate availability
@@ -80,6 +85,13 @@ AI Dream runs from the exact immutable SHA selected by `aidream_image_tag`, with
 tasks across separate availability zones and autoscaling bounds of two to eight tasks. Its target
 group requires `/health/ready`, waits for real database readiness, and drains long requests for two
 minutes. No production DNS points at the preview rule.
+
+On 2026-08-19, SHA `76d383772195c378c3290fc7427eaa41ffeac4dc` completed a protected rolling
+deployment to task-definition revision 6. Both availability-zone tasks were healthy on image digest
+`sha256:906b47758b04015d2c58832bdb84bfb44dd3d30bfbf00851dd0f258e8956f1ea`; 20/20
+load-balanced version checks returned that SHA, detailed health reported database/tools/environment
+OK, both AI Dream alarms were OK, and a post-deployment Terraform plan reported no drift. Coolify
+remained the public production target throughout.
 
 ```bash
 curl --fail --show-error \
