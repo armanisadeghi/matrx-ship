@@ -68,3 +68,22 @@ curl --fail --show-error \
 
 The static images are pinned to a full Git SHA. Changing `static_web_image_tag` creates a new task
 definition and a circuit-breaker-protected rolling deployment; mutable `latest` tags are forbidden.
+
+## AI Dream preview
+
+AI Dream runs from the exact immutable SHA selected by `aidream_image_tag`, with two 2-vCPU/4-GB
+tasks across separate availability zones and autoscaling bounds of two to eight tasks. Its target
+group requires `/health/ready`, waits for real database readiness, and drains long requests for two
+minutes. No production DNS points at the preview rule.
+
+```bash
+curl --fail --show-error \
+  -H "Host: $(terraform output -raw aidream_preview_host_header)" \
+  "http://$(terraform output -raw preview_load_balancer_dns_name)/health/ready"
+```
+
+The AI Dream task receives S3 and redaction-KMS access from its service-specific task role. Static
+AWS keys are deliberately absent. ECS injects its protected Secrets Manager JSON as one temporary
+bootstrap value; the bootstrap expands it into the application process environment and removes the
+wrapper value before executing the image's canonical entrypoint. Terraform never reads or stores the
+secret payload.

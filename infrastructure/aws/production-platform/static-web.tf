@@ -19,6 +19,14 @@ resource "aws_security_group" "public_alb" {
     cidr_blocks = [aws_vpc.production.cidr_block]
   }
 
+  egress {
+    description = "Forward API requests to private AI Dream tasks"
+    from_port   = 8000
+    to_port     = 8000
+    protocol    = "tcp"
+    cidr_blocks = [aws_vpc.production.cidr_block]
+  }
+
   tags = { Name = "${local.name_prefix}-public-alb" }
 }
 

@@ -52,3 +52,8 @@ output "workflow_studio_preview_host_header" {
   description = "Host header used to test workflow studio without creating production DNS."
   value       = local.static_web_services["workflow-studio"].host_header
 }
+
+output "aidream_preview_host_header" {
+  description = "Host header used to test AI Dream without creating production DNS."
+  value       = local.aidream_preview_host
+}

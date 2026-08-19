@@ -43,3 +43,14 @@ variable "static_web_image_tag" {
     error_message = "Static web images must be deployed by a full 40-character Git SHA."
   }
 }
+
+variable "aidream_image_tag" {
+  description = "Immutable Git SHA for the AI Dream preview image."
+  type        = string
+  default     = "f43777de0e4ad7789db8e2e80c45e7d855e4814f"
+
+  validation {
+    condition     = can(regex("^[0-9a-f]{40}$", var.aidream_image_tag))
+    error_message = "AI Dream images must be deployed by a full 40-character Git SHA."
+  }
+}
