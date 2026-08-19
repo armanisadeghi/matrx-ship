@@ -3473,6 +3473,20 @@ async function checkRecentDeploys() {
 // with zero visibility — every sandbox chat turn 502'd and nothing watched
 // this box. Fleet Health now owns that gap.
 const AIDREAM_DEDICATED_HEALTH_URL = process.env.MATRX_AIDREAM_DEDICATED_HEALTH_URL || "https://sandbox.matrxserver.com/health";
+const AIDREAM_PRIMARY_HEALTH_URL = process.env.MATRX_AIDREAM_PRIMARY_HEALTH_URL || "https://server.app.matrxserver.com/health";
+
+async function readAidreamRuntimeVersion(healthUrl) {
+  const base = healthUrl.replace(/\/health\/?$/, "");
+  const [health, version] = await Promise.all([
+    fetch(`${base}/health/ready`, { signal: AbortSignal.timeout(8000) }),
+    fetch(`${base}/health/version`, { signal: AbortSignal.timeout(8000) }),
+  ]);
+  if (!health.ok) throw new Error(`${base} readiness HTTP ${health.status}`);
+  if (!version.ok) throw new Error(`${base} version HTTP ${version.status}`);
+  const body = await version.json();
+  if (!/^[0-9a-f]{40}$/.test(body.git_sha || "")) throw new Error(`${base} did not report a full git SHA`);
+  return body.git_sha;
+}
 
 async function checkDedicatedAidream() {
   const id = "aidream-dedicated", label = "Dedicated aidream server (sandbox chat channel)";
@@ -3519,7 +3533,26 @@ async function checkAidreamPipeline() {
     if (!d) return { id, label, status: "ok", detail: "No completed aidream deploy runs found.", actions: [] };
     const actions = d.html_url ? [{ label: "View deploy run", action: "open-url", url: d.html_url }] : [];
     if (d.conclusion === "failure") {
-      return { id, label, status: "critical", detail: `Latest aidream deploy FAILED (${(d.head_sha || "").slice(0, 7)}, ${d.created_at?.slice(0, 16)}) — production may be running older code.`, actions };
+      try {
+        const [primarySha, dedicatedSha] = await Promise.all([
+          readAidreamRuntimeVersion(AIDREAM_PRIMARY_HEALTH_URL),
+          readAidreamRuntimeVersion(AIDREAM_DEDICATED_HEALTH_URL),
+        ]);
+        if (primarySha === dedicatedSha) {
+          return {
+            id, label, status: "warning",
+            detail: `Latest aidream deploy automation FAILED (${(d.head_sha || "").slice(0, 7)}, ${d.created_at?.slice(0, 16)}), but both live roles are ready and independently report ${primarySha.slice(0, 7)}. Repair the release owner; runtime is not stale or split.`,
+            actions,
+          };
+        }
+        return {
+          id, label, status: "critical",
+          detail: `Latest aidream deploy FAILED (${(d.head_sha || "").slice(0, 7)}), and live roles disagree: primary ${primarySha.slice(0, 7)}, dedicated ${dedicatedSha.slice(0, 7)}.`,
+          actions,
+        };
+      } catch (runtimeError) {
+        return { id, label, status: "critical", detail: `Latest aidream deploy FAILED (${(d.head_sha || "").slice(0, 7)}, ${d.created_at?.slice(0, 16)}), and runtime freshness could not be verified (${runtimeError.message}).`, actions };
+      }
     }
     if (t && t.conclusion === "failure") {
       return {

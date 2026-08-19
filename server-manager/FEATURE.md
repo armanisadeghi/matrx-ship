@@ -86,6 +86,13 @@ Only the latest completed deployment affects health: a later successful run
 supersedes older failed attempts, which remain visible as history but cannot
 keep the fleet degraded after runtime freshness has been verified.
 
+The **aidream deploys vs tests** check follows the same runtime-truth rule. A
+failed workflow is critical when either live role is unhealthy, unreadable, or
+the primary and dedicated roles report different source SHAs. When both roles
+pass readiness and independently report the same full SHA, the failed workflow
+is an automation warning, not a production-staleness claim. The warning remains
+until the release owner is repaired.
+
 ## A normal release is not an outage
 
 The hosted orchestrator answers 404/502 for ~a minute after every release
