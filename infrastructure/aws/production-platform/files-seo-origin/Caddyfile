@@ -1,0 +1,9 @@
+# Shared public origin for the EC2-hosted Matrx Files and Matrx SEO services.
+# Caddy obtains and renews publicly trusted certificates with ACME HTTP-01.
+files.matrxserver.com {
+	reverse_proxy 127.0.0.1:8080
+}
+
+seo.matrxserver.com {
+	reverse_proxy 127.0.0.1:8081
+}

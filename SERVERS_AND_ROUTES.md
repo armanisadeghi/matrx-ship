@@ -45,12 +45,12 @@ Full write-up: `aidream/FOUND_DEFECTS.md` → "matrx-coolify-2 SSH host key chan
 
 ### EC2-hosted services (not on `/srv`)
 
-> Cross-repo system-of-record: `/Users/armanisadeghi/code/common-docs/matrx-files-service/FEATURE.md` — full contract, deploy state, and cutover plan for matrx-files.
+> Cross-repo system-of-record: `/Users/armanisadeghi/code/common-docs/systems/matrx-files-service/FEATURE.md` — full contract, deploy state, and cutover plan for matrx-files.
 
 | Host | Service | Runs as | Endpoint | What it is |
 |---|---|---|---|---|
-| `matrx-sandbox-host-dev` (`i-084f757c1e47d4efb`, `54.144.86.132`) | **Matrx Files** | docker container `matrx-files` (v0.2.59 verified 2026-08-20, uvicorn :8080, `--restart unless-stopped`) | `https://files.matrxserver.com` (Cloudflare-proxied → Caddy TLS :443 → app 127.0.0.1:8080) · health `GET /files-service/health` | The independent file microservice carved out of aidream (all cloud storage / media / PDF / sharing). Own matrx-orm pool onto the shared East Supabase `files` schema; Supabase-JWT auth. Env at `/etc/matrx-files.env` (root 600). Manage via the Manager's host exec (`POST /api/hosts/matrx-sandbox-host-dev/exec` → `sudo docker …`). |
-| `matrx-sandbox-host-dev` (`i-084f757c1e47d4efb`, `54.144.86.132`) | **Matrx SEO** | docker container `matrx-seo` (v0.1.88 verified 2026-08-20, uvicorn :8081, `--restart unless-stopped`) | `https://seo.matrxserver.com` (Cloudflare-proxied → the SHARED `matrx-files-tls` Caddy :443 → app 127.0.0.1:8081) · health `GET /health` · readiness `GET /health/ready` | The **first domain vertical** — SEO measurement for subscribed clients. Owns the `seo.*` schema on the ONE East database and connects as the restricted **`svc_seo` role**. Env at `/etc/matrx-seo.env` (root 600). Runbook: `aidream/packages/matrx-seo/DEPLOY.md`; deploy/rollback `./deploy.sh <version>`. Manage via the Manager's host exec, same as matrx-files. |
+| `matrx-sandbox-host-dev` (`i-084f757c1e47d4efb`, `54.144.86.132`) | **Matrx Files** | docker container `matrx-files` (v0.2.62 verified 2026-08-20, uvicorn :8080, `--restart unless-stopped`) | `https://files.matrxserver.com` (Cloudflare-proxied → public ACME origin TLS :443 → app 127.0.0.1:8080) · health `GET /files-service/health` | The independent file microservice carved out of aidream (all cloud storage / media / PDF / sharing). Own matrx-orm pool onto the shared East Supabase `files` schema; Supabase-JWT auth. Env at `/etc/matrx-files.env` (root 600). Manage via the Manager's host exec (`POST /api/hosts/matrx-sandbox-host-dev/exec` → `sudo docker …`). |
+| `matrx-sandbox-host-dev` (`i-084f757c1e47d4efb`, `54.144.86.132`) | **Matrx SEO** | docker container `matrx-seo` (v0.1.94 verified 2026-08-20, uvicorn :8081, `--restart unless-stopped`) | `https://seo.matrxserver.com` (Cloudflare-proxied → the shared public ACME origin TLS :443 → app 127.0.0.1:8081) · health `GET /health` · readiness `GET /health/ready` | The **first domain vertical** — SEO measurement for subscribed clients. Owns the `seo.*` schema on the ONE East database and connects as the restricted **`svc_seo` role**. Env at `/etc/matrx-seo.env` (root 600). Runbook: `aidream/packages/matrx-seo/DEPLOY.md`; deploy/rollback `./deploy.sh <version>`. Manage via the Manager's host exec, same as matrx-files. |
 
 
 ---
@@ -110,6 +110,7 @@ Each one also has a private `db-<name>` Postgres container (no public URL).
 |---|---|
 | `server.app.matrxserver.com` | The primary **AI Dream backend** API and OAuth broker. Cloudflare-proxied to the AWS production ALB and two ECS/Fargate tasks; `/health/detailed` must report `role=app_server`. |
 | `db.matrxserver.com` | The canonical Supabase project `brsgrqvjdzwihsvnfqkf` in `us-east-1`. The former West project is rollback-only; its cron jobs must remain disabled. |
+| `scraper.app.matrxserver.com` | The canonical scraper endpoint on Coolify `matrx-main`; valid Let's Encrypt TLS, HTTP→HTTPS redirect, liveness/readiness/version endpoints. `scraper.matrxserver.com` is a stale certificate-less alias and must not be used by consumers. |
 | `sandbox.matrxserver.com` | The AWS-local `sandbox_host` replica for sandbox-attached work. Nginx provides the stable private/public boundary on `matrx-python-server`; `aidream-blue` and `aidream-green` alternate behind it after ready + exact-SHA + role gates. Env is `/etc/aidream/app.env` (Manager store `ec2:aidream-app`). It must never become the public `server.app` origin. |
 | `www.aimatrx.com` | The **identity/OAuth provider** (Supabase-backed). Where you actually sign in. |
 
