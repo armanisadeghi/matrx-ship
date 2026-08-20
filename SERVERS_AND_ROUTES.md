@@ -3,6 +3,11 @@
 A plain map of every machine, every public URL, and what each one is. Last
 verified 2026-08-20 from live health, Cloudflare DNS, AWS, Coolify, and repository configuration.
 
+The canonical cross-platform ownership table is
+[`common-docs/systems/production-infrastructure/FEATURE.md`](../common-docs/systems/production-infrastructure/FEATURE.md#live-production-inventory).
+This file adds Ship/control-plane machine detail; if a route here appears to disagree with that table,
+the canonical inventory wins and the mismatch is an incident to repair.
+
 ---
 
 ## 1. Machines (the real "servers")
@@ -10,10 +15,10 @@ verified 2026-08-20 from live health, Cloudflare DNS, AWS, Coolify, and reposito
 | Machine | Address | What it is |
 |---|---|---|
 | **AWS ECS/Fargate `matrx-production`** | `us-east-1` · public ALB behind Cloudflare | The primary production plane: two AI Dream API tasks, one workflow worker, two admin-dashboard tasks, and two workflow-Studio tasks across two availability zones. `server.app`, `admin.app`, and `workflows.aimatrx.com` route here. |
-| **`matrx-main`** | `89.116.187.5` | The residual Coolify plane. Runs the temporary streaming endpoint, scraper, development apps, Directus, and NocoDB. Its former admin, Studio, and workflow-worker applications are retired and must remain stopped. It is no longer the public AI Dream API origin. |
+| **`matrx-main`** | `89.116.187.5` | The residual Coolify plane. Runs the temporary streaming endpoint, scraper, development apps, Directus, and NocoDB. Its former admin and workflow-worker applications are retired and stopped; the duplicate Studio is still running cleanup debt and is not a production route. It is no longer the public AI Dream API origin. |
 | **`/srv` dev host** | `srv504398.hstgr.cloud` · `77.37.62.64` · `*.dev.codematrx.com` | The main box. Runs the control plane, all the per-project apps, the shared DB, and the hosted sandbox tier. **This is what the Server Manager manages.** |
 | **EC2 `matrx-sandbox-host-dev`** | AWS `i-084f757c1e47d4efb` · `54.144.86.132` | The **EC2 sandbox tier** — runs its own sandbox orchestrator (systemd) + the sandboxes it spawns. **Also hosts the microservices**: `matrx-files` and `matrx-seo`, both behind the one `matrx-files-tls` Caddy container on :443 (`https://files.matrxserver.com`, `https://seo.matrxserver.com` — see §EC2 services). |
-| **EC2 `matrx-python-server`** | AWS `i-0241f4fee60fb02f6` · `54.166.106.252` | The AWS-local AI Dream **`sandbox_host` replica** used by sandboxes and nearby services. It is not the primary public API and runs no app-server singletons. |
+| **EC2 `matrx-python-server`** | AWS `i-0241f4fee60fb02f6` · `54.166.106.252` | **Transitional** AI Dream `sandbox_host` replica. It existed to avoid Coolify round trips before the primary API moved to AWS. It must be retired after the sandbox VPC has a verified private path to the existing ECS `aidream` service and the migration rollback assets attached to this host are released. |
 
 > Both EC2 boxes are in AWS account `872515272894`, region `us-east-1`.
 
