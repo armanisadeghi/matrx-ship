@@ -104,13 +104,18 @@ never be committed.
 - An ordinary `aidream` main-branch push may build/cache an image and refresh the EC2 replica, but it
   does not own production ECS. Production moves only when the root `pyproject.toml` version advances
   through the canonical release process or an operator explicitly dispatches the deployment workflow.
-  The release workflow updates `workflow-worker` first, then `aidream`, and verifies the exact SHA.
+  The release script dispatches its immutable version tag into a dedicated production concurrency lane;
+  ordinary replica builds cannot cancel it. The workflow updates `workflow-worker` first, then
+  `aidream`, and verifies the exact SHA.
 - AI Dream builds outside Coolify must pass Docker build args `GIT_SHA=<full SHA>` and
   `BUILD_TIME=<UTC timestamp>`; after deployment, `/health/version` must return that SHA rather than
   `unknown`.
 - Confirm the ECR digest, task definition image, and running task digest agree.
 - Use a circuit-breaker-protected rolling ECS deployment, wait for service stability, then exercise
   the real endpoint and dependent systems.
+- Do not use the AWS CLI stock `services-stable` waiter for AI Dream. The intentional one-at-a-time
+  two-task rollout can exceed its roughly ten-minute window. Require one completed deployment, the
+  exact task definition, desired equal to running, and zero pending for up to thirty minutes.
 - AI Dream performs catalog synchronization before mounting its API and has a measured startup time
   just over four minutes. Its ECS service therefore uses a 600-second load-balancer health grace
   period. During that window, require the previous healthy pair to remain in service; do not shorten
