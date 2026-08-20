@@ -6,6 +6,7 @@ services without modifying the main ECS production stack. The canonical contract
 
 It creates:
 
+- the account's one App Runner service-linked role (the account has never run App Runner before);
 - an App Runner ECR pull role;
 - a default runtime workload role with no AWS data permissions;
 - a narrowly scoped deployer policy for `matrx-mcp/*` ECR repositories and `matrx-mcp-*` App Runner

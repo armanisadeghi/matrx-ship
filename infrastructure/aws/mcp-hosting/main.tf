@@ -28,6 +28,14 @@ data "aws_iam_role" "operator" {
   name = var.operator_role_name
 }
 
+# The account has not previously run App Runner. Creating this once during the
+# administrator-owned baseline keeps routine deployers from needing IAM role
+# creation permission.
+resource "aws_iam_service_linked_role" "apprunner" {
+  aws_service_name = "apprunner.amazonaws.com"
+  description      = "Allows App Runner to publish logs and manage service events for Matrx MCP hosting."
+}
+
 data "aws_iam_policy_document" "apprunner_ecr_assume" {
   statement {
     actions = ["sts:AssumeRole"]
@@ -43,6 +51,8 @@ resource "aws_iam_role" "apprunner_ecr_access" {
   path               = "/matrx/mcp-hosting/"
   description        = "Allows App Runner to pull immutable Matrx MCP images from ECR."
   assume_role_policy = data.aws_iam_policy_document.apprunner_ecr_assume.json
+
+  depends_on = [aws_iam_service_linked_role.apprunner]
 }
 
 resource "aws_iam_role_policy_attachment" "apprunner_ecr_access" {
