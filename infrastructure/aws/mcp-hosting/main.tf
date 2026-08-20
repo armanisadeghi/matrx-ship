@@ -147,11 +147,6 @@ data "aws_iam_policy_document" "deployer" {
     sid       = "PassOnlyMcpHostingRoles"
     actions   = ["iam:PassRole"]
     resources = [aws_iam_role.apprunner_ecr_access.arn, aws_iam_role.runtime.arn]
-    condition {
-      test     = "StringEquals"
-      variable = "iam:PassedToService"
-      values   = ["apprunner.amazonaws.com", "build.apprunner.amazonaws.com", "tasks.apprunner.amazonaws.com"]
-    }
   }
 
   statement {
