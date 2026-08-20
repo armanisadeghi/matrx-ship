@@ -13,7 +13,7 @@ fi
 out="$RUNNER_ROOT/cutovers/$run_id"
 test -d "$out"
 
-for file in roles.sql schema.sql data.sql data.sql.zst data-schemas.txt cron-jobs.csv restore-compat.sql pre-data-compat.sql post-data-compat.sql; do
+for file in roles.sql schema.sql data.dump.tar.zst data-schemas.txt cron-jobs.csv restore-compat.sql pre-data-compat.sql post-data-compat.sql; do
   expected=$(sed -n "s/^${file//./\\.}\.sha256=//p" "$out/manifest.txt")
   actual=$(sha256sum "$out/$file" | awk '{print $1}')
   test -n "$expected"
@@ -32,12 +32,28 @@ start_epoch=$(date +%s)
 {
   printf 'BEGIN;\n'
   cat "$out/roles.sql" "$out/restore-compat.sql" "$out/schema.sql" "$out/pre-data-compat.sql"
-  printf 'SET session_replication_role = replica;\n'
-  cat "$out/data.sql"
-  cat "$out/post-data-compat.sql"
   printf 'COMMIT;\n'
 } | docker run --rm -i -e PGHOST -e PGPORT -e PGDATABASE -e PGUSER -e PGPASSWORD \
   postgres:17-alpine psql -X -v ON_ERROR_STOP=1 -q >"$out/restore.stdout.log" 2>"$out/restore.stderr.log"
+
+if [ ! -d "$out/data.dump" ]; then
+  zstd -dc "$out/data.dump.tar.zst" | tar -C "$out" -xf -
+fi
+export PGOPTIONS='-c session_replication_role=replica'
+docker run --rm \
+  -v "$out:$out" \
+  -e PGHOST -e PGPORT -e PGDATABASE -e PGUSER -e PGPASSWORD -e PGOPTIONS \
+  postgres:17-alpine pg_restore \
+  --format=directory --jobs=8 --data-only --no-owner --role=postgres --exit-on-error \
+  "$out/data.dump" >>"$out/restore.stdout.log" 2>>"$out/restore.stderr.log"
+unset PGOPTIONS
+
+{
+  printf 'BEGIN;\n'
+  cat "$out/post-data-compat.sql"
+  printf 'COMMIT;\n'
+} | docker run --rm -i -e PGHOST -e PGPORT -e PGDATABASE -e PGUSER -e PGPASSWORD \
+  postgres:17-alpine psql -X -v ON_ERROR_STOP=1 -q >>"$out/restore.stdout.log" 2>>"$out/restore.stderr.log"
 chmod 600 "$out/restore.stdout.log" "$out/restore.stderr.log"
 
 east_counts=$(docker run --rm -e PGHOST -e PGPORT -e PGDATABASE -e PGUSER -e PGPASSWORD \

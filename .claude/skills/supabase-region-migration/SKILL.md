@@ -71,19 +71,21 @@ Create a mode-`0700` directory with `mktemp -d`; never place database artifacts 
 Initialize and link that directory to the source. Supply the source password through
 `SUPABASE_DB_PASSWORD`, populated from Secrets Manager, never `--password`.
 
-Create three files with the official Supabase CLI flow:
+Create roles and schema files with the official Supabase CLI. For the 30 GB data set, use a
+directory-format `pg_dump --data-only --jobs=8` over the session pooler, include the reviewed
+application/Auth/Storage/Vault schema list, and exclude the same side-effect and migration tables.
+The parallel dump uses one synchronized snapshot but keeps individual data connections short enough
+for the managed connection lifetime. Archive the directory with `tar` + `zstd`:
 
 ```bash
 supabase db dump --workdir "$migration_dir" --file "$migration_dir/roles.sql" --role-only
 supabase db dump --workdir "$migration_dir" --file "$migration_dir/schema.sql"
-supabase db dump --workdir "$migration_dir" --file "$migration_dir/data.sql" \
-  --data-only --use-copy \
-  -x storage.buckets_vectors -x storage.vector_indexes \
-  -x cron.job -x cron.job_run_details \
-  -x net.http_request_queue -x net._http_response
 chmod 600 "$migration_dir"/*.sql
 shasum -a 256 "$migration_dir"/*.sql
 ```
+
+Use the reviewed `runner-export.sh` for the data command rather than reconstructing its schema list,
+pooler mode, parallelism, or exclusions at the shell.
 
 Record hashes, byte counts, source transaction timestamp, CLI version, and exclusions without
 recording credentials or row contents. Export cron definitions separately into the protected
@@ -95,16 +97,16 @@ metadata. Verify KMS encryption and object size with `head-object`; multipart ET
 
 Confirm East outbound integrations are still inactive immediately before restore. Use the East
 credential from `/matrx/migration/supabase-east` through stdin or environment only. Restore with the
-destination's Postgres client version, `ON_ERROR_STOP=1`, and one transaction in this order:
+destination's Postgres client version and `ON_ERROR_STOP=1` in this order:
 
 1. `roles.sql`
 2. a separately hashed compatibility file, only when a proven managed-Supabase permission mismatch
    requires one
 3. `schema.sql`
-4. `SET session_replication_role = replica`
-5. `data.sql`
+4. `pg_restore --data-only --jobs=8`, with `PGOPTIONS=-c session_replication_role=replica` inherited
+   by every worker, from the verified directory archive
+5. the reviewed post-data compatibility file
 
-The data export already sets replica mode, but set it explicitly as the official procedure does.
 Capture stderr to a protected log. Any error aborts the transaction; never continue a partial
 restore. If the fresh destination has conflicts with Supabase-owned objects, use only the remedies
 from Supabase's current within-platform migration guide and document each exception.
@@ -127,23 +129,21 @@ shape. After cleanup, prove roles, compatibility, and schema replay in a transac
 `ROLLBACK`, then verify East is still empty and read/write. The final full restore starts from that
 tested clean state.
 
-## Authoritative write freeze
+## Authoritative write pause
 
-Never use a Supavisor/pooler endpoint to set or reset the database write freeze. Poolers retain
-already-open writable backends, so a successful `ALTER DATABASE` through the pooler is not proof of
-a freeze. Use the project's direct endpoint (`db.<project-ref>.supabase.co:5432`), connect to
-`template1`, and then:
+Do not use `default_transaction_read_only` as the final managed-Supabase freeze. On this project,
+Supabase health management clears that default and restarts the compute, terminating long exports.
+Instead, quiesce every writer before the synchronized snapshot:
 
-1. set `postgres` database `default_transaction_read_only` to `on`;
-2. terminate every session connected to `postgres` except the control session;
-3. verify `default_transaction_read_only=on` through both the direct endpoint and the pooler;
-4. prove a uniquely named write probe is rejected through both paths and leaves no artifact.
+1. stop Coolify AI Dream, workflow workers, scraper, and all AWS/EC2 services that can write;
+2. remove the West `db.matrxserver.com` custom hostname so browser and Vercel clients cannot reach
+   the source even through cached DNS;
+3. verify native project URLs are absent from production consumer configuration;
+4. prove no non-export sessions remain and database transaction/write counters stay unchanged during
+   a measured observation interval.
 
-Rollback/unfreeze uses the same direct `template1` control path: reset the database setting,
-terminate remaining `postgres` sessions, verify direct and pooled sessions both report `off`, and
-verify no probe artifact exists. A client-side maintenance page or stopped application is helpful but
-is not the database freeze. Do not begin the source freeze until the operator has explicitly announced
-the maintenance window.
+The parallel directory-format dump then supplies one synchronized snapshot without requiring the
+managed database itself to stay read-only. Do not begin this pause until maintenance is announced.
 
 The prepared East runner is `matrx-python-server` (`i-0241f4fee60fb02f6`) with the temporary encrypted
 volume mounted at `/mnt/matrx-supabase-migration`. Use the reviewed scripts in this skill's `scripts/`
@@ -177,8 +177,8 @@ workflow worker runtime JSON; the three Vercel projects; the immutable admin-das
 Matrx Files and Matrx SEO `east`/`west` env files plus switch script; and the Coolify scraper. Do not
 rotate unrelated Supabase projects or HTML/sample variables.
 
-1. Announce and begin the write pause; apply the direct-endpoint freeze above and prove every writer
-   is read-only.
+1. Announce and begin the write pause; stop every writer and detach the West custom hostname as
+   described above, then prove the source is quiescent.
 2. Take a new full logical export using the exact tested versions and exclusions. Do not patch the
    stale rehearsal copy.
 3. Confirm the pre-cleaned East project is still empty, restore transactionally, and rerun acceptance

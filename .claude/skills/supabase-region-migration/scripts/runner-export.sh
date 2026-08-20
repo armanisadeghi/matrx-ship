@@ -35,6 +35,7 @@ export PGCONNECT_TIMEOUT=30 PGKEEPALIVES=1 PGKEEPALIVES_IDLE=30 PGKEEPALIVES_INT
 
 pg_container() {
   docker run --rm \
+    -v "$RUNNER_ROOT:$RUNNER_ROOT" \
     -e PGHOST -e PGPORT -e PGDATABASE -e PGUSER -e PGPASSWORD \
     -e PGCONNECT_TIMEOUT -e PGKEEPALIVES -e PGKEEPALIVES_IDLE \
     -e PGKEEPALIVES_INTERVAL -e PGKEEPALIVES_COUNT \
@@ -42,7 +43,7 @@ pg_container() {
 }
 
 source_mode=$(pg_container psql -X -Atqc "select current_setting('default_transaction_read_only');")
-test "$source_mode" = on
+test "$source_mode" = off
 
 out="$RUNNER_ROOT/cutovers/$run_id"
 test ! -e "$out"
@@ -52,44 +53,28 @@ start_epoch=$(date +%s)
 "$SUPABASE" db dump --workdir "$SOURCE_WORKDIR" --file "$out/roles.sql" --role-only
 "$SUPABASE" db dump --workdir "$SOURCE_WORKDIR" --file "$out/schema.sql"
 
-# A single 30 GB COPY stream exceeds the managed connection lifetime. Export
-# one schema per connection; the source is frozen, so the segments still
-# describe one consistent database state. A failed segment can be retried
-# without discarding the completed ones.
-segments="$out/segments"
-install -d -m 700 "$segments"
+# Use one parallel directory-format pg_dump. Its synchronized snapshot keeps
+# the whole database consistent while worker connections keep the 30 GB copy
+# below the managed connection lifetime.
 pg_container psql -X -Atqc \
   "select n.nspname from pg_namespace n where exists (select 1 from pg_tables t where t.schemaname=n.nspname) and n.nspname not in ('information_schema','pg_catalog','pg_toast','cron','net','extensions','realtime','supabase_functions','supabase_migrations','pgsodium') and n.nspname not like 'pg_temp_%' and n.nspname not like 'pg_toast_temp_%' order by n.nspname" \
   >"$out/data-schemas.txt"
 
-printf 'SET session_replication_role = replica;\n' >"$out/data.sql"
+schema_args=()
 while IFS= read -r schema; do
   test -n "$schema"
-  fragment="$segments/$schema.sql"
-  passed=false
-  for attempt in 1 2 3; do
-    if pg_container pg_dump \
-      --data-only --quote-all-identifiers --role postgres \
-      --exclude-table auth.schema_migrations \
-      --exclude-table storage.migrations \
-      --exclude-table supabase_functions.migrations \
-      --exclude-table storage.buckets_vectors \
-      --exclude-table storage.vector_indexes \
-      --schema "$schema" \
-      | sed -E 's/^\\(un)?restrict .*$/-- &/' >"$fragment.tmp"; then
-      mv "$fragment.tmp" "$fragment"
-      passed=true
-      break
-    fi
-    rm -f "$fragment.tmp"
-    sleep 5
-  done
-  test "$passed" = true
-  cat "$fragment" >>"$out/data.sql"
-  rm -f "$fragment"
+  schema_args+=(--schema "$schema")
 done <"$out/data-schemas.txt"
-printf 'RESET ALL;\n' >>"$out/data.sql"
-rm -rf -- "$segments"
+
+pg_container pg_dump \
+  --format=directory --jobs=8 --file="$out/data.dump" \
+  --data-only --quote-all-identifiers --role postgres \
+  --exclude-table auth.schema_migrations \
+  --exclude-table storage.migrations \
+  --exclude-table supabase_functions.migrations \
+  --exclude-table storage.buckets_vectors \
+  --exclude-table storage.vector_indexes \
+  "${schema_args[@]}"
 
 pg_container psql -X -v ON_ERROR_STOP=1 -c \
   "copy (select jobid,schedule,command,database,username,active,jobname from cron.job order by jobid) to stdout with csv header" \
@@ -100,8 +85,8 @@ for name in restore-compat.sql pre-data-compat.sql post-data-compat.sql; do
   aws s3 cp "$prefix/$name" "$out/$name" --no-progress >/dev/null
 done
 
-zstd -3 -T0 --no-progress "$out/data.sql" -o "$out/data.sql.zst"
-chmod 600 "$out"/*
+tar -C "$out" -cf - data.dump | zstd -3 -T0 --no-progress -o "$out/data.dump.tar.zst"
+chmod 600 "$out"/*.sql "$out"/*.txt "$out"/*.csv "$out"/*.zst
 
 source_counts=$(pg_container psql -X -Atqc \
   "select count(*) from auth.users; select count(*) from public._schema_migrations; select pg_database_size(current_database()); select count(*) from vault.secrets; select count(*) from vault.decrypted_secrets where decrypted_secret is not null;")
@@ -110,7 +95,7 @@ source_counts=$(pg_container psql -X -Atqc \
   printf 'format_version=1\nrun_id=%s\nsource_project_ref=txzxabzwovsujtloxrus\nsource_region=us-west-1\n' "$run_id"
   printf 'source_counts=%s\n' "$(tr '\n' ',' <<<"$source_counts" | sed 's/,$//')"
   printf 'excluded_data=storage.buckets_vectors,storage.vector_indexes,cron.job,cron.job_run_details,net.http_request_queue,net._http_response\n'
-  for file in roles.sql schema.sql data.sql data.sql.zst data-schemas.txt cron-jobs.csv restore-compat.sql pre-data-compat.sql post-data-compat.sql; do
+  for file in roles.sql schema.sql data.dump.tar.zst data-schemas.txt cron-jobs.csv restore-compat.sql pre-data-compat.sql post-data-compat.sql; do
     printf '%s.bytes=%s\n' "$file" "$(stat -c %s "$out/$file")"
     printf '%s.sha256=%s\n' "$file" "$(sha256sum "$out/$file" | awk '{print $1}')"
   done
@@ -118,11 +103,12 @@ source_counts=$(pg_container psql -X -Atqc \
 chmod 600 "$out/manifest.txt"
 
 destination="s3://$ARTIFACT_BUCKET/cutovers/2026-08-19/$run_id"
-for file in "$out"/*; do
+for name in roles.sql schema.sql data.dump.tar.zst data-schemas.txt cron-jobs.csv restore-compat.sql pre-data-compat.sql post-data-compat.sql manifest.txt; do
+  file="$out/$name"
   aws s3 cp "$file" "$destination/$(basename "$file")" \
     --sse aws:kms --sse-kms-key-id "$KMS_ALIAS" --no-progress >/dev/null
 done
 
 end_epoch=$(date +%s)
-printf 'FINAL_EXPORT=passed run_id=%s duration_seconds=%s data_bytes=%s compressed_bytes=%s\n' \
-  "$run_id" "$((end_epoch-start_epoch))" "$(stat -c %s "$out/data.sql")" "$(stat -c %s "$out/data.sql.zst")"
+printf 'FINAL_EXPORT=passed run_id=%s duration_seconds=%s archive_bytes=%s\n' \
+  "$run_id" "$((end_epoch-start_epoch))" "$(stat -c %s "$out/data.dump.tar.zst")"
