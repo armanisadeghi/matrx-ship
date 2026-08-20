@@ -52,23 +52,6 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "browser_checkpoin
   }
 }
 
-resource "aws_s3_bucket_lifecycle_configuration" "browser_checkpoints" {
-  bucket = aws_s3_bucket.browser_checkpoints.id
-
-  rule {
-    id     = "expire-browser-checkpoints"
-    status = "Enabled"
-
-    filter {}
-
-    expiration { days = 30 }
-
-    noncurrent_version_expiration { noncurrent_days = 7 }
-  }
-
-  depends_on = [aws_s3_bucket_versioning.browser_checkpoints]
-}
-
 data "aws_iam_policy_document" "browser_checkpoints" {
   statement {
     sid     = "DenyInsecureTransport"
