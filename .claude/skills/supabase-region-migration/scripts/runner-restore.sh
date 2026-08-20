@@ -44,7 +44,7 @@ docker run --rm \
   -v "$out:$out" \
   -e PGHOST -e PGPORT -e PGDATABASE -e PGUSER -e PGPASSWORD -e PGOPTIONS \
   postgres:17-alpine pg_restore \
-  --format=directory --jobs=8 --data-only --no-owner --role=postgres --exit-on-error \
+  --dbname=postgres --format=directory --jobs=8 --data-only --no-owner --role=postgres --exit-on-error \
   "$out/data.dump" >>"$out/restore.stdout.log" 2>>"$out/restore.stderr.log"
 unset PGOPTIONS
 
