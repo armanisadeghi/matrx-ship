@@ -42,14 +42,17 @@ chmod 600 "$out/restore.stdout.log" "$out/restore.stderr.log"
 
 east_counts=$(docker run --rm -e PGHOST -e PGPORT -e PGDATABASE -e PGUSER -e PGPASSWORD \
   postgres:17-alpine psql -X -Atqc \
-  "select count(*) from auth.users; select count(*) from public._schema_migrations; select pg_database_size(current_database()); select count(*) from cron.job; select count(*) from cron.job_run_details;")
+  "select count(*) from auth.users; select count(*) from public._schema_migrations; select pg_database_size(current_database()); select count(*) from vault.secrets; select count(*) from vault.decrypted_secrets where decrypted_secret is not null; select count(*) from cron.job; select count(*) from cron.job_run_details;")
 source_counts=$(sed -n 's/^source_counts=//p' "$out/manifest.txt" | tr ',' '\n')
 test "$(sed -n '1p' <<<"$east_counts")" = "$(sed -n '1p' <<<"$source_counts")"
 test "$(sed -n '2p' <<<"$east_counts")" = "$(sed -n '2p' <<<"$source_counts")"
-test "$(sed -n '4p' <<<"$east_counts")" = 0
-test "$(sed -n '5p' <<<"$east_counts")" = 0
+test "$(sed -n '4p' <<<"$east_counts")" = "$(sed -n '4p' <<<"$source_counts")"
+test "$(sed -n '5p' <<<"$east_counts")" = "$(sed -n '5p' <<<"$source_counts")"
+test "$(sed -n '6p' <<<"$east_counts")" = 0
+test "$(sed -n '7p' <<<"$east_counts")" = 0
 
 end_epoch=$(date +%s)
-printf 'FINAL_RESTORE=passed run_id=%s duration_seconds=%s auth_users=%s migration_ledger=%s east_bytes=%s\n' \
+printf 'FINAL_RESTORE=passed run_id=%s duration_seconds=%s auth_users=%s migration_ledger=%s east_bytes=%s vault_secrets=%s vault_decryptable=%s\n' \
   "$run_id" "$((end_epoch-start_epoch))" \
-  "$(sed -n '1p' <<<"$east_counts")" "$(sed -n '2p' <<<"$east_counts")" "$(sed -n '3p' <<<"$east_counts")"
+  "$(sed -n '1p' <<<"$east_counts")" "$(sed -n '2p' <<<"$east_counts")" "$(sed -n '3p' <<<"$east_counts")" \
+  "$(sed -n '4p' <<<"$east_counts")" "$(sed -n '5p' <<<"$east_counts")"

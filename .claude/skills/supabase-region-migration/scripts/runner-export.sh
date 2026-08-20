@@ -59,7 +59,7 @@ chmod 600 "$out"/*
 
 source_counts=$(docker run --rm -e PGHOST -e PGPORT -e PGDATABASE -e PGUSER -e PGPASSWORD \
   postgres:17-alpine psql -X -Atqc \
-  "select count(*) from auth.users; select count(*) from public._schema_migrations; select pg_database_size(current_database());")
+  "select count(*) from auth.users; select count(*) from public._schema_migrations; select pg_database_size(current_database()); select count(*) from vault.secrets; select count(*) from vault.decrypted_secrets where decrypted_secret is not null;")
 
 {
   printf 'format_version=1\nrun_id=%s\nsource_project_ref=txzxabzwovsujtloxrus\nsource_region=us-west-1\n' "$run_id"
