@@ -174,6 +174,61 @@ data "aws_iam_policy_document" "operator" {
   }
 
   statement {
+    sid       = "CreateTaggedBrowserProfileKey"
+    actions   = ["kms:CreateKey"]
+    resources = ["*"]
+
+    condition {
+      test     = "StringEquals"
+      variable = "aws:RequestTag/System"
+      values   = [local.common_tags.System]
+    }
+  }
+
+  statement {
+    sid = "ManageBrowserProfileKey"
+    actions = [
+      "kms:CreateAlias",
+      "kms:DeleteAlias",
+      "kms:DescribeKey",
+      "kms:EnableKeyRotation",
+      "kms:GetKeyPolicy",
+      "kms:ListAliases",
+      "kms:ListResourceTags",
+      "kms:PutKeyPolicy",
+      "kms:ScheduleKeyDeletion",
+      "kms:TagResource",
+      "kms:UntagResource",
+    ]
+    resources = [
+      aws_kms_key.browser_profiles.arn,
+      "arn:aws:kms:${var.aws_region}:${var.aws_account_id}:alias/matrx-browser-profiles",
+    ]
+  }
+
+  statement {
+    sid = "ManageBrowserCheckpointBucket"
+    actions = [
+      "s3:CreateBucket",
+      "s3:DeleteBucket",
+      "s3:DeleteBucketPolicy",
+      "s3:GetBucketPolicy",
+      "s3:GetBucketPublicAccessBlock",
+      "s3:GetBucketVersioning",
+      "s3:GetEncryptionConfiguration",
+      "s3:GetLifecycleConfiguration",
+      "s3:GetOwnershipControls",
+      "s3:PutBucketPolicy",
+      "s3:PutBucketPublicAccessBlock",
+      "s3:PutBucketVersioning",
+      "s3:PutEncryptionConfiguration",
+      "s3:PutLifecycleConfiguration",
+      "s3:PutOwnershipControls",
+    ]
+    resources = [aws_s3_bucket.browser_checkpoints.arn]
+  }
+
+  statement {
     sid = "ManageBrowserProfileMountPolicy"
     actions = [
       "iam:DeleteRolePolicy",

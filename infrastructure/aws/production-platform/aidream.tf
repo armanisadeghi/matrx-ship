@@ -31,6 +31,34 @@ data "aws_iam_policy_document" "aidream_aws_services" {
   }
 
   statement {
+    sid = "ManageBrowserCheckpoints"
+    actions = [
+      "s3:GetBucketLocation",
+      "s3:ListBucket",
+    ]
+    resources = [aws_s3_bucket.browser_checkpoints.arn]
+  }
+
+  statement {
+    actions = [
+      "s3:DeleteObject",
+      "s3:GetObject",
+      "s3:PutObject",
+    ]
+    resources = ["${aws_s3_bucket.browser_checkpoints.arn}/*"]
+  }
+
+  statement {
+    sid = "WrapBrowserProfileKeys"
+    actions = [
+      "kms:Decrypt",
+      "kms:DescribeKey",
+      "kms:Encrypt",
+    ]
+    resources = [aws_kms_key.browser_profiles.arn]
+  }
+
+  statement {
     sid = "ManagePlatformFileObjects"
     actions = [
       "s3:AbortMultipartUpload",
