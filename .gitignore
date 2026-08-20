@@ -36,6 +36,9 @@ next-env.d.ts
 # drizzle
 drizzle/meta/
 
+# Supabase CLI link state (machine-local project metadata)
+supabase/.temp/
+
 # Matrx Ship config (contains API key)
 .matrx-ship.json
 .matrx.json
