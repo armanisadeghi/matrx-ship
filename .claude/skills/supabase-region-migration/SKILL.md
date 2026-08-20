@@ -58,6 +58,13 @@ compute must be no smaller than the intended production class. Current baseline:
 31.1 GB on a 40 GB disk and XL compute; destination is provisioned as XL with a 60 GB gp3 disk for the
 rehearsal.
 
+Count `vault.secrets` and prove every row is readable through `vault.decrypted_secrets`. If either
+Supabase Vault or pgSodium-backed column encryption is present, copy the source project's managed
+root key to East through the official Management API `GET /v1/projects/{source}/pgsodium` → `PUT
+/v1/projects/{destination}/pgsodium` before restore. Forward the response body in memory; never print
+or persist the key. Read it back from East and compare in memory before importing. A logical backup
+contains ciphertext but never this project-level key.
+
 ## Create the protected export
 
 Create a mode-`0700` directory with `mktemp -d`; never place database artifacts in a repository.
