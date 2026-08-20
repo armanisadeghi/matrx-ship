@@ -79,6 +79,24 @@ data "aws_iam_policy_document" "operator_infrastructure_access" {
       "arn:aws:iam::${var.aws_account_id}:policy/matrx/platform/matrx-production-operator-infrastructure",
     ]
   }
+
+  statement {
+    sid       = "RunAuditedCommandsOnMatrxHosts"
+    actions   = ["ssm:SendCommand"]
+    resources = ["arn:aws:ec2:${var.aws_region}:${var.aws_account_id}:instance/*"]
+
+    condition {
+      test     = "StringLike"
+      variable = "ssm:resourceTag/Name"
+      values   = ["matrx-*"]
+    }
+  }
+
+  statement {
+    sid       = "UseApprovedShellDocument"
+    actions   = ["ssm:SendCommand"]
+    resources = ["arn:aws:ssm:${var.aws_region}::document/AWS-RunShellScript"]
+  }
 }
 
 resource "aws_iam_policy" "operator_infrastructure_access" {
