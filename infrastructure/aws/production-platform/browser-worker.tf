@@ -166,7 +166,7 @@ resource "aws_ecs_task_definition" "browser_worker" {
   }
 
   dynamic "volume" {
-    for_each = toset(["worker-tmp", "worker-home", "ssm-lib", "ssm-log"])
+    for_each = toset(["ssm-lib", "ssm-log"])
     content { name = volume.value }
   }
 
@@ -175,7 +175,10 @@ resource "aws_ecs_task_definition" "browser_worker" {
     image                  = "${data.aws_ecr_repository.browser_worker.repository_url}:${var.browser_worker_image_tag}"
     essential              = true
     user                   = "1000:1000"
-    readonlyRootFilesystem = true
+    # Chromium, Xvfb, and Playwright need ordinary per-task scratch space in
+    # /tmp and the non-root worker's home. Durable profile state remains on the
+    # encrypted EFS mount below; the writable container layer is disposable.
+    readonlyRootFilesystem = false
 
     portMappings = [
       {
@@ -204,16 +207,6 @@ resource "aws_ecs_task_definition" "browser_worker" {
       {
         sourceVolume  = "browser-profiles"
         containerPath = "/profiles"
-        readOnly      = false
-      },
-      {
-        sourceVolume  = "worker-tmp"
-        containerPath = "/tmp"
-        readOnly      = false
-      },
-      {
-        sourceVolume  = "worker-home"
-        containerPath = "/home/browser-worker"
         readOnly      = false
       },
       {
