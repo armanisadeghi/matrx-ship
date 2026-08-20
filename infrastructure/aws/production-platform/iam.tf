@@ -170,6 +170,17 @@ data "aws_iam_policy_document" "operator" {
   }
 
   statement {
+    sid = "ManageDeclaredPlatformMonitoring"
+    actions = [
+      "cloudwatch:DeleteAlarms",
+      "cloudwatch:DeleteDashboards",
+      "cloudwatch:PutDashboard",
+      "cloudwatch:PutMetricAlarm",
+    ]
+    resources = ["*"]
+  }
+
+  statement {
     sid = "RegisterTaskDefinitions"
     actions = [
       "ecs:DeregisterTaskDefinition",
