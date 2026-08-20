@@ -134,6 +134,7 @@ data "aws_iam_policy_document" "operator" {
       "logs:StartQuery",
       "logs:StopQuery",
       "logs:GetQueryResults",
+      "servicediscovery:DiscoverInstances*",
       "servicediscovery:Get*",
       "servicediscovery:List*",
       "secretsmanager:DescribeSecret",
