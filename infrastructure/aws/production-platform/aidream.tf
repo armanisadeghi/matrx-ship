@@ -94,7 +94,7 @@ resource "aws_iam_role_policy" "aidream_aws_services" {
 
 resource "aws_security_group" "aidream" {
   name        = "${local.name_prefix}-aidream"
-  description = "AI Dream accepts API traffic only from the platform load balancer."
+  description = "AI Dream accepts API traffic only from the public and private platform load balancers."
   vpc_id      = aws_vpc.production.id
 
   ingress {
@@ -103,6 +103,14 @@ resource "aws_security_group" "aidream" {
     to_port         = 8000
     protocol        = "tcp"
     security_groups = [aws_security_group.public_alb.id]
+  }
+
+  ingress {
+    description     = "Private API traffic from the sandbox-facing load balancer"
+    from_port       = 8000
+    to_port         = 8000
+    protocol        = "tcp"
+    security_groups = [aws_security_group.aidream_internal_alb.id]
   }
 
   egress {
@@ -274,6 +282,12 @@ resource "aws_ecs_service" "aidream" {
 
   load_balancer {
     target_group_arn = aws_lb_target_group.aidream.arn
+    container_name   = "aidream"
+    container_port   = 8000
+  }
+
+  load_balancer {
+    target_group_arn = aws_lb_target_group.aidream_internal.arn
     container_name   = "aidream"
     container_port   = 8000
   }
