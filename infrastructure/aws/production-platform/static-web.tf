@@ -249,7 +249,13 @@ resource "aws_lb_listener_rule" "workflow_studio_https" {
   }
 
   condition {
-    host_header { values = ["workflows-aws.app.matrxserver.com"] }
+    host_header {
+      values = [
+        "studio.app.matrxserver.com",
+        "workflows-aws.app.matrxserver.com",
+        "workflows.aimatrx.com",
+      ]
+    }
   }
 }
 

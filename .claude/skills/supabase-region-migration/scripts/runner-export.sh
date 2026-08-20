@@ -26,6 +26,7 @@ read_env_value() {
 export SUPABASE_DB_PASSWORD
 SUPABASE_DB_PASSWORD=$(read_env_value SUPABASE_MATRIX_PASSWORD)
 export PGHOST="$SOURCE_DIRECT_HOST" PGPORT=5432 PGDATABASE=postgres PGUSER=postgres PGPASSWORD="$SUPABASE_DB_PASSWORD"
+export PGCONNECT_TIMEOUT=30 PGKEEPALIVES=1 PGKEEPALIVES_IDLE=30 PGKEEPALIVES_INTERVAL=10 PGKEEPALIVES_COUNT=6
 
 source_mode=$(docker run --rm -e PGHOST -e PGPORT -e PGDATABASE -e PGUSER -e PGPASSWORD \
   postgres:17-alpine psql -X -Atqc "select current_setting('default_transaction_read_only');")

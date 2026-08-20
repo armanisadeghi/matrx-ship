@@ -137,6 +137,7 @@ resource "aws_lb_listener_rule" "aidream_https" {
       values = [
         "server-aws.app.matrxserver.com",
         "server.app.matrxserver.com",
+        "stream.aimatrx.com",
       ]
     }
   }
