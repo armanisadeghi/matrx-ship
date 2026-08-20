@@ -36,7 +36,7 @@ variable "legacy_vpc_id" {
 variable "static_web_image_tag" {
   description = "Immutable aidream Git SHA shared by the admin dashboard and workflow studio images."
   type        = string
-  default     = "e4c222531bdaec3e2bc1df2d61ff38c7859f8129"
+  default     = "33a7786230cda7643d50b8c8632974a22dda8bb7"
 
   validation {
     condition     = can(regex("^[0-9a-f]{40}$", var.static_web_image_tag))
@@ -47,7 +47,7 @@ variable "static_web_image_tag" {
 variable "aidream_image_tag" {
   description = "Immutable Git SHA for the AI Dream preview image."
   type        = string
-  default     = "76d383772195c378c3290fc7427eaa41ffeac4dc"
+  default     = "79176f55f5d3379ac5a3023530298ade8adb9b7c"
 
   validation {
     condition     = can(regex("^[0-9a-f]{40}$", var.aidream_image_tag))
@@ -58,7 +58,7 @@ variable "aidream_image_tag" {
 variable "workflow_worker_image_tag" {
   description = "Immutable Git SHA for the dormant workflow worker task definition."
   type        = string
-  default     = "09a4dfcaea257fcaea23e66292c28fe6f43aa2f4"
+  default     = "79176f55f5d3379ac5a3023530298ade8adb9b7c"
 
   validation {
     condition     = can(regex("^[0-9a-f]{40}$", var.workflow_worker_image_tag))
