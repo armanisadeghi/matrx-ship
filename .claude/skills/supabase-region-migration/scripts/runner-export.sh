@@ -86,6 +86,7 @@ while IFS= read -r schema; do
   done
   test "$passed" = true
   cat "$fragment" >>"$out/data.sql"
+  rm -f "$fragment"
 done <"$out/data-schemas.txt"
 printf 'RESET ALL;\n' >>"$out/data.sql"
 rm -rf -- "$segments"
