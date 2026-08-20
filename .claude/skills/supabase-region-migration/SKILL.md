@@ -103,8 +103,8 @@ destination's Postgres client version and `ON_ERROR_STOP=1` in this order:
 2. a separately hashed compatibility file, only when a proven managed-Supabase permission mismatch
    requires one
 3. `schema.sql`
-4. `pg_restore --data-only --jobs=8`, with `PGOPTIONS=-c session_replication_role=replica` inherited
-   by every worker, from the verified directory archive
+4. one transactional `psql` session that sets `session_replication_role=replica` after authentication
+   and consumes `pg_restore --data-only --file=-` from the verified directory archive
 5. the reviewed post-data compatibility file
 
 Capture stderr to a protected log. Any error aborts the transaction; never continue a partial
