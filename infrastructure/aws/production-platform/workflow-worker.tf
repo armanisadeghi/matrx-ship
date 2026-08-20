@@ -111,5 +111,7 @@ resource "aws_ecs_service" "workflow_worker" {
 
   depends_on = [aws_iam_role_policy.workflow_worker_aws_services]
 
-  lifecycle { ignore_changes = [desired_count] }
+  # The operator owns desired_count; the aidream GitHub workflow advances the
+  # immutable image revision in task_definition.
+  lifecycle { ignore_changes = [desired_count, task_definition] }
 }

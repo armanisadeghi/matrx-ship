@@ -253,7 +253,9 @@ resource "aws_ecs_service" "aidream" {
   tags       = { Name = "${local.name_prefix}-aidream" }
   depends_on = [aws_lb_listener_rule.aidream_preview, aws_iam_role_policy.aidream_aws_services]
 
-  lifecycle { ignore_changes = [desired_count] }
+  # Autoscaling owns desired_count; the aidream GitHub workflow owns immutable
+  # image revisions and advances task_definition after each successful build.
+  lifecycle { ignore_changes = [desired_count, task_definition] }
 }
 
 resource "aws_appautoscaling_target" "aidream" {
