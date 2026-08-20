@@ -65,3 +65,14 @@ variable "workflow_worker_image_tag" {
     error_message = "Workflow worker images must be deployed by a full 40-character Git SHA."
   }
 }
+
+variable "browser_worker_image_tag" {
+  description = "Immutable AI Dream Git SHA for the persistent Cloud Browser worker image."
+  type        = string
+  default     = "8809e29cc73d0ea79dfa231254f6c87b06ea070e"
+
+  validation {
+    condition     = can(regex("^[0-9a-f]{40}$", var.browser_worker_image_tag))
+    error_message = "Cloud Browser worker images must be deployed by a full 40-character Git SHA."
+  }
+}

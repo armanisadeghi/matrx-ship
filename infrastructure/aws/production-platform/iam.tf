@@ -164,6 +164,34 @@ data "aws_iam_policy_document" "operator" {
   }
 
   statement {
+    sid = "ReadProductionTerraformStateBucket"
+    actions = [
+      "s3:GetBucketLocation",
+      "s3:ListBucket",
+    ]
+    resources = ["arn:aws:s3:::matrx-terraform-state-${var.aws_account_id}"]
+
+    condition {
+      test     = "StringLike"
+      variable = "s3:prefix"
+      values   = ["aws/production-platform/*"]
+    }
+  }
+
+  statement {
+    sid = "ManageProductionTerraformStateObjects"
+    actions = [
+      "s3:DeleteObject",
+      "s3:GetObject",
+      "s3:PutObject",
+    ]
+    resources = [
+      "arn:aws:s3:::matrx-terraform-state-${var.aws_account_id}/aws/production-platform/terraform.tfstate",
+      "arn:aws:s3:::matrx-terraform-state-${var.aws_account_id}/aws/production-platform/terraform.tfstate.tflock",
+    ]
+  }
+
+  statement {
     sid = "RegisterTaskDefinitions"
     actions = [
       "ecs:DeregisterTaskDefinition",
@@ -185,7 +213,10 @@ data "aws_iam_policy_document" "operator" {
     ]
     resources = concat(
       values(aws_ecr_repository.service)[*].arn,
-      ["arn:aws:ecr:${var.aws_region}:${var.aws_account_id}:repository/matrx/aidream-server"],
+      [
+        "arn:aws:ecr:${var.aws_region}:${var.aws_account_id}:repository/matrx/aidream-server",
+        "arn:aws:ecr:${var.aws_region}:${var.aws_account_id}:repository/matrx-browser-worker",
+      ],
     )
   }
 

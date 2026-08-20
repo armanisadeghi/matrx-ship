@@ -22,7 +22,10 @@ data "aws_iam_policy_document" "aidream_github_deploy" {
       "ecr:PutImage",
       "ecr:UploadLayerPart",
     ]
-    resources = [data.aws_ecr_repository.aidream.arn]
+    resources = [
+      data.aws_ecr_repository.aidream.arn,
+      data.aws_ecr_repository.browser_worker.arn,
+    ]
   }
 
   statement {
@@ -52,6 +55,7 @@ data "aws_iam_policy_document" "aidream_github_deploy" {
     ]
     resources = [
       aws_ecs_service.aidream.id,
+      aws_ecs_service.browser_worker.id,
       aws_ecs_service.workflow_worker.id,
     ]
   }
