@@ -69,7 +69,7 @@ variable "workflow_worker_image_tag" {
 variable "browser_worker_image_tag" {
   description = "Immutable AI Dream Git SHA for the persistent Cloud Browser worker image."
   type        = string
-  default     = "a58a2d11d797a6909848dffdc8e12bcb140f2948"
+  default     = "7d7460f9f66ecb2b34ab9df313873323b2186636"
 
   validation {
     condition     = can(regex("^[0-9a-f]{40}$", var.browser_worker_image_tag))
