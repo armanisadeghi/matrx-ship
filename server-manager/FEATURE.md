@@ -1,5 +1,7 @@
 # Server Manager Runtime Truth
 
+Cross-repo work order: `/Users/armanisadeghi/code/common-docs/projects/production-reliability-closeout/SANDBOX_FLEET_WORK_ORDER.md` — read it before changing sandbox inventory, tier routing, drift verdicts, lifecycle repair, or cleanup controls.
+
 The Manager is a production control plane. UI claims about deployment and
 freshness must come from the thing that is actually running, not from a deploy
 ledger, workflow history, intended tag, or local source checkout.
