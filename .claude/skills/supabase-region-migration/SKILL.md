@@ -107,6 +107,11 @@ destination's Postgres client version and `ON_ERROR_STOP=1` in this order:
    and consumes `pg_restore --data-only --file=-` from the verified directory archive
 5. the reviewed post-data compatibility file
 
+Exclude `vault.secrets` from the bulk restore: managed Supabase blocks direct table writes. After the
+data transaction commits, stream decrypted source rows in memory through East's `vault.create_secret`
+function, then require source/East secret counts and decryptability to match. Never persist or print
+the plaintext.
+
 Capture stderr to a protected log. Any error aborts the transaction; never continue a partial
 restore. If the fresh destination has conflicts with Supabase-owned objects, use only the remedies
 from Supabase's current within-platform migration guide and document each exception.

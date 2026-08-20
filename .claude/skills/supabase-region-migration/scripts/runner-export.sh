@@ -57,7 +57,7 @@ start_epoch=$(date +%s)
 # the whole database consistent while worker connections keep the 30 GB copy
 # below the managed connection lifetime.
 pg_container psql -X -Atqc \
-  "select n.nspname from pg_namespace n where exists (select 1 from pg_tables t where t.schemaname=n.nspname) and n.nspname not in ('information_schema','pg_catalog','pg_toast','cron','net','extensions','realtime','supabase_functions','supabase_migrations','pgsodium') and n.nspname not like 'pg_temp_%' and n.nspname not like 'pg_toast_temp_%' order by n.nspname" \
+  "select n.nspname from pg_namespace n where exists (select 1 from pg_tables t where t.schemaname=n.nspname) and n.nspname not in ('information_schema','pg_catalog','pg_toast','cron','net','extensions','realtime','supabase_functions','supabase_migrations','pgsodium','vault') and n.nspname not like 'pg_temp_%' and n.nspname not like 'pg_toast_temp_%' order by n.nspname" \
   >"$out/data-schemas.txt"
 
 schema_args=()
