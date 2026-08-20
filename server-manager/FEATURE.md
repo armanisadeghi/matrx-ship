@@ -25,22 +25,11 @@ installed Python package version, host-local health, and `/opt/<service>/CURRENT
 - The Secrets banner must say what was observed and what Apply will do. Never
   predict failure from a missing record.
 
-## EC2 AI Dream replica
+## AI Dream API ownership
 
-The `matrx-python-server` runtime is the AWS-local `sandbox_host` replica, not
-the public Coolify `app_server`. Its stable private port `8000` and replica TLS
-hostname terminate at Nginx; `aidream-blue` and `aidream-green` alternate on
-loopback ports behind it.
-
-- Secrets Apply never runs `systemctl restart aidream`. It invokes the active
-  image SHA through `/opt/aidream/deploy.sh`, which starts the inactive slot,
-  requires ready + exact SHA + `sandbox_host`, then switches Nginx.
-- Remote secret-file bytes never appear in SSM commands. Manager uploads a
-  random-key object to the private `matrx-backups` bucket with SSE-S3, tells the
-  instance only that object name, installs it mode 600, and deletes the transfer
-  object in a `finally` block.
-- The health alarm names the active-slot, containers, and Nginx boundary. It
-  never directs an operator to the disabled legacy single-container service.
+AWS ECS/Fargate is the sole AI Dream API runtime and release owner. The retired
+`matrx-python-server` replica has no Manager secret store or Apply action, so
+the control plane cannot restart or revive the superseded API deployment.
 
 ## Microservice deploys must leave the host deployable
 
@@ -88,12 +77,9 @@ Only the latest completed deployment affects health: a later successful run
 supersedes older failed attempts, which remain visible as history but cannot
 keep the fleet degraded after runtime freshness has been verified.
 
-The **aidream deploys vs tests** check follows the same runtime-truth rule. A
-failed workflow is critical when either live role is unhealthy, unreadable, or
-the primary and dedicated roles report different source SHAs. When both roles
-pass readiness and independently report the same full SHA, the failed workflow
-is an automation warning, not a production-staleness claim. The warning remains
-until the release owner is repaired.
+The **aidream deploys vs tests** check follows the same runtime-truth rule. The
+canonical ECS API health and exact running SHA decide production freshness; a
+workflow record alone never proves that production is healthy or stale.
 
 ## A normal release is not an outage
 

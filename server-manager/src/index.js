@@ -4991,16 +4991,6 @@ function shq(s) { return `'${String(s).replace(/'/g, `'\\''`)}'`; }
 // UX as local stores; writes back up the file on the box first.
 const REMOTE_SECRET_STORES = [
   {
-    id: "ec2:aidream-app",
-    label: "AI Dream dedicated (EC2) — app.env",
-    kind: "ec2",
-    host: "matrx-python-server",
-    path: "/etc/aidream/app.env",
-    note: "Apply starts the inactive blue/green slot with the edited env, health-gates it, then atomically switches nginx. The active slot stays in service until the candidate passes.",
-    remote: true,
-    restart: { type: "ssm", timeout: 600, command: "test -s /etc/aidream/active-image-tag && sudo /opt/aidream/deploy.sh \"$(cat /etc/aidream/active-image-tag)\"" },
-  },
-  {
     id: "ec2:matrx-files",
     label: "Matrx Files service (EC2) — /etc/matrx-files.env",
     kind: "ec2",
