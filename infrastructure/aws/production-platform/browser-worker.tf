@@ -34,6 +34,83 @@ resource "aws_security_group" "browser_worker" {
   tags = { Name = "${local.name_prefix}-browser-worker" }
 }
 
+resource "aws_security_group" "browser_profiles" {
+  name        = "${local.name_prefix}-browser-profiles"
+  description = "Encrypted EFS profile storage is reachable only from the persistent browser worker."
+  vpc_id      = aws_vpc.production.id
+
+  ingress {
+    description     = "NFS from the persistent browser worker"
+    from_port       = 2049
+    to_port         = 2049
+    protocol        = "tcp"
+    security_groups = [aws_security_group.browser_worker.id]
+  }
+
+  tags = { Name = "${local.name_prefix}-browser-profiles" }
+}
+
+resource "aws_efs_file_system" "browser_profiles" {
+  encrypted        = true
+  performance_mode = "generalPurpose"
+  throughput_mode  = "bursting"
+
+  lifecycle_policy { transition_to_ia = "AFTER_30_DAYS" }
+
+  tags = { Name = "${local.name_prefix}-browser-profiles" }
+}
+
+resource "aws_efs_mount_target" "browser_profiles" {
+  for_each = aws_subnet.private
+
+  file_system_id  = aws_efs_file_system.browser_profiles.id
+  subnet_id       = each.value.id
+  security_groups = [aws_security_group.browser_profiles.id]
+}
+
+resource "aws_efs_access_point" "browser_profiles" {
+  file_system_id = aws_efs_file_system.browser_profiles.id
+
+  posix_user {
+    gid = 1000
+    uid = 1000
+  }
+
+  root_directory {
+    path = "/browser-profiles"
+
+    creation_info {
+      owner_gid   = 1000
+      owner_uid   = 1000
+      permissions = "0750"
+    }
+  }
+
+  tags = { Name = "${local.name_prefix}-browser-profiles" }
+}
+
+data "aws_iam_policy_document" "browser_worker_profiles" {
+  statement {
+    actions = [
+      "elasticfilesystem:ClientMount",
+      "elasticfilesystem:ClientWrite",
+    ]
+    resources = [aws_efs_file_system.browser_profiles.arn]
+
+    condition {
+      test     = "StringEquals"
+      variable = "elasticfilesystem:AccessPointArn"
+      values   = [aws_efs_access_point.browser_profiles.arn]
+    }
+  }
+}
+
+resource "aws_iam_role_policy" "browser_worker_profiles" {
+  name   = "write-encrypted-browser-profiles"
+  role   = aws_iam_role.task["aidream"].id
+  policy = data.aws_iam_policy_document.browser_worker_profiles.json
+}
+
 resource "aws_service_discovery_service" "browser_worker" {
   name = "matrx-browser-worker"
 
@@ -66,6 +143,20 @@ resource "aws_ecs_task_definition" "browser_worker" {
 
   ephemeral_storage { size_in_gib = 40 }
 
+  volume {
+    name = "browser-profiles"
+
+    efs_volume_configuration {
+      file_system_id     = aws_efs_file_system.browser_profiles.id
+      transit_encryption = "ENABLED"
+
+      authorization_config {
+        access_point_id = aws_efs_access_point.browser_profiles.id
+        iam             = "ENABLED"
+      }
+    }
+  }
+
   container_definitions = jsonencode([{
     name      = "browser-worker"
     image     = "${data.aws_ecr_repository.browser_worker.repository_url}:${var.browser_worker_image_tag}"
@@ -93,6 +184,12 @@ resource "aws_ecs_task_definition" "browser_worker" {
       { name = "BROWSER_WORKER_PORT", value = "8002" },
       { name = "DISPLAY", value = ":99" },
     ]
+
+    mountPoints = [{
+      sourceVolume  = "browser-profiles"
+      containerPath = "/profiles"
+      readOnly      = false
+    }]
 
     secrets = [{
       name      = "BROWSER_WORKER_PUBLIC_KEY_PEM"
@@ -156,6 +253,8 @@ resource "aws_ecs_service" "browser_worker" {
   service_registries {
     registry_arn = aws_service_discovery_service.browser_worker.arn
   }
+
+  depends_on = [aws_efs_mount_target.browser_profiles]
 
   tags = { Name = "${local.name_prefix}-browser-worker" }
 }

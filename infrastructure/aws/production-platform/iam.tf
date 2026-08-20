@@ -118,6 +118,7 @@ data "aws_iam_policy_document" "operator" {
       "ecr:List*",
       "ecs:Describe*",
       "ecs:List*",
+      "elasticfilesystem:Describe*",
       "elasticloadbalancing:Describe*",
       "iam:GetRole",
       "iam:ListRolePolicies",
@@ -139,6 +140,47 @@ data "aws_iam_policy_document" "operator" {
       "sts:GetCallerIdentity",
     ]
     resources = ["*"]
+  }
+
+  statement {
+    sid = "ManageDeclaredBrowserWorkerInfrastructure"
+    actions = [
+      "ec2:AuthorizeSecurityGroupEgress",
+      "ec2:AuthorizeSecurityGroupIngress",
+      "ec2:CreateSecurityGroup",
+      "ec2:CreateTags",
+      "ec2:DeleteSecurityGroup",
+      "ec2:RevokeSecurityGroupEgress",
+      "ec2:RevokeSecurityGroupIngress",
+      "ecs:CreateService",
+      "ecs:DeleteService",
+      "ecs:TagResource",
+      "ecs:UntagResource",
+      "elasticfilesystem:CreateAccessPoint",
+      "elasticfilesystem:CreateFileSystem",
+      "elasticfilesystem:CreateMountTarget",
+      "elasticfilesystem:DeleteAccessPoint",
+      "elasticfilesystem:DeleteFileSystem",
+      "elasticfilesystem:DeleteMountTarget",
+      "elasticfilesystem:TagResource",
+      "elasticfilesystem:UntagResource",
+      "servicediscovery:CreateService",
+      "servicediscovery:DeleteService",
+      "servicediscovery:TagResource",
+      "servicediscovery:UntagResource",
+      "servicediscovery:UpdateService",
+    ]
+    resources = ["*"]
+  }
+
+  statement {
+    sid = "ManageBrowserProfileMountPolicy"
+    actions = [
+      "iam:DeleteRolePolicy",
+      "iam:GetRolePolicy",
+      "iam:PutRolePolicy",
+    ]
+    resources = [aws_iam_role.task["aidream"].arn]
   }
 
   statement {
