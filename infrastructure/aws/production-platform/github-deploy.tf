@@ -55,7 +55,7 @@ data "aws_iam_policy_document" "aidream_github_deploy" {
     ]
     resources = [
       aws_ecs_service.aidream.id,
-      aws_ecs_service.browser_worker.id,
+      "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:service/${aws_ecs_cluster.production.name}/browser-worker",
       aws_ecs_service.workflow_worker.id,
     ]
   }
@@ -66,7 +66,7 @@ data "aws_iam_policy_document" "aidream_github_deploy" {
     resources = [
       aws_iam_role.task_execution.arn,
       aws_iam_role.task["aidream"].arn,
-      aws_iam_role.browser_worker_task.arn,
+      "arn:aws:iam::${var.aws_account_id}:role/matrx/platform/matrx-production-browser-worker-task",
       aws_iam_role.task["workflow-worker"].arn,
     ]
 
