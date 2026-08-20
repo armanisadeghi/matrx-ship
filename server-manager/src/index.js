@@ -3468,12 +3468,11 @@ async function checkRecentDeploys() {
   }
 }
 
-// The dedicated aidream server that sandbox-attached chat turns route to
-// (frontend channel "ec2-dedicated"). It crashlooped for 3 DAYS in July 2026
-// with zero visibility — every sandbox chat turn 502'd and nothing watched
-// this box. Fleet Health now owns that gap.
-const AIDREAM_DEDICATED_HEALTH_URL = process.env.MATRX_AIDREAM_DEDICATED_HEALTH_URL || "https://sandbox.matrxserver.com/health";
 const AIDREAM_PRIMARY_HEALTH_URL = process.env.MATRX_AIDREAM_PRIMARY_HEALTH_URL || "https://server.app.matrxserver.com/health";
+// EC2 sandbox-attached chat turns use the same canonical public ECS service as
+// ordinary production conversations. Keep a separate Fleet Health row because
+// it represents a distinct user path, but never a second runtime.
+const AIDREAM_SANDBOX_CHAT_HEALTH_URL = AIDREAM_PRIMARY_HEALTH_URL;
 
 async function readAidreamRuntimeVersion(healthUrl) {
   const base = healthUrl.replace(/\/health\/?$/, "");
@@ -3489,22 +3488,22 @@ async function readAidreamRuntimeVersion(healthUrl) {
 }
 
 async function checkDedicatedAidream() {
-  const id = "aidream-dedicated", label = "Dedicated aidream server (sandbox chat channel)";
+  const id = "aidream-dedicated", label = "Sandbox chat backend (canonical ECS)";
   try {
     const t0 = Date.now();
-    const r = await fetch(AIDREAM_DEDICATED_HEALTH_URL, { signal: AbortSignal.timeout(8000) });
+    const r = await fetch(AIDREAM_SANDBOX_CHAT_HEALTH_URL, { signal: AbortSignal.timeout(8000) });
     const ms = Date.now() - t0;
-    if (r.ok) return { id, label, status: "ok", detail: `${AIDREAM_DEDICATED_HEALTH_URL} -> ${r.status} in ${ms}ms.`, actions: [] };
+    if (r.ok) return { id, label, status: "ok", detail: `${AIDREAM_SANDBOX_CHAT_HEALTH_URL} -> ${r.status} in ${ms}ms.`, actions: [] };
     return {
       id, label, status: "critical",
-      detail: `${AIDREAM_DEDICATED_HEALTH_URL} -> HTTP ${r.status}. Every sandbox-attached chat turn is failing ("Failed to fetch" in the FE). On matrx-python-server, compare /etc/aidream/active-slot with the aidream-blue/aidream-green containers and nginx active upstream.`,
-      actions: [{ label: "Open host terminal (matrx-python-server)", action: "open-url", url: "/admin/terminal" }],
+      detail: `${AIDREAM_SANDBOX_CHAT_HEALTH_URL} -> HTTP ${r.status}. Sandbox-attached chat turns use the canonical ECS aidream service; inspect ECS service health and the public ALB target group.`,
+      actions: [],
     };
   } catch (e) {
     return {
       id, label, status: "critical",
-      detail: `${AIDREAM_DEDICATED_HEALTH_URL} unreachable (${e.message}). Every sandbox-attached chat turn is failing. Check nginx plus the active aidream-blue/aidream-green slot on matrx-python-server.`,
-      actions: [{ label: "Open host terminal (matrx-python-server)", action: "open-url", url: "/admin/terminal" }],
+      detail: `${AIDREAM_SANDBOX_CHAT_HEALTH_URL} unreachable (${e.message}). Sandbox-attached chat turns use the canonical ECS aidream service; inspect ECS service health and the public ALB target group.`,
+      actions: [],
     };
   }
 }
@@ -3534,20 +3533,10 @@ async function checkAidreamPipeline() {
     const actions = d.html_url ? [{ label: "View deploy run", action: "open-url", url: d.html_url }] : [];
     if (d.conclusion === "failure") {
       try {
-        const [primarySha, dedicatedSha] = await Promise.all([
-          readAidreamRuntimeVersion(AIDREAM_PRIMARY_HEALTH_URL),
-          readAidreamRuntimeVersion(AIDREAM_DEDICATED_HEALTH_URL),
-        ]);
-        if (primarySha === dedicatedSha) {
-          return {
-            id, label, status: "warning",
-            detail: `Latest aidream deploy automation FAILED (${(d.head_sha || "").slice(0, 7)}, ${d.created_at?.slice(0, 16)}), but both live roles are ready and independently report ${primarySha.slice(0, 7)}. Repair the release owner; runtime is not stale or split.`,
-            actions,
-          };
-        }
+        const primarySha = await readAidreamRuntimeVersion(AIDREAM_PRIMARY_HEALTH_URL);
         return {
-          id, label, status: "critical",
-          detail: `Latest aidream deploy FAILED (${(d.head_sha || "").slice(0, 7)}), and live roles disagree: primary ${primarySha.slice(0, 7)}, dedicated ${dedicatedSha.slice(0, 7)}.`,
+          id, label, status: "warning",
+          detail: `Latest aidream deploy automation FAILED (${(d.head_sha || "").slice(0, 7)}, ${d.created_at?.slice(0, 16)}), but the canonical ECS runtime is ready and reports ${primarySha.slice(0, 7)}. Repair the release owner; runtime is not stale or split.`,
           actions,
         };
       } catch (runtimeError) {
@@ -5354,7 +5343,6 @@ app.post("/api/secrets/restart", authMiddleware, requireSuperadmin, async (req, 
     }
     // Register BEFORE the restart runs — the point is to cover the down
     // window; registering after completion misses it (verified live).
-    if (s.id === "ec2:aidream-app") noteExpectedRestart("aidream-dedicated", s.label);
     if (s.id === "ec2:matrx-files") noteExpectedRestart("matrx-files", s.label);
     if (s.id === "ec2:matrx-seo") noteExpectedRestart("matrx-seo", s.label);
     if (s.id === "ec2:sandbox-orchestrator" || s.id === "infra:orchestrator") noteExpectedRestart("orchestrator-drift", s.label);
