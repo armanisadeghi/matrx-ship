@@ -138,6 +138,13 @@ verify no probe artifact exists. A client-side maintenance page or stopped appli
 is not the database freeze. Do not begin the source freeze until the operator has explicitly announced
 the maintenance window.
 
+The prepared East runner is `matrx-python-server` (`i-0241f4fee60fb02f6`) with the temporary encrypted
+volume mounted at `/mnt/matrx-supabase-migration`. Use the reviewed scripts in this skill's `scripts/`
+directory: `runner-freeze.sh`, `runner-export.sh`, and `runner-restore.sh`. Upload byte-identical copies
+to the runner and verify their hashes before use. The runner's rolled-back schema replay completed in
+30 seconds, versus 37 minutes from the West-coast operator machine; final export and restore therefore
+run there. The runner role may read only the minimal East service secret and migration artifacts.
+
 ## Acceptance gate
 
 Keep all validation pointed explicitly at East. Compare at minimum:
