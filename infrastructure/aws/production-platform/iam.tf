@@ -274,6 +274,16 @@ data "aws_iam_policy_document" "operator" {
   }
 
   statement {
+    sid = "ManageAidreamGithubDeployPolicy"
+    actions = [
+      "iam:DeleteRolePolicy",
+      "iam:GetRolePolicy",
+      "iam:PutRolePolicy",
+    ]
+    resources = ["arn:aws:iam::${var.aws_account_id}:role/matrx-aidream-gha-deploy"]
+  }
+
+  statement {
     sid = "OperateProductionEcs"
     actions = [
       "application-autoscaling:DeleteScalingPolicy",
