@@ -27,7 +27,7 @@ break-glass access. Do not print, copy, or inspect secret values during status w
 ```bash
 aws ecs describe-services \
   --cluster matrx-production \
-  --services admin-dashboard workflow-studio aidream workflow-worker matrx-files matrx-seo \
+  --services admin-dashboard workflow-studio aidream workflow-worker browser-worker matrx-files matrx-seo \
   --query 'services[].{service:serviceName,status:status,desired:desiredCount,running:runningCount,pending:pendingCount,rollout:deployments[0].rolloutState}' \
   --output table
 
@@ -48,7 +48,8 @@ aws logs tail /matrx/production/SERVICE --since 30m --follow
 ```
 
 Valid service names: `admin-dashboard`, `workflow-studio`, `aidream`, `workflow-worker`, `matrx-files`,
-and `matrx-seo`. Start at the first error in time, not the last cascade. ECS Exec audit output is in
+and `matrx-seo`. The `browser-worker` shares `/matrx/production/aidream`; select log streams whose
+name begins with `browser-worker/`. Start at the first error in time, not the last cascade. ECS Exec audit output is in
 `/matrx/production/ecs-exec`; network evidence is in `/matrx/production/vpc-flow`.
 
 ## Tasks, placement, and load-balancer health
@@ -106,7 +107,13 @@ never be committed.
   through the canonical release process or an operator explicitly dispatches the deployment workflow.
   The release script dispatches its immutable version tag into a dedicated production concurrency lane;
   ordinary replica builds cannot cancel it. The workflow updates `workflow-worker` first, then
-  `aidream`, and verifies the exact SHA.
+  `aidream`, and verifies the exact SHA. It does not replace `browser-worker` unless the explicit
+  `deploy_browser_worker=true` input is set.
+- Use `browser_image_only=true` to build and publish an immutable browser-worker image without moving
+  any runtime. Before `deploy_browser_worker=true`, stop admitting new browser runs, checkpoint and
+  stop every active run, and prove the current checkpoint for each profile is verified. The current
+  fixed worker identity cannot overlap old and new tasks; replacing it without that drain loses the
+  live process even though the durable profile remains recoverable.
 - AI Dream builds outside Coolify must pass Docker build args `GIT_SHA=<full SHA>` and
   `BUILD_TIME=<UTC timestamp>`; after deployment, `/health/version` must return that SHA rather than
   `unknown`.
@@ -138,6 +145,32 @@ for an approved copy operation, verify key names and consumers without emitting 
 temporary material immediately. Never use `echo SECRET`, command-line JSON containing values, shell
 history, Terraform variables/state, logs, documentation, or Git. A secret update is incomplete until
 the task is replaced and the consumer passes its live test.
+
+## Persistent Cloud Browser acceptance
+
+The worker is private: do not add a public listener, public IP, or SSH rule. AI Dream reaches
+`matrx-browser-worker.platform.matrx.internal:8002` for signed control and port `8080` for the
+authenticated Selkies proxy. Active profiles mount encrypted EFS at `/profiles`; the AI Dream task
+role, not the worker, owns the exact KMS/S3 checkpoint permissions.
+
+After deployment, prove all of the following:
+
+```bash
+aws ecs describe-services \
+  --cluster matrx-production \
+  --services browser-worker \
+  --query 'services[0].{desired:desiredCount,running:runningCount,pending:pendingCount,rollout:deployments[0].rolloutState,task:taskDefinition}'
+
+aws logs tail /matrx/production/aidream --since 15m --log-stream-name-prefix browser-worker
+
+aws cloudwatch describe-alarms \
+  --alarm-names matrx-production-browser-worker-not-running matrx-production-browser-worker-memory-high
+```
+
+Then use `https://www.aimatrx.com/chat/new` → globe → Cloud Browser and complete create, harmless
+navigate, screenshot, human takeover, stop/checkpoint, and reopen/restore. `stream.aimatrx.com` must
+resolve to the AWS load balancer before takeover acceptance; `turn.aimatrx.com` remains the TURN host.
+Never send a real Vault credential to a third-party site without the user's action-time confirmation.
 
 ## Cutover boundary
 
