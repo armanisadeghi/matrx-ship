@@ -46,7 +46,7 @@ assert_mode() {
 case "${1:-status}" in
   freeze)
     query "$SOURCE_DIRECT_HOST" template1 postgres \
-      "alter database postgres set default_transaction_read_only = on; select pg_terminate_backend(pid) from pg_stat_activity where datname='postgres' and pid <> pg_backend_pid();" >/dev/null
+      "alter database postgres set default_transaction_read_only = on; select pg_terminate_backend(a.pid) from pg_stat_activity a join pg_roles r on r.rolname=a.usename where a.datname='postgres' and a.pid <> pg_backend_pid() and not r.rolsuper;" >/dev/null
     assert_mode on
     if query "$SOURCE_DIRECT_HOST" postgres postgres "create table public.${PROBE_TABLE}(id integer);" >/dev/null 2>&1; then
       echo "Direct write probe unexpectedly succeeded" >&2
@@ -61,7 +61,7 @@ case "${1:-status}" in
     ;;
   unfreeze)
     query "$SOURCE_DIRECT_HOST" template1 postgres \
-      "alter database postgres reset default_transaction_read_only; select pg_terminate_backend(pid) from pg_stat_activity where datname='postgres' and pid <> pg_backend_pid();" >/dev/null
+      "alter database postgres reset default_transaction_read_only; select pg_terminate_backend(a.pid) from pg_stat_activity a join pg_roles r on r.rolname=a.usename where a.datname='postgres' and a.pid <> pg_backend_pid() and not r.rolsuper;" >/dev/null
     assert_mode off
     test "$(query "$SOURCE_DIRECT_HOST" postgres postgres "select count(*) from pg_class where relname='${PROBE_TABLE}';")" = 0
     echo SOURCE_WRITE_FREEZE=released
