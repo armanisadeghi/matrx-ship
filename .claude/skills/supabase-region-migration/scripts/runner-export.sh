@@ -4,7 +4,6 @@ set -euo pipefail
 RUNNER_ROOT="/mnt/matrx-supabase-migration"
 SOURCE_WORKDIR="$RUNNER_ROOT/source-link"
 SOURCE_ENV_FILE="/etc/aidream/app.env"
-SOURCE_DIRECT_HOST="db.txzxabzwovsujtloxrus.supabase.co"
 ARTIFACT_BUCKET="matrx-supabase-migration-artifacts-872515272894"
 KMS_ALIAS="alias/matrx-supabase-migration-artifacts"
 SUPABASE="$RUNNER_ROOT/supabase"
@@ -25,7 +24,12 @@ read_env_value() {
 
 export SUPABASE_DB_PASSWORD
 SUPABASE_DB_PASSWORD=$(read_env_value SUPABASE_MATRIX_PASSWORD)
-export PGHOST="$SOURCE_DIRECT_HOST" PGPORT=5432 PGDATABASE=postgres PGUSER=postgres PGPASSWORD="$SUPABASE_DB_PASSWORD"
+# Use Supabase's session pooler for the long-running dump. The direct endpoint
+# repeatedly closed multi-gigabyte COPY streams; port 5432 is session mode
+# (the application's port 6543 is transaction mode and is not suitable here).
+export PGHOST PGPORT=5432 PGDATABASE=postgres PGUSER PGPASSWORD="$SUPABASE_DB_PASSWORD"
+PGHOST=$(read_env_value SUPABASE_MATRIX_HOST)
+PGUSER=$(read_env_value SUPABASE_MATRIX_USER)
 export PGCONNECT_TIMEOUT=30 PGKEEPALIVES=1 PGKEEPALIVES_IDLE=30 PGKEEPALIVES_INTERVAL=10 PGKEEPALIVES_COUNT=6
 
 source_mode=$(docker run --rm -e PGHOST -e PGPORT -e PGDATABASE -e PGUSER -e PGPASSWORD \
