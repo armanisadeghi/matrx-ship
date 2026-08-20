@@ -97,23 +97,26 @@ resource "aws_security_group" "aidream" {
   description = "AI Dream accepts API traffic only from the platform load balancer."
   vpc_id      = aws_vpc.production.id
 
-  ingress {
-    description     = "API traffic from the load balancer"
-    from_port       = 8000
-    to_port         = 8000
-    protocol        = "tcp"
-    security_groups = [aws_security_group.public_alb.id]
-  }
-
-  egress {
-    description = "Supabase, AI providers, S3, logs, and internal platform dependencies"
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
   tags = { Name = "${local.name_prefix}-aidream" }
+}
+
+# Keep every rule as a first-class resource. Mixing inline rules with
+# aws_vpc_security_group_*_rule resources makes the provider treat a valid
+# separately-managed rule as drift and revoke it during an unrelated apply.
+resource "aws_vpc_security_group_ingress_rule" "aidream_from_public_alb" {
+  security_group_id            = aws_security_group.aidream.id
+  referenced_security_group_id = aws_security_group.public_alb.id
+  description                  = "API traffic from the load balancer"
+  from_port                    = 8000
+  to_port                      = 8000
+  ip_protocol                  = "tcp"
+}
+
+resource "aws_vpc_security_group_egress_rule" "aidream_outbound" {
+  security_group_id = aws_security_group.aidream.id
+  cidr_ipv4         = "0.0.0.0/0"
+  description       = "Supabase, AI providers, S3, logs, and internal platform dependencies"
+  ip_protocol       = "-1"
 }
 
 resource "aws_vpc_security_group_ingress_rule" "aidream_from_internal_alb" {
