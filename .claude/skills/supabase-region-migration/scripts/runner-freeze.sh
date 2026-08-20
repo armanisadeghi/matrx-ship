@@ -59,6 +59,14 @@ case "${1:-status}" in
     test "$(query "$SOURCE_DIRECT_HOST" postgres postgres "select count(*) from pg_class where relname='${PROBE_TABLE}';")" = 0
     echo SOURCE_WRITE_FREEZE=verified
     ;;
+  refresh)
+    # Reassert the database default without terminating the export's
+    # long-running, read-only pooler session.
+    query "$SOURCE_DIRECT_HOST" template1 postgres \
+      "alter database postgres set default_transaction_read_only = on;" >/dev/null
+    assert_mode on
+    echo SOURCE_WRITE_FREEZE=refreshed
+    ;;
   unfreeze)
     query "$SOURCE_DIRECT_HOST" template1 postgres \
       "alter database postgres reset default_transaction_read_only; select pg_terminate_backend(a.pid) from pg_stat_activity a join pg_roles r on r.rolname=a.usename where a.datname='postgres' and a.pid <> pg_backend_pid() and not r.rolsuper;" >/dev/null
@@ -70,7 +78,7 @@ case "${1:-status}" in
     printf 'SOURCE_DIRECT_MODE=%s SOURCE_POOL_MODE=%s\n' "$(mode "$SOURCE_DIRECT_HOST")" "$(mode "$SOURCE_POOL_HOST")"
     ;;
   *)
-    echo "usage: $0 {status|freeze|unfreeze}" >&2
+    echo "usage: $0 {status|freeze|refresh|unfreeze}" >&2
     exit 2
     ;;
 esac
