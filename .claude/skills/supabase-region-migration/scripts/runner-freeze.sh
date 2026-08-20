@@ -62,8 +62,10 @@ case "${1:-status}" in
   refresh)
     # Reassert the database default without terminating the export's
     # long-running, read-only pooler session.
-    query "$SOURCE_DIRECT_HOST" template1 postgres \
-      "alter database postgres set default_transaction_read_only = on;" >/dev/null
+    if [ "$(mode "$SOURCE_DIRECT_HOST")" != on ]; then
+      query "$SOURCE_DIRECT_HOST" template1 postgres \
+        "alter database postgres set default_transaction_read_only = on;" >/dev/null
+    fi
     assert_mode on
     echo SOURCE_WRITE_FREEZE=refreshed
     ;;
