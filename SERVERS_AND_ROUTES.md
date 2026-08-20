@@ -18,7 +18,7 @@ the canonical inventory wins and the mismatch is an incident to repair.
 | **`matrx-main`** | `89.116.187.5` | The residual Coolify plane. Runs the temporary streaming endpoint, scraper, development apps, Directus, and NocoDB. Its former admin and workflow-worker applications are retired and stopped; the duplicate Studio is still running cleanup debt and is not a production route. It is no longer the public AI Dream API origin. |
 | **`/srv` dev host** | `srv504398.hstgr.cloud` · `77.37.62.64` · `*.dev.codematrx.com` | The main box. Runs the control plane, all the per-project apps, the shared DB, and the hosted sandbox tier. **This is what the Server Manager manages.** |
 | **EC2 `matrx-sandbox-host-dev`** | AWS `i-084f757c1e47d4efb` · `54.144.86.132` | The **EC2 sandbox tier** — runs its own sandbox orchestrator (systemd) + the sandboxes it spawns. **Also hosts the microservices**: `matrx-files` and `matrx-seo`, both behind the one `matrx-files-tls` Caddy container on :443 (`https://files.matrxserver.com`, `https://seo.matrxserver.com` — see §EC2 services). |
-| **EC2 `matrx-python-server`** | AWS `i-0241f4fee60fb02f6` · `54.166.106.252` | **Transitional** AI Dream `sandbox_host` replica. It existed to avoid Coolify round trips before the primary API moved to AWS. It must be retired after the sandbox VPC has a verified private path to the existing ECS `aidream` service and the migration rollback assets attached to this host are released. |
+| **Retired EC2 `matrx-python-server`** | AWS `i-0241f4fee60fb02f6` · stopped 2026-08-20 | Retained hardware record only; it runs no production workload. Both sandbox tiers use the private ECS AI Dream endpoint. Release automation and Manager controls cannot revive the former replica. |
 
 > Both EC2 boxes are in AWS account `872515272894`, region `us-east-1`.
 
@@ -80,7 +80,7 @@ Postgres. Routed at `<name>.dev.codematrx.com/admin`.
 |---|---|---|
 | `matrx-ship.dev.codematrx.com` | Matrx Ship | The Ship platform's own instance. |
 | `ai-matrx-admin.dev.codematrx.com` | AI Matrx Admin | |
-| `aidream-current.dev.codematrx.com` | Aidream Current | Version tracking for AI Dream (primary applications run on AWS ECS/Fargate; EC2 carries the sandbox-host replica; Coolify carries only stream/scraper residuals). |
+| `aidream-current.dev.codematrx.com` | Aidream Current | Version tracking for AI Dream (primary applications run on AWS ECS/Fargate; Coolify carries only stream/scraper residuals). |
 | `ai-dream.dev.codematrx.com` | Ai Dream | |
 | `matrx-sandbox.dev.codematrx.com` | Matrx Sandbox | Version tracking for the sandbox project (≠ the orchestrator). |
 | `matrx-dev-tools.dev.codematrx.com` | Matrx Dev Tools | |
@@ -111,7 +111,6 @@ Each one also has a private `db-<name>` Postgres container (no public URL).
 | `server.app.matrxserver.com` | The primary **AI Dream backend** API and OAuth broker. Cloudflare-proxied to the AWS production ALB and two ECS/Fargate tasks; `/health/detailed` must report `role=app_server`. |
 | `db.matrxserver.com` | The canonical Supabase project `brsgrqvjdzwihsvnfqkf` in `us-east-1`. The former West project is rollback-only; its cron jobs must remain disabled. |
 | `scraper.app.matrxserver.com` | The canonical scraper endpoint on Coolify `matrx-main`; valid Let's Encrypt TLS, HTTP→HTTPS redirect, liveness/readiness/version endpoints. `scraper.matrxserver.com` is a stale certificate-less alias and must not be used by consumers. |
-| `sandbox.matrxserver.com` | The AWS-local `sandbox_host` replica for sandbox-attached work. Nginx provides the stable private/public boundary on `matrx-python-server`; `aidream-blue` and `aidream-green` alternate behind it after ready + exact-SHA + role gates. Env is `/etc/aidream/app.env` (Manager store `ec2:aidream-app`). It must never become the public `server.app` origin. |
 | `www.aimatrx.com` | The **identity/OAuth provider** (Supabase-backed). Where you actually sign in. |
 
 ---
