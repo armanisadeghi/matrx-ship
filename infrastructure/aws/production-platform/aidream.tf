@@ -54,6 +54,7 @@ data "aws_iam_policy_document" "aidream_aws_services" {
       "kms:Decrypt",
       "kms:DescribeKey",
       "kms:Encrypt",
+      "kms:GenerateDataKey",
     ]
     resources = [aws_kms_key.browser_profiles.arn]
   }
