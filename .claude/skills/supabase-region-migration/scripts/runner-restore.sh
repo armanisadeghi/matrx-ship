@@ -13,7 +13,7 @@ fi
 out="$RUNNER_ROOT/cutovers/$run_id"
 test -d "$out"
 
-for file in roles.sql schema.sql data.sql data.sql.zst cron-jobs.csv restore-compat.sql pre-data-compat.sql post-data-compat.sql; do
+for file in roles.sql schema.sql data.sql data.sql.zst data-schemas.txt cron-jobs.csv restore-compat.sql pre-data-compat.sql post-data-compat.sql; do
   expected=$(sed -n "s/^${file//./\\.}\.sha256=//p" "$out/manifest.txt")
   actual=$(sha256sum "$out/$file" | awk '{print $1}')
   test -n "$expected"
