@@ -101,6 +101,10 @@ never be committed.
 
 - Build for `linux/amd64`; never copy host `node_modules` into a Docker build.
 - Push a full 40-character Git SHA tag to ECR. Never deploy `latest`.
+- An ordinary `aidream` main-branch push may build/cache an image and refresh the EC2 replica, but it
+  does not own production ECS. Production moves only when the root `pyproject.toml` version advances
+  through the canonical release process or an operator explicitly dispatches the deployment workflow.
+  The release workflow updates `workflow-worker` first, then `aidream`, and verifies the exact SHA.
 - AI Dream builds outside Coolify must pass Docker build args `GIT_SHA=<full SHA>` and
   `BUILD_TIME=<UTC timestamp>`; after deployment, `/health/version` must return that SHA rather than
   `unknown`.
