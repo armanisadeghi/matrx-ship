@@ -123,9 +123,12 @@ resource "aws_s3_bucket_lifecycle_configuration" "access_logs" {
 
 data "aws_iam_policy_document" "access_logs" {
   statement {
-    sid       = "AllowLoadBalancerLogDelivery"
-    actions   = ["s3:PutObject"]
-    resources = ["${aws_s3_bucket.access_logs.arn}/alb/AWSLogs/${var.aws_account_id}/*"]
+    sid     = "AllowLoadBalancerLogDelivery"
+    actions = ["s3:PutObject"]
+    resources = [
+      "${aws_s3_bucket.access_logs.arn}/alb/AWSLogs/${var.aws_account_id}/*",
+      "${aws_s3_bucket.access_logs.arn}/alb-internal-aidream/AWSLogs/${var.aws_account_id}/*",
+    ]
 
     principals {
       type        = "Service"

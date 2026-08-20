@@ -81,14 +81,24 @@ resource "aws_lb_listener" "aidream_internal" {
   }
 }
 
-resource "aws_route53_zone_association" "production_namespace_legacy_vpc" {
-  zone_id = aws_service_discovery_private_dns_namespace.production.hosted_zone
+resource "aws_route53_zone" "internal_services" {
+  name = "internal.matrxserver.com"
+
+  vpc {
+    vpc_id = aws_vpc.production.id
+  }
+
+  tags = { Name = "${local.name_prefix}-internal-services" }
+}
+
+resource "aws_route53_zone_association" "internal_services_legacy_vpc" {
+  zone_id = aws_route53_zone.internal_services.zone_id
   vpc_id  = data.aws_vpc.legacy.id
 }
 
 resource "aws_route53_record" "aidream_internal" {
-  zone_id = aws_service_discovery_private_dns_namespace.production.hosted_zone
-  name    = "aidream.${aws_service_discovery_private_dns_namespace.production.name}"
+  zone_id = aws_route53_zone.internal_services.zone_id
+  name    = "aidream.${aws_route53_zone.internal_services.name}"
   type    = "A"
 
   alias {

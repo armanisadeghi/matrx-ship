@@ -94,7 +94,7 @@ resource "aws_iam_role_policy" "aidream_aws_services" {
 
 resource "aws_security_group" "aidream" {
   name        = "${local.name_prefix}-aidream"
-  description = "AI Dream accepts API traffic only from the public and private platform load balancers."
+  description = "AI Dream accepts API traffic only from the platform load balancer."
   vpc_id      = aws_vpc.production.id
 
   ingress {
@@ -103,14 +103,6 @@ resource "aws_security_group" "aidream" {
     to_port         = 8000
     protocol        = "tcp"
     security_groups = [aws_security_group.public_alb.id]
-  }
-
-  ingress {
-    description     = "Private API traffic from the sandbox-facing load balancer"
-    from_port       = 8000
-    to_port         = 8000
-    protocol        = "tcp"
-    security_groups = [aws_security_group.aidream_internal_alb.id]
   }
 
   egress {
@@ -122,6 +114,15 @@ resource "aws_security_group" "aidream" {
   }
 
   tags = { Name = "${local.name_prefix}-aidream" }
+}
+
+resource "aws_vpc_security_group_ingress_rule" "aidream_from_internal_alb" {
+  security_group_id            = aws_security_group.aidream.id
+  referenced_security_group_id = aws_security_group.aidream_internal_alb.id
+  description                  = "Private API traffic from the sandbox-facing load balancer"
+  from_port                    = 8000
+  to_port                      = 8000
+  ip_protocol                  = "tcp"
 }
 
 resource "aws_lb_target_group" "aidream" {
@@ -260,10 +261,10 @@ resource "aws_ecs_service" "aidream" {
   platform_version       = "LATEST"
   propagate_tags         = "SERVICE"
 
-  # Keep one task serving while replacing the two-task service, but avoid
-  # temporarily doubling database connections during a deployment.
-  deployment_minimum_healthy_percent = 50
-  deployment_maximum_percent         = 101
+  # Keep the full two-task service healthy while replacements start so a
+  # release cannot reduce production capacity during rollout.
+  deployment_minimum_healthy_percent = 100
+  deployment_maximum_percent         = 200
   # Production startup synchronizes the platform catalog before the API is
   # mounted and has been observed taking just over four minutes. Keep the old
   # healthy tasks serving while replacements complete that bounded startup.
