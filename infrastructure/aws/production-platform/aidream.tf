@@ -224,8 +224,10 @@ resource "aws_ecs_service" "aidream" {
   platform_version       = "LATEST"
   propagate_tags         = "SERVICE"
 
-  deployment_minimum_healthy_percent = 100
-  deployment_maximum_percent         = 200
+  # Keep one task serving while replacing the two-task service, but avoid
+  # temporarily doubling database connections during a deployment.
+  deployment_minimum_healthy_percent = 50
+  deployment_maximum_percent         = 101
   # Production startup synchronizes the platform catalog before the API is
   # mounted and has been observed taking just over four minutes. Keep the old
   # healthy tasks serving while replacements complete that bounded startup.

@@ -53,6 +53,12 @@ Verify source is healthy with PITR and destination is healthy. Query the Managem
 projects' disk, compute, Auth, Realtime, network, SSL, and backup settings. Compare secret-bearing
 configuration by key name and configured/not-configured state; do not emit values.
 
+The Management API returns configured Auth provider, captcha, SMS, and SMTP secrets as opaque
+64-character redactions. Those strings are not reusable secrets. Never copy them to East. Recover
+each real value from its authoritative secret store, patch East with the real value, and verify each
+enabled provider reaches the provider's authorization endpoint. Compare every non-secret Auth field
+between projects after the patch. A configured-but-disabled captcha secret does not block cutover.
+
 Before importing, destination disk must have generous room above source database size and destination
 compute must be no smaller than the intended production class. Current baseline: source database is
 31.1 GB on a 40 GB disk and XL compute; destination is provisioned as XL with a 60 GB gp3 disk for the
@@ -190,8 +196,12 @@ rotate unrelated Supabase projects or HTML/sample variables.
    checks.
 4. Copy reviewed project-level Auth/Realtime/SSL/network settings. Rotate all consumers to East URL,
    publishable/secret keys, and database connection values. Never reuse West project API keys.
-5. Update OAuth callback registrations before enabling providers. Enable SMTP/SMS only after their
-   canaries pass.
+   Long-running migration utilities use the session pooler on port `5432`; normal Matrx ORM runtime
+   consumers use the transaction pooler on port `6543`. Do not carry the dump/restore port into ECS,
+   EC2, or Coolify runtime configuration.
+5. Update OAuth callback registrations before enabling providers. Restore provider and SMTP/SMS
+   secrets from their authoritative stores, never from Management API redactions. Require provider
+   redirects plus one end-to-end login canary, and enable SMTP/SMS only after their canaries pass.
 6. Recreate scheduled jobs as inactive, inspect every command, then enable them one at a time after
    the corresponding consumer is live.
 7. Release writes, observe errors/latency/queue depth, and keep West intact and write-protected until
