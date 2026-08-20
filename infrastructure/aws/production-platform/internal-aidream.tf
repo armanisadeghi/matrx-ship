@@ -89,6 +89,10 @@ resource "aws_route53_zone" "internal_services" {
   }
 
   tags = { Name = "${local.name_prefix}-internal-services" }
+
+  # The legacy VPC is managed by the standalone association below. Preserve
+  # both live associations when Terraform refreshes the zone resource itself.
+  lifecycle { ignore_changes = [vpc] }
 }
 
 resource "aws_route53_zone_association" "internal_services_legacy_vpc" {
