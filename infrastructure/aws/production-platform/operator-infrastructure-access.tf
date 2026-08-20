@@ -72,21 +72,22 @@ data "aws_iam_policy_document" "operator_infrastructure_access" {
     actions = [
       "s3:CreateBucket",
       "s3:DeleteBucket",
+      "s3:DeleteBucketOwnershipControls",
       "s3:DeleteBucketPolicy",
+      "s3:GetBucketOwnershipControls",
       "s3:GetBucketPolicy",
       "s3:GetBucketPublicAccessBlock",
       "s3:GetBucketTagging",
       "s3:GetBucketVersioning",
       "s3:GetEncryptionConfiguration",
       "s3:GetLifecycleConfiguration",
-      "s3:GetOwnershipControls",
       "s3:PutBucketPolicy",
+      "s3:PutBucketOwnershipControls",
       "s3:PutBucketPublicAccessBlock",
       "s3:PutBucketTagging",
       "s3:PutBucketVersioning",
       "s3:PutEncryptionConfiguration",
       "s3:PutLifecycleConfiguration",
-      "s3:PutOwnershipControls",
     ]
     resources = ["arn:aws:s3:::matrx-browser-checkpoints-${var.aws_account_id}"]
   }
