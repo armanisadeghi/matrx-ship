@@ -133,7 +133,6 @@ resource "aws_service_discovery_service" "browser_worker" {
     }
   }
 
-  health_check_custom_config {}
 }
 
 resource "aws_ecs_task_definition" "browser_worker" {
