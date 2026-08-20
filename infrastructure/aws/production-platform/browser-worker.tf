@@ -103,9 +103,20 @@ data "aws_iam_policy_document" "browser_worker_profiles" {
   }
 }
 
+resource "aws_iam_role" "browser_worker_task" {
+  name               = "matrx-production-browser-worker-task"
+  path               = "/matrx/platform/"
+  assume_role_policy = data.aws_iam_policy_document.ecs_tasks_assume.json
+}
+
+resource "aws_iam_role_policy_attachment" "browser_worker_exec" {
+  role       = aws_iam_role.browser_worker_task.name
+  policy_arn = aws_iam_policy.ecs_exec_task.arn
+}
+
 resource "aws_iam_role_policy" "browser_worker_profiles" {
   name   = "write-encrypted-browser-profiles"
-  role   = aws_iam_role.task["aidream"].id
+  role   = aws_iam_role.browser_worker_task.id
   policy = data.aws_iam_policy_document.browser_worker_profiles.json
 }
 
@@ -132,7 +143,7 @@ resource "aws_ecs_task_definition" "browser_worker" {
   cpu                      = 2048
   memory                   = 4096
   execution_role_arn       = aws_iam_role.task_execution.arn
-  task_role_arn            = aws_iam_role.task["aidream"].arn
+  task_role_arn            = aws_iam_role.browser_worker_task.arn
 
   runtime_platform {
     operating_system_family = "LINUX"
@@ -155,10 +166,17 @@ resource "aws_ecs_task_definition" "browser_worker" {
     }
   }
 
+  dynamic "volume" {
+    for_each = toset(["worker-tmp", "worker-home", "ssm-lib", "ssm-log"])
+    content { name = volume.value }
+  }
+
   container_definitions = jsonencode([{
-    name      = "browser-worker"
-    image     = "${data.aws_ecr_repository.browser_worker.repository_url}:${var.browser_worker_image_tag}"
-    essential = true
+    name                   = "browser-worker"
+    image                  = "${data.aws_ecr_repository.browser_worker.repository_url}:${var.browser_worker_image_tag}"
+    essential              = true
+    user                   = "1000:1000"
+    readonlyRootFilesystem = true
 
     portMappings = [
       {
@@ -183,11 +201,33 @@ resource "aws_ecs_task_definition" "browser_worker" {
       { name = "DISPLAY", value = ":99" },
     ]
 
-    mountPoints = [{
-      sourceVolume  = "browser-profiles"
-      containerPath = "/profiles"
-      readOnly      = false
-    }]
+    mountPoints = [
+      {
+        sourceVolume  = "browser-profiles"
+        containerPath = "/profiles"
+        readOnly      = false
+      },
+      {
+        sourceVolume  = "worker-tmp"
+        containerPath = "/tmp"
+        readOnly      = false
+      },
+      {
+        sourceVolume  = "worker-home"
+        containerPath = "/home/browser-worker"
+        readOnly      = false
+      },
+      {
+        sourceVolume  = "ssm-lib"
+        containerPath = "/var/lib/amazon/ssm"
+        readOnly      = false
+      },
+      {
+        sourceVolume  = "ssm-log"
+        containerPath = "/var/log/amazon/ssm"
+        readOnly      = false
+      },
+    ]
 
     secrets = [{
       name      = "BROWSER_WORKER_PUBLIC_KEY_PEM"

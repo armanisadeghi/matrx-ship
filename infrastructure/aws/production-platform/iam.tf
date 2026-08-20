@@ -253,7 +253,24 @@ data "aws_iam_policy_document" "operator" {
       "iam:GetRolePolicy",
       "iam:PutRolePolicy",
     ]
-    resources = [aws_iam_role.task["aidream"].arn]
+    resources = [aws_iam_role.browser_worker_task.arn]
+  }
+
+  statement {
+    sid = "ManageDedicatedBrowserWorkerRole"
+    actions = [
+      "iam:AttachRolePolicy",
+      "iam:CreateRole",
+      "iam:DeleteRole",
+      "iam:DetachRolePolicy",
+      "iam:GetRole",
+      "iam:ListAttachedRolePolicies",
+      "iam:ListRolePolicies",
+      "iam:TagRole",
+      "iam:UntagRole",
+      "iam:UpdateAssumeRolePolicy",
+    ]
+    resources = ["arn:aws:iam::${var.aws_account_id}:role/matrx/platform/matrx-production-browser-worker-task"]
   }
 
   statement {
@@ -389,6 +406,7 @@ data "aws_iam_policy_document" "operator" {
     resources = concat(
       [aws_iam_role.task_execution.arn],
       values(aws_iam_role.task)[*].arn,
+      [aws_iam_role.browser_worker_task.arn],
     )
 
     condition {
