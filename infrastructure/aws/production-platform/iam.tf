@@ -105,6 +105,9 @@ data "aws_iam_policy_document" "operator" {
   statement {
     sid = "ReadPlatformState"
     actions = [
+      "acm:Describe*",
+      "acm:Get*",
+      "acm:List*",
       "application-autoscaling:Describe*",
       "autoscaling:Describe*",
       "cloudtrail:Get*",
@@ -122,6 +125,9 @@ data "aws_iam_policy_document" "operator" {
       "elasticloadbalancing:Describe*",
       "iam:Get*",
       "iam:List*",
+      "kms:Describe*",
+      "kms:Get*",
+      "kms:List*",
       "logs:Describe*",
       "logs:FilterLogEvents",
       "logs:GetLogEvents",
@@ -173,6 +179,17 @@ data "aws_iam_policy_document" "operator" {
   }
 
   statement {
+    sid = "ManageDeclaredPlatformMonitoring"
+    actions = [
+      "cloudwatch:DeleteAlarms",
+      "cloudwatch:DeleteDashboards",
+      "cloudwatch:PutDashboard",
+      "cloudwatch:PutMetricAlarm",
+    ]
+    resources = ["*"]
+  }
+
+  statement {
     sid       = "CreateTaggedBrowserProfileKey"
     actions   = ["kms:CreateKey"]
     resources = ["*"]
@@ -213,12 +230,14 @@ data "aws_iam_policy_document" "operator" {
       "s3:DeleteBucketPolicy",
       "s3:GetBucketPolicy",
       "s3:GetBucketPublicAccessBlock",
+      "s3:GetBucketTagging",
       "s3:GetBucketVersioning",
       "s3:GetEncryptionConfiguration",
       "s3:GetLifecycleConfiguration",
       "s3:GetOwnershipControls",
       "s3:PutBucketPolicy",
       "s3:PutBucketPublicAccessBlock",
+      "s3:PutBucketTagging",
       "s3:PutBucketVersioning",
       "s3:PutEncryptionConfiguration",
       "s3:PutLifecycleConfiguration",
