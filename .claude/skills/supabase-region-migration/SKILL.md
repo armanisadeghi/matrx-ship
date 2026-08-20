@@ -183,10 +183,14 @@ preview consumers with East credentials.
 
 Cut over only after the rehearsal has a measured duration and a clean acceptance report:
 
-Before announcing maintenance, prove the staged consumer set is complete: ECS AI Dream and dormant
-workflow worker runtime JSON; the three Vercel projects; the immutable admin-dashboard image; EC2
-Matrx Files and Matrx SEO `east`/`west` env files plus switch script; and the Coolify scraper. Do not
-rotate unrelated Supabase projects or HTML/sample variables.
+Before announcing maintenance, prove the staged consumer set is complete: ECS AI Dream and
+workflow-worker runtime JSON; the three Vercel projects; the immutable admin-dashboard image; the
+EC2 AI Dream `sandbox_host` replica; EC2 Matrx Files and Matrx SEO `east`/`west` env files plus switch
+script; the Coolify scraper, AI Dream development app, scraper development app, and any explicitly
+approved side apps; and every scheduled backup or health job that embeds a project ref or database
+URL. Do not rotate unrelated Supabase projects or HTML/sample variables. The 2026-08-20 audit found
+the replica, SEO service, development apps, and nightly backup were omitted from the original list;
+they are mandatory acceptance items now.
 
 1. Announce and begin the write pause; stop every writer and detach the West custom hostname as
    described above, then prove the source is quiescent.
@@ -204,8 +208,9 @@ rotate unrelated Supabase projects or HTML/sample variables.
    redirects plus one end-to-end login canary, and enable SMTP/SMS only after their canaries pass.
 6. Recreate scheduled jobs as inactive, inspect every command, then enable them one at a time after
    the corresponding consumer is live.
-7. Release writes, observe errors/latency/queue depth, and keep West intact and write-protected until
-   the declared rollback deadline.
+7. Release writes, observe errors/latency/queue depth, disable every West `pg_cron` job, and keep West
+   intact until the declared rollback deadline. If excluded side apps still require West, state that
+   explicitly: West is not a sealed rollback copy until those consumers are retired or migrated.
 
 Rollback means stopping East writers and restoring every consumer to West; never attempt to merge
 two independently writable projects.
