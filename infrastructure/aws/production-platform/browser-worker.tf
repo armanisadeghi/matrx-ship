@@ -16,6 +16,14 @@ resource "aws_security_group" "browser_worker" {
   }
 
   ingress {
+    description     = "Scheduled lease maintenance from the workflow worker"
+    from_port       = 8002
+    to_port         = 8002
+    protocol        = "tcp"
+    security_groups = [aws_security_group.workflow_worker.id]
+  }
+
+  ingress {
     description     = "Authenticated Selkies stream proxy from AI Dream"
     from_port       = 8080
     to_port         = 8080
