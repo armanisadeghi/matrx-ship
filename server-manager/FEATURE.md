@@ -107,6 +107,16 @@ available on 2026-08-11, when the aidream image build failed every 2 minutes
 for 20 h (the build deleted tracked files from the source tree it then
 certified) and the dashboard could not name it.
 
+## Destructive-op and repair guardrails
+
+- `shell_exec` refuses `docker rmi` / `docker ... prune -a` targeting
+  `matrx-sandbox:*` or `matrx-orchestrator` images unless
+  `MATRX_DESTRUCTIVE_OPS=1` is set in the Manager env (reverse-tag protection;
+  see the guard near the top of `src/index.js`).
+- Repairing the orchestrator image must use
+  `POST /api/orchestrator/build/stream` — never the sandbox-template rebuild
+  chain, which builds `matrx-sandbox:*` variants, not the orchestrator.
+
 ## Operator feedback
 
 Long-running buttons keep their action visible: applying uses a spinner, blue

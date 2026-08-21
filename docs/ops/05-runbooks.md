@@ -271,3 +271,22 @@ docker network connect proxy {container-name}
 # Restart Traefik to pick up routing changes
 docker restart traefik
 ```
+
+---
+
+## Runbook: GITHUB_PAT Expiry (Simultaneous Fleet-Check 401s)
+
+### Symptoms
+Several Manager fleet checks that call the GitHub API (deploys /
+aidream-pipeline / hosted-deploy) go `unknown`/`warning` **at the same time**,
+with 401s in their detail. That simultaneous pattern IS the diagnosis — the
+`GITHUB_PAT` in the Manager env has expired (first seen 2026-07-09, when a PAT
+expired 2 days after creation).
+
+### Resolution
+1. Create a **no-expiry** fine-grained PAT that can read
+   `armanisadeghi/matrx-sandbox` and `AI-Matrix-Engine/aidream`.
+2. Replace `GITHUB_PAT` via the Manager admin **Secrets** page (Manager store).
+3. Recreate the Manager so the env lands — push-to-main rolls it, or use the
+   Deploy server's `/manager` "Update + Restart" (see
+   [04-environment-variables.md](04-environment-variables.md#how-manager-env-changes-take-effect)).

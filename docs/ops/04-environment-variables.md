@@ -21,6 +21,16 @@
 |----------|-------------|
 | `MCP_BEARER_TOKEN` | `MANAGER_BEARER_TOKEN` |
 
+### How Manager env changes take effect
+
+The Manager's `env_file` is only re-read on container **recreate** — a restart is
+not enough, and the Manager's own Secrets store deliberately has **no Apply
+button** (a control plane must not recreate itself mid-request). The apply
+mechanism is the Deploy server's `/manager` page: **"Update + Restart"** pulls
+the latest CI image from GHCR (best-effort) and force-recreates the Manager,
+keeping the previous image as `matrx-ship-manager:rollback`. Agents: use that
+button instead of hand-recreating the container.
+
 ---
 
 ## Deploy Server (`/srv/apps/deploy/.env`)
