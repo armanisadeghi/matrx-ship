@@ -220,6 +220,8 @@ resource "aws_ecs_task_definition" "aidream" {
       { name = "PORT", value = "8000" },
       { name = "MATRX_ROLE", value = "app_server" },
       { name = "MATRX_STAGE", value = "production" },
+      { name = "MATRX_BROWSER_CHECKPOINT_BUCKET", value = aws_s3_bucket.browser_checkpoints.id },
+      { name = "MATRX_BROWSER_PROFILE_KMS_KEY_ID", value = aws_kms_key.browser_profiles.arn },
     ]
 
     secrets = [{
