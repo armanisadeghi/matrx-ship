@@ -17,8 +17,8 @@
  *   unknown → leave untouched (no data ≠ recovered).
  *
  * Env: MATRX_OPS_SUPABASE_URL / MATRX_OPS_SUPABASE_KEY (service-role key for
- * the Matrx Main project — the one holding ops_issue_class). Falls back to
- * SUPABASE_URL / SUPABASE_SERVICE_KEY. Unset → the bridge is a silent no-op.
+ * the one production project holding ops_issue_class). Generic-project
+ * credential aliases are forbidden.
  *
  * ops_issue_event.organization_id is NOT NULL with no default; the Manager
  * has no org concept, so we borrow the org id from the most recent existing
@@ -26,21 +26,39 @@
  * only) until one exists.
  */
 
-const OPS_URL = process.env.MATRX_OPS_SUPABASE_URL || process.env.SUPABASE_URL;
-const OPS_KEY = process.env.MATRX_OPS_SUPABASE_KEY || process.env.SUPABASE_SERVICE_KEY;
+export class OpsSupabaseUnconfiguredError extends Error {}
+
+export function resolveOpsSupabaseOrRaise() {
+  /** The old resolver substituted generic SUPABASE_* credentials. A different
+   * project is not an ops replica: writes could succeed in the wrong database.
+   * Configure both dedicated values or disable fleet sync honestly. */
+  const url = process.env.MATRX_OPS_SUPABASE_URL?.trim();
+  const key = process.env.MATRX_OPS_SUPABASE_KEY?.trim();
+  if (!url || !key) {
+    throw new OpsSupabaseUnconfiguredError(
+      "Fleet ops-triage sync was requested, but the dedicated ops database is missing " +
+      "MATRX_OPS_SUPABASE_URL and/or MATRX_OPS_SUPABASE_KEY. Set both to the one " +
+      "production Supabase project that owns ops_issue_class, or set " +
+      "MATRX_FLEET_OPS_SYNC_SECONDS=0 to disable the feature honestly; generic " +
+      "SUPABASE_URL/SUPABASE_SERVICE_KEY substitution is refused."
+    );
+  }
+  return { url: url.replace(/\/$/, ""), key };
+}
 
 export function opsConfigured() {
-  return !!(OPS_URL && OPS_KEY);
+  return !!(process.env.MATRX_OPS_SUPABASE_URL?.trim() && process.env.MATRX_OPS_SUPABASE_KEY?.trim());
 }
 
 async function opsRequest(path, opts = {}) {
-  if (!opsConfigured()) return null;
+  // 🚨 Do not restore generic SUPABASE_* fallback; this owns project identity.
+  const { url, key } = resolveOpsSupabaseOrRaise();
   try {
-    const response = await fetch(`${OPS_URL}/rest/v1/${path}`, {
+    const response = await fetch(`${url}/rest/v1/${path}`, {
       ...opts,
       headers: {
-        apikey: OPS_KEY,
-        Authorization: `Bearer ${OPS_KEY}`,
+        apikey: key,
+        Authorization: `Bearer ${key}`,
         "Content-Type": "application/json",
         Prefer: opts.prefer || "return=representation",
         ...opts.headers,
@@ -145,7 +163,7 @@ async function resolveIssue(check) {
  * Mirror one fleet-health snapshot into ops-triage. Never throws.
  */
 export async function syncFleetIssuesToOps(checks) {
-  if (!opsConfigured()) return { skipped: "ops supabase not configured (set MATRX_OPS_SUPABASE_URL/_KEY)" };
+  resolveOpsSupabaseOrRaise();
   let reported = 0, resolved = 0;
   for (const check of checks || []) {
     try {

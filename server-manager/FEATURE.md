@@ -119,6 +119,12 @@ certified) and the dashboard could not name it.
 
 ## Operator feedback
 
+The fleet ops bridge uses only `MATRX_OPS_SUPABASE_URL` plus
+`MATRX_OPS_SUPABASE_KEY`. **Generic `SUPABASE_*` credentials are never a
+fallback:** another project is not an equivalent ops database. Configure both
+dedicated values, or set `MATRX_FLEET_OPS_SYNC_SECONDS=0` to disable the bridge
+honestly.
+
 Long-running buttons keep their action visible: applying uses a spinner, blue
 working treatment, and `Applying — waiting for health…`. A genuinely
 unavailable action is outlined, disabled, and labeled `Apply unavailable`.
@@ -133,3 +139,7 @@ For changes to this surface:
 4. Apply a clearly named throwaway env key, confirm the container start time
    changes and edge health stays 200, remove the key, Apply again, and confirm
    health and runtime version.
+
+## Change log
+
+- 2026-08-21 — Fleet ops sync refuses generic Supabase project substitution.
