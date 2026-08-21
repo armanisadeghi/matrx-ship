@@ -108,11 +108,14 @@ bootstrap value; the bootstrap expands it into the application process environme
 wrapper value before executing the image's canonical entrypoint. Terraform never reads or stores the
 secret payload.
 
-## Dormant workflow worker
+## Production workflow worker
 
-The workflow worker task definition and ECS service exist with desired count zero. This is
-intentional: its database claims and cron watcher are designed for multiple replicas with atomic
-`FOR UPDATE SKIP LOCKED` claims and fenced leases, but starting the AWS copy while Coolify is live
-would still make AWS an active production consumer. A controlled canary requires its own migration
-gate. The dormant task already has the same IAM-based S3/KMS access and protected runtime-secret
-injection as AI Dream, so no static AWS key or SSH setup is needed when that gate opens.
+The workflow worker is the single production scheduler/queue consumer in AWS. Its database claims
+and cron watcher are safe across replicas through atomic `FOR UPDATE SKIP LOCKED` claims and fenced
+leases; the operator-owned desired count is currently one. It has the same IAM-based S3/KMS access
+and protected runtime-secret injection as AI Dream, so no static AWS key or SSH setup is needed.
+
+Persistent Cloud Browser lease maintenance runs here. The browser-worker security group admits its
+signed control port (`8002`) from exactly the AI Dream API and workflow-worker security groups; the
+interactive stream port (`8080`) remains API-only. This distinction is load-bearing: browser actions
+originate in AI Dream, while idle lease renewal originates in the workflow worker.
