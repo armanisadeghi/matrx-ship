@@ -1,4 +1,5 @@
 ---
+archived: "2026-08-20 — superseded: the ticket system this plan proposed is built and shipped (schema, service layer, REST API, 10 MCP tools, admin pipeline UI, public portal, published @matrx/ticket-widget — see TICKET_SYSTEM_DOCS.md and MASTER_PLAN.md §2). The `status: pending` markers on every phase below were never updated after shipping — do not trust them as current state; they are a known discrepancy, not evidence the work is unstarted."
 name: Ticket System for Matrx Ship (v2 — Revised)
 overview: Build a standalone, multi-tenant ticketing system into matrx-ship that covers bugs, features, tasks, and enhancements — with admin management UI, user-facing portal, agent MCP/API access, and a distributable React SDK for embedding into any project.
 revision_notes: >

@@ -1,3 +1,6 @@
+> ARCHIVED 2026-08-20 — completed task, kept for record. See `server-manager/FEATURE.md` and
+> `SERVERS_AND_ROUTES.md` §EC2-hosted services for the current, live MICROSERVICES registry.
+
 # TASK: manage the matrx-files microservice from the Server Manager dashboard
 
 > **STATUS 2026-07-21 — DONE, and generalised.** §4's "add matrx-files to whatever

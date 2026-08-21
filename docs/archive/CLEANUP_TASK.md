@@ -1,3 +1,8 @@
+> ARCHIVED 2026-08-20 — this is Arman's original brain-dump/requirements doc. Its content
+> (server-role hierarchy, naming, control-plane tasks) was carried forward into
+> [NAMING.md](../../NAMING.md), [MASTER_PLAN.md](../../MASTER_PLAN.md), and
+> [CONTROL_PLANE_PLAN.md](../../CONTROL_PLANE_PLAN.md), which are current. Kept for record only.
+
 TO make sure we understand this, it's critical we know what role each server plays.
 
 Traffic is handling proxies, etc. It's not our package so there isn't much we can do about it.
