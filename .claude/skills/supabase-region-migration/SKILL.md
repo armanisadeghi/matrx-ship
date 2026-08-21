@@ -5,6 +5,16 @@ description: Safely inspect, rehearse, verify, and cut over the AI Matrx Supabas
 
 # Supabase region migration
 
+> 🚨 **THE CUTOVER IS DONE. Do not re-run any script in this skill.**
+> `db.matrxserver.com` resolves to the DESTINATION, `brsgrqvjdzwihsvnfqkf`
+> (verified 2026-08-20 from the gateway's `sb-project-ref` header), and that is
+> the live platform database. The SOURCE `txzxabzwovsujtloxrus` named below is
+> the RETIRED project — it is still `ACTIVE_HEALTHY` and still fully writable,
+> so a re-run of `runner-freeze.sh` or `runner-export.sh` would act on a live
+> database for no reason. The refs below are deliberately NOT rewritten: they
+> are the historical record of which project moved where. This skill is a
+> post-mortem and a rollback reference, not a runbook to execute.
+
 Treat this as a production-data migration even during rehearsal. Read
 `../common-docs/systems/production-infrastructure/FEATURE.md` from the workspace root and use the
 Supabase skill before acting.
