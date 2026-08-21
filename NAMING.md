@@ -1,6 +1,6 @@
 # Matrx Naming — the canonical taxonomy
 
-**Last updated:** 2026-05-25 · **Status:** canonical reference. When a term is ambiguous, this doc wins. UI labels, docs, and new code should use these names.
+**Last updated:** 2026-08-20 · **Status:** LOCAL glossary for Ship/Sandbox infrastructure terms. The platform lexicon (`common-docs/systems/vocabulary/FEATURE.md`) and the Feature Registry (`common-docs/policies/feature-registry.md`) OUTRANK this doc on any conflict — demoted from 'canonical' 2026-08-20 per the confident-title rule (only STATE/POLICY/VISION may claim authority).
 
 ## Why this exists
 
