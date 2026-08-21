@@ -4,7 +4,7 @@ A plain map of every machine, every public URL, and what each one is. Last
 verified 2026-08-20 from live health, Cloudflare DNS, AWS, Coolify, and repository configuration.
 
 The canonical cross-platform ownership table is
-[`common-docs/systems/production-infrastructure/FEATURE.md`](../common-docs/systems/production-infrastructure/FEATURE.md#live-production-inventory).
+[`common-docs/systems/infrastructure/production-infrastructure/FEATURE.md`](../common-docs/systems/infrastructure/production-infrastructure/FEATURE.md#live-production-inventory).
 This file adds Ship/control-plane machine detail; if a route here appears to disagree with that table,
 the canonical inventory wins and the mismatch is an incident to repair.
 

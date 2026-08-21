@@ -2,7 +2,7 @@
 
 This standalone Terraform root enables the AI Matrx MCP Factory to create managed AWS App Runner
 services without modifying the main ECS production stack. The canonical contract is
-`common-docs/systems/mcp-hosting/FEATURE.md`.
+`common-docs/systems/infrastructure/mcp-hosting/FEATURE.md`.
 
 It creates:
 

@@ -16,7 +16,7 @@ description: Safely inspect, rehearse, verify, and cut over the AI Matrx Supabas
 > post-mortem and a rollback reference, not a runbook to execute.
 
 Treat this as a production-data migration even during rehearsal. Read
-`../common-docs/systems/production-infrastructure/FEATURE.md` from the workspace root and use the
+`../common-docs/systems/infrastructure/production-infrastructure/FEATURE.md` from the workspace root and use the
 Supabase skill before acting.
 
 ## Fixed identity

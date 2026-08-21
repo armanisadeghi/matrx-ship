@@ -20,8 +20,8 @@ scripts that built the server in the first place.
 |---|---|
 | The big picture — where the platform is going | [MASTER_PLAN.md](MASTER_PLAN.md) |
 | Total control plane + real-infra agent access (active build) | [CONTROL_PLANE_PLAN.md](CONTROL_PLANE_PLAN.md) |
-| AWS production topology + live migration ledger | [common-docs production infrastructure](../common-docs/systems/production-infrastructure/FEATURE.md) |
-| Generated customer-MCP hosting | [common-docs mcp-hosting](../common-docs/systems/mcp-hosting/FEATURE.md) |
+| AWS production topology + live migration ledger | [common-docs production infrastructure](../common-docs/systems/infrastructure/production-infrastructure/FEATURE.md) |
+| Generated customer-MCP hosting | [common-docs mcp-hosting](../common-docs/systems/infrastructure/mcp-hosting/FEATURE.md) |
 | Agent shell/file access to hosts (HTTP API) | [AGENT_GATEWAY_API.md](AGENT_GATEWAY_API.md) |
 | What a term means (instance / sandbox / orchestrator / deployment) | [NAMING.md](NAMING.md) — when a word is ambiguous, it wins |
 | What's moving into the UI next (read before adding any ops command) | [UI_REFACTOR_PLAN.md](UI_REFACTOR_PLAN.md) — its top status block, not the phase bodies, is current |

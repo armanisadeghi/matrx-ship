@@ -6,7 +6,7 @@ description: Operate, inspect, diagnose, and safely deploy the AI Matrx ECS/Farg
 # AWS production operations
 
 The source of truth is `infrastructure/aws/production-platform`. The canonical topology and migration
-gates are `../common-docs/systems/production-infrastructure/FEATURE.md` from the workspace root.
+gates are `../common-docs/systems/infrastructure/production-infrastructure/FEATURE.md` from the workspace root.
 
 ## Identity and safety preflight
 

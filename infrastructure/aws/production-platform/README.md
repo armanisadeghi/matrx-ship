@@ -10,7 +10,7 @@ VPC flow logs, a seven-year multi-region CloudTrail archive, private service dis
 repositories, service-specific task roles, runtime-secret containers, and a routine operator role.
 
 The full cross-system topology and stage ledger live in
-`common-docs/systems/production-infrastructure/FEATURE.md`. Browser-free operations use the
+`common-docs/systems/infrastructure/production-infrastructure/FEATURE.md`. Browser-free operations use the
 `aws-production-operations` skill in this repository.
 
 Terraform state is encrypted, versioned, and lock-protected at:
