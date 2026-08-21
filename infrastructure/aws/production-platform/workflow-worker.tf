@@ -93,8 +93,8 @@ resource "aws_ecs_service" "workflow_worker" {
 
   # The worker may stop briefly during replacement. This prevents an
   # overlapping task from consuming an extra database connection slot.
-  deployment_minimum_healthy_percent = 0
-  deployment_maximum_percent         = 101
+  deployment_minimum_healthy_percent = 100
+  deployment_maximum_percent         = 200
 
   deployment_circuit_breaker {
     enable   = true
