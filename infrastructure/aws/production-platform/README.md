@@ -1,17 +1,17 @@
 # Matrx production platform on AWS
 
-This Terraform root owns the new latency-sensitive application platform in AWS account
-`872515272894`, region `us-east-1`. It is additive during migration: applying it does not change
-Coolify DNS, Vercel, Supabase, the scraper, or either existing EC2 workload.
+This Terraform root owns the production application platform in AWS account `872515272894`,
+region `us-east-1`. AI Dream, the workflow worker, the Admin Dashboard, Workflow Studio, and the
+persistent browser worker run here. Coolify retains only the explicitly declared residual plane.
 
 The foundation provides two-AZ private Fargate networking, redundant NAT gateways, private
 connectivity to the existing sandbox VPC, ECS Container Insights, application and ECS Exec logs,
 VPC flow logs, a seven-year multi-region CloudTrail archive, private service discovery, ECR
 repositories, service-specific task roles, runtime-secret containers, and a routine operator role.
 
-The full cross-system topology and stage ledger live in
-`common-docs/systems/infrastructure/production-infrastructure/FEATURE.md`. Browser-free operations use the
-`aws-production-operations` skill in this repository.
+Cross-repo system-of-record: /Users/armanisadeghi/code/common-docs/systems/infrastructure/production-infrastructure/FEATURE.md — read it before touching this feature in ANY repo.
+
+Browser-free operations use the `aws-production-operations` skill in this repository.
 
 Terraform state is encrypted, versioned, and lock-protected at:
 
@@ -50,26 +50,24 @@ The account and region checks deliberately refuse a plan against any other targe
 
 ## Production boundary
 
-This root must not create or move production DNS until the parallel service passes its service
-canary, multi-task failover test, rolling-deployment test, and rollback rehearsal. The scraper is
-deliberately outside this stack. Supabase migration has its own rehearsal and cutover gate.
+Production DNS already routes the declared public services to this platform. Future topology
+changes still require a service canary, multi-task failover test, rolling-deployment test, rollback
+rehearsal, and a same-change update to the cross-repo system of record. The scraper remains
+deliberately outside this stack.
 
 The AWS-managed wildcard certificate for `*.app.matrxserver.com` is DNS-validated and issued. The
 load balancer accepts TLS 1.2/1.3 on port 443. The permanent ACM validation CNAME must remain in the
-authoritative Cloudflare zone so certificate renewal stays automatic. Production service records
-stay unchanged until the separate cutover step.
+authoritative Cloudflare zone so certificate renewal stays automatic.
 
-## Parallel static-service preview
+## Production static applications
 
 The admin dashboard and workflow studio run as two Fargate tasks each across separate availability
 zones. The public application load balancer retains access logs for 180 days, removes unhealthy
 tasks from service, and allows ECS to replace tasks without dropping below the existing healthy
 count. CPU and memory target tracking can grow each service from two to four tasks.
 
-No production hostname points at this load balancer. The DNS-only canaries
-`admin-aws.app.matrxserver.com`, `workflows-aws.app.matrxserver.com`, and
-`server-aws.app.matrxserver.com` provide end-to-end HTTPS testing without moving production traffic.
-The direct HTTP preview remains available for low-level routing checks:
+`admin.app.matrxserver.com`, `studio.app.matrxserver.com`, and `workflows.aimatrx.com` route through
+the public load balancer. The direct HTTP preview remains available for low-level routing checks:
 
 ```bash
 terraform output -raw preview_load_balancer_dns_name
@@ -79,22 +77,24 @@ curl --fail --show-error \
   "http://$(terraform output -raw preview_load_balancer_dns_name)/"
 ```
 
-The static images are pinned to a full Git SHA. Changing `static_web_image_tag` creates a new task
-definition and a circuit-breaker-protected rolling deployment; mutable `latest` tags are forbidden.
+The aidream GitHub release workflow builds separate Admin Dashboard and Workflow Studio images,
+tags each with the full release SHA, registers new task definitions, and waits for circuit-breaker-
+protected rolling deployments to reach the exact completed state. Terraform owns service shape and
+ignores the release-owned task-definition pointer.
 
-## AI Dream preview
+## Production AI Dream API
 
 AI Dream runs from the exact immutable SHA selected by `aidream_image_tag`, with two 2-vCPU/4-GB
 tasks across separate availability zones and autoscaling bounds of two to eight tasks. Its target
 group requires `/health/ready`, waits for real database readiness, and drains long requests for two
-minutes. No production DNS points at the preview rule.
+minutes. `server.app.matrxserver.com` is the production entry point.
 
 On 2026-08-19, SHA `76d383772195c378c3290fc7427eaa41ffeac4dc` completed a protected rolling
 deployment to task-definition revision 6. Both availability-zone tasks were healthy on image digest
 `sha256:906b47758b04015d2c58832bdb84bfb44dd3d30bfbf00851dd0f258e8956f1ea`; 20/20
 load-balanced version checks returned that SHA, detailed health reported database/tools/environment
 OK, both AI Dream alarms were OK, and a post-deployment Terraform plan reported no drift. Coolify
-remained the public production target throughout.
+remained the public production target throughout that historical migration rehearsal.
 
 ```bash
 curl --fail --show-error \
