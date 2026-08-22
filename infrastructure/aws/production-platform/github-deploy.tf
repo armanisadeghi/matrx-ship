@@ -25,6 +25,8 @@ data "aws_iam_policy_document" "aidream_github_deploy" {
     resources = [
       data.aws_ecr_repository.aidream.arn,
       data.aws_ecr_repository.browser_worker.arn,
+      aws_ecr_repository.service["matrx/admin-dashboard"].arn,
+      aws_ecr_repository.service["matrx/workflow-studio"].arn,
     ]
   }
 
@@ -55,7 +57,9 @@ data "aws_iam_policy_document" "aidream_github_deploy" {
     ]
     resources = [
       "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:service/${aws_ecs_cluster.production.name}/aidream",
+      "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:service/${aws_ecs_cluster.production.name}/admin-dashboard",
       "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:service/${aws_ecs_cluster.production.name}/browser-worker",
+      "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:service/${aws_ecs_cluster.production.name}/workflow-studio",
       "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:service/${aws_ecs_cluster.production.name}/workflow-worker",
     ]
   }
@@ -66,7 +70,9 @@ data "aws_iam_policy_document" "aidream_github_deploy" {
     resources = [
       "arn:aws:iam::${var.aws_account_id}:role/matrx/platform/matrx-production-task-execution",
       "arn:aws:iam::${var.aws_account_id}:role/matrx/platform/matrx-production-aidream-task",
+      "arn:aws:iam::${var.aws_account_id}:role/matrx/platform/matrx-production-admin-dashboard-task",
       "arn:aws:iam::${var.aws_account_id}:role/matrx/platform/matrx-production-browser-worker-task",
+      "arn:aws:iam::${var.aws_account_id}:role/matrx/platform/matrx-production-workflow-studio-task",
       "arn:aws:iam::${var.aws_account_id}:role/matrx/platform/matrx-production-workflow-worker-task",
     ]
 
