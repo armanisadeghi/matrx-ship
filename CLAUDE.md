@@ -106,3 +106,6 @@ used by both admin UIs) and [packages/ticket-widget/](packages/ticket-widget/)
 - **We don't do legacy** — a replaced system is migrated, repointed, and deleted;
   never frozen, never run beside its replacement, never a keep-or-kill question.
   [no-legacy](../common-docs/policies/no-legacy.md)
+- **Every org-scoped write carries an explicit `organization_id`.** Never borrow a recent,
+  personal, active, or system org when context is missing. Emergency work order:
+  `/Users/armanisadeghi/code/common-docs/projects/no-db-assigned-org/PLAN.md`.
