@@ -17,16 +17,15 @@
  *   unknown → leave untouched (no data ≠ recovered).
  *
  * Env: MATRX_OPS_SUPABASE_URL / MATRX_OPS_SUPABASE_KEY (service-role key for
- * the one production project holding ops_issue_class). Generic-project
- * credential aliases are forbidden.
- *
- * ops_issue_event.organization_id is NOT NULL with no default; the Manager
- * has no org concept, so we borrow the org id from the most recent existing
- * ops event (the system org aidream writes with) and skip events (classes
- * only) until one exists.
+ * the one production project holding ops_issue_class) plus the explicit owner
+ * MATRX_FLEET_OPS_ORGANIZATION_ID for every fleet event. Generic-project
+ * credential aliases and inferred organization identities are forbidden.
  */
 
 export class OpsSupabaseUnconfiguredError extends Error {}
+export class FleetOpsOrganizationUnconfiguredError extends Error {}
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export function resolveOpsSupabaseOrRaise() {
   /** The old resolver substituted generic SUPABASE_* credentials. A different
@@ -46,8 +45,28 @@ export function resolveOpsSupabaseOrRaise() {
   return { url: url.replace(/\/$/, ""), key };
 }
 
+export function resolveFleetOpsOrganizationIdOrRaise() {
+  const organizationId = process.env.MATRX_FLEET_OPS_ORGANIZATION_ID?.trim();
+  if (!organizationId || !UUID_PATTERN.test(organizationId)) {
+    throw new FleetOpsOrganizationUnconfiguredError(
+      "Fleet ops-triage sync requires MATRX_FLEET_OPS_ORGANIZATION_ID to be an explicit " +
+      "organization UUID owned by this registered fleet operation. The Manager refuses to " +
+      "borrow a recent, personal, active, or system organization. Configure the value through " +
+      "the Manager deployment configuration, or set MATRX_FLEET_OPS_SYNC_SECONDS=0 to disable " +
+      "the feature honestly."
+    );
+  }
+  return organizationId;
+}
+
 export function opsConfigured() {
-  return !!(process.env.MATRX_OPS_SUPABASE_URL?.trim() && process.env.MATRX_OPS_SUPABASE_KEY?.trim());
+  const organizationId = process.env.MATRX_FLEET_OPS_ORGANIZATION_ID?.trim();
+  return !!(
+    process.env.MATRX_OPS_SUPABASE_URL?.trim() &&
+    process.env.MATRX_OPS_SUPABASE_KEY?.trim() &&
+    organizationId &&
+    UUID_PATTERN.test(organizationId)
+  );
 }
 
 async function opsRequest(path, opts = {}) {
@@ -77,18 +96,9 @@ async function opsRequest(path, opts = {}) {
   }
 }
 
-let _cachedOrgId; // undefined = not looked up yet; null = none available
-
-async function defaultOrgId() {
-  if (_cachedOrgId !== undefined) return _cachedOrgId;
-  const rows = await opsRequest("ops_issue_event?select=organization_id&order=created_at.desc&limit=1");
-  _cachedOrgId = rows && rows[0] ? rows[0].organization_id : null;
-  return _cachedOrgId;
-}
-
 const SEVERITY = { critical: "critical", warning: "medium" };
 
-async function reportIssue(check) {
+async function reportIssue(check, organizationId) {
   const key = `fleet:${check.id}`;
   const now = new Date().toISOString();
   const severity = SEVERITY[check.status] || "medium";
@@ -124,23 +134,20 @@ async function reportIssue(check) {
   }
 
   if (cls && transitioned) {
-    const orgId = await defaultOrgId();
-    if (orgId) {
-      await opsRequest("ops_issue_event", {
-        method: "POST",
-        prefer: "return=minimal",
-        body: JSON.stringify({
-          issue_class_id: cls.id,
-          organization_id: orgId,
-          error_type: `fleet_${check.status}`,
-          occurred_at: now,
-          detail: { check: check.id, label: check.label, status: check.status, detail: check.detail, source: "matrx-manager" },
-          is_retryable: false,
-          was_recovered: false,
-          retry_count: 0,
-        }),
-      });
-    }
+    await opsRequest("ops_issue_event", {
+      method: "POST",
+      prefer: "return=minimal",
+      body: JSON.stringify({
+        issue_class_id: cls.id,
+        organization_id: organizationId,
+        error_type: `fleet_${check.status}`,
+        occurred_at: now,
+        detail: { check: check.id, label: check.label, status: check.status, detail: check.detail, source: "matrx-manager" },
+        is_retryable: false,
+        was_recovered: false,
+        retry_count: 0,
+      }),
+    });
   }
 }
 
@@ -164,11 +171,12 @@ async function resolveIssue(check) {
  */
 export async function syncFleetIssuesToOps(checks) {
   resolveOpsSupabaseOrRaise();
+  const organizationId = resolveFleetOpsOrganizationIdOrRaise();
   let reported = 0, resolved = 0;
   for (const check of checks || []) {
     try {
       if (check.status === "critical" || check.status === "warning") {
-        await reportIssue(check); reported++;
+        await reportIssue(check, organizationId); reported++;
       } else if (check.status === "ok") {
         await resolveIssue(check); resolved++;
       } // unknown → leave as-is: no data is not the same as recovered

@@ -119,11 +119,14 @@ certified) and the dashboard could not name it.
 
 ## Operator feedback
 
-The fleet ops bridge uses only `MATRX_OPS_SUPABASE_URL` plus
-`MATRX_OPS_SUPABASE_KEY`. **Generic `SUPABASE_*` credentials are never a
-fallback:** another project is not an equivalent ops database. Configure both
-dedicated values, or set `MATRX_FLEET_OPS_SYNC_SECONDS=0` to disable the bridge
-honestly.
+The fleet ops bridge uses only `MATRX_OPS_SUPABASE_URL`,
+`MATRX_OPS_SUPABASE_KEY`, and the registered operation owner
+`MATRX_FLEET_OPS_ORGANIZATION_ID`. **Generic `SUPABASE_*` credentials and
+inferred organization identities are never fallbacks:** another project is not
+an equivalent ops database, and a recent/personal/system organization is not
+the initiating operation. Configure all three dedicated values, or set
+`MATRX_FLEET_OPS_SYNC_SECONDS=0` to disable the bridge honestly. Missing or
+invalid organization configuration fails before any ops database request.
 
 Long-running buttons keep their action visible: applying uses a spinner, blue
 working treatment, and `Applying — waiting for health…`. A genuinely
@@ -142,4 +145,5 @@ For changes to this surface:
 
 ## Change log
 
+- 2026-08-23 — Fleet ops events require the registered operation's explicit organization; removed recent-event organization borrowing.
 - 2026-08-21 — Fleet ops sync refuses generic Supabase project substitution.
