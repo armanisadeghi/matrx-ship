@@ -1,7 +1,7 @@
 # Servers & Routes — what we actually have
 
 A plain map of every machine, every public URL, and what each one is. Last
-verified 2026-08-20 from live health, Cloudflare DNS, AWS, Coolify, and repository configuration.
+verified 2026-08-25 from live health, Cloudflare DNS, AWS, Hostinger, Coolify, and repository configuration.
 
 The canonical cross-platform ownership table is
 [`common-docs/systems/infrastructure/production-infrastructure/FEATURE.md`](../common-docs/systems/infrastructure/production-infrastructure/FEATURE.md#live-production-inventory).
@@ -28,19 +28,16 @@ the canonical inventory wins and the mismatch is an incident to repair.
 |---|---|---|
 | **`matrx-coolify-2`** | `191.101.15.190` · `srv1350760.hstgr.cloud` · `*.mcp.aimatrx.com` | Hostinger KVM 2 (Ubuntu 24.04) running **its own Coolify** — the `matrx-mcp-template` deployment target. Serves `coolify.mcp.aimatrx.com`, `seo-tools-python.mcp.aimatrx.com`, `seo-tools-ts.mcp.aimatrx.com`. **Not** managed by the Server Manager, not the same as aidream's Coolify (`matrx-main` / `89.116.187.5`). |
 
-**🔐 OPEN SECURITY ITEM (2026-08-09):** its **SSH host key changed** —
-`known_hosts` holds `SHA256:THIoyvaHTI1yQj/Z9y4kHRv6CvR2u0xizY/CmBrrgnI`, the box
-now presents `SHA256:FMEYfCmbm+uy4lr8K77uQS1/qcY9yNgtxxN+RepbLRw`. **A rebuild
-was NOT confirmed** — CT logs show only a routine 60-day cert renewal (2026-06-09
-→ 2026-08-08), all services stayed up, and the SSH banner only moved
-`Ubuntu-3ubuntu13.14` → `13.18` (a patch, which does *not* regenerate host keys).
-Every provider credential for this box is empty in `matrx-mcp-template/.env`
-(moved to Doppler), so hPanel could not be reached. **Do not re-key or connect**
-until the fingerprint is verified against the Hostinger VNC/serial console.
-Full write-up: `aidream/FOUND_DEFECTS.md` → "matrx-coolify-2 SSH host key changed".
+**Host identity verified 2026-08-25.** Hostinger hPanel reports the VPS running
+continuously from `2026-07-07 11:43 UTC`; Latest Actions contains no August rebuild.
+The authenticated hPanel web console reports that `/etc/ssh/ssh_host_ed25519_key.pub`
+was created at that same July boot and has fingerprint
+`SHA256:FMEYfCmbm+uy4lr8K77uQS1/qcY9yNgtxxN+RepbLRw`, exactly matching the public SSH
+endpoint. The stale local key was safely replaced after this provider-authoritative
+proof. The August alarm was late discovery of the July rebuild, not an active incident.
 
 > Health note: all three public MCP-plane endpoints returned HTTP 200 on
-> 2026-08-20. This plane remains separate and is intentionally untouched by the
+> 2026-08-25. This plane remains separate and is intentionally untouched by the
 > production AWS migration.
 
 ### EC2-hosted services (not on `/srv`)
