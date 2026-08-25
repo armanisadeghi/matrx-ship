@@ -42,11 +42,11 @@ proof. The August alarm was late discovery of the July rebuild, not an active in
 
 ### EC2-hosted services (not on `/srv`)
 
-> Cross-repo system-of-record: `/Users/armanisadeghi/code/common-docs/systems/matrx-files-service/FEATURE.md` — full contract, deploy state, and cutover plan for matrx-files.
+> Cross-repo system-of-record: `/Users/armanisadeghi/code/common-docs/systems/media/file-service/STATE.md` — full contract, deploy state, and cutover status for matrx-files. Read it before touching this feature in ANY repo.
 
 | Host | Service | Runs as | Endpoint | What it is |
 |---|---|---|---|---|
-| `matrx-sandbox-host-dev` (`i-084f757c1e47d4efb`, `54.144.86.132`) | **Matrx Files** | docker container `matrx-files` (v0.2.62 verified 2026-08-20, uvicorn :8080, `--restart unless-stopped`) | `https://files.matrxserver.com` (Cloudflare-proxied → public ACME origin TLS :443 → app 127.0.0.1:8080) · health `GET /files-service/health` | The independent file microservice carved out of aidream (all cloud storage / media / PDF / sharing). Own matrx-orm pool onto the shared East Supabase `files` schema; Supabase-JWT auth. Env at `/etc/matrx-files.env` (root 600). Manage via the Manager's host exec (`POST /api/hosts/matrx-sandbox-host-dev/exec` → `sudo docker …`). |
+| `matrx-sandbox-host-dev` (`i-084f757c1e47d4efb`, `54.144.86.132`) | **Matrx Files** | docker container `matrx-files` (v0.2.94 verified 2026-08-25, uvicorn :8080, `--restart unless-stopped`) | `https://files.matrxserver.com` (Cloudflare-proxied → public ACME origin TLS :443 → app 127.0.0.1:8080) · health `GET /files-service/health` | The independent file microservice carved out of aidream (all cloud storage / media / PDF / sharing). Own matrx-orm pool onto the shared East Supabase `files` schema; Supabase-JWT auth. Env at `/etc/matrx-files.env` (root 600). Manage via the Manager's host exec (`POST /api/hosts/matrx-sandbox-host-dev/exec` → `sudo docker …`). |
 | `matrx-sandbox-host-dev` (`i-084f757c1e47d4efb`, `54.144.86.132`) | **Matrx SEO** | docker container `matrx-seo` (v0.1.95 verified 2026-08-20, uvicorn :8081, `--restart unless-stopped`) | `https://seo.matrxserver.com` (Cloudflare-proxied → the shared public ACME origin TLS :443 → app 127.0.0.1:8081) · health `GET /health` · readiness `GET /health/ready` | The **first domain vertical** — SEO measurement for subscribed clients. Owns the `seo.*` schema on the ONE East database and connects as the restricted **`svc_seo` role**. Env at `/etc/matrx-seo.env` (root 600). Runbook: `aidream/packages/matrx-seo/DEPLOY.md`; deploy/rollback `./deploy.sh <version>`. Manage via the Manager's host exec, same as matrx-files. |
 
 

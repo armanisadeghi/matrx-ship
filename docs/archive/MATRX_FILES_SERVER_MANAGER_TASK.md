@@ -81,7 +81,7 @@ health. Or accept a target version as input. Reference: aidream
 Add matrx-files to whatever service registry you build, keyed off the host + the on-box
 `service.json`. It's already recorded in this repo's `SERVERS_AND_ROUTES.md` (§EC2
 services) and the cross-repo system-of-record
-`/Users/armanisadeghi/code/common-docs/matrx-files-service/FEATURE.md`.
+`/Users/armanisadeghi/code/common-docs/systems/media/file-service/STATE.md`.
 
 ## Guardrails
 
