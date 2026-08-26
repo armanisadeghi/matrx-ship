@@ -109,3 +109,5 @@ used by both admin UIs) and [packages/ticket-widget/](packages/ticket-widget/)
 - **Every org-scoped write carries an explicit `organization_id`.** Never borrow a recent,
   personal, active, or system org when context is missing. Emergency work order:
   `/Users/armanisadeghi/code/common-docs/projects/no-db-assigned-org/PLAN.md`.
+
+- **Logging into any Matrx UI**: sign in as `admin@admin.com` — the password is `AI_ADMIN_PASSWORD` in the `.env` of `aidream` or `matrx-frontend` (`AI_ADMIN_USERNAME` holds the email).
