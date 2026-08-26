@@ -106,7 +106,7 @@ export async function PATCH(
     }
 
     // Never write a SUBSET of what was asked for and report success. The old code
-    // silently dropped any unrecognised column and returned 200, so a partial
+    // silently dropped any unrecognized column and returned 200, so a partial
     // write was indistinguishable from a complete one — the POST sibling already
     // rejects the same case with 400.
     const unknownColumns = columns.filter((c: string) => !validColumns.includes(c));
