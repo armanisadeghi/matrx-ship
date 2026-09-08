@@ -1,6 +1,10 @@
 # Matrx Naming — Ship/Sandbox infrastructure glossary
 
-**Last updated:** 2026-08-20 · **Status:** LOCAL glossary for Ship/Sandbox infrastructure terms. The platform lexicon (`common-docs/systems/vocabulary/FEATURE.md`) and the Feature Registry (`common-docs/policies/feature-registry.md`) OUTRANK this doc on any conflict — demoted from 'canonical' 2026-08-20 per the confident-title rule (only STATE/POLICY/VISION may claim authority).
+**Last updated:** 2026-09-08 · **Status:** LOCAL glossary. The platform lexicon (`common-docs/systems/platform/vocabulary/FEATURE.md`) and Feature Registry (`common-docs/policies/feature-registry.md`) outrank it.
+
+Cross-repo system-of-record: /Users/armanisadeghi/code/common-docs/systems/infrastructure/production-infrastructure/FEATURE.md — read it before touching this feature in ANY repo.
+
+Sandbox contracts: /Users/armanisadeghi/code/common-docs/systems/infrastructure/sandboxes/STATE.md.
 
 ## Why this exists
 
@@ -16,7 +20,7 @@ Top-down. Each level contains the next.
 
 | Term | Definition | Concrete example |
 |---|---|---|
-| **Server** | A Matrx-managed VPS host. | `srv504398.hstgr.cloud` (the `/srv` dev host). Today there is effectively one; the EC2 sandbox host + the co-located AI Dream box are separate AWS machines (see below). |
+| **Server** | A Matrx-managed host. | `srv504398.hstgr.cloud` (the Ship-managed `/srv` host); an EC2 host is a separate machine. See the production inventory for current ownership. |
 | **Project** | A software product with a source repo. | `matrx-ship`, `matrx-sandbox`, `matrx-frontend`, `aidream` |
 | **Deployment** | A running container stack of a Project on a Server — its own URL, database, API key, admin portal. (Historically called a "Ship instance" or "app instance".) | the Deployment named `aidream-current`; the Deployment named `matrx-sandbox` (version-tracking only — **not** a sandbox runtime) |
 | **Sandbox** | An ephemeral execution environment for an AI agent. Spawned and destroyed on demand by the Orchestrator. | `sbx-14a6b8a17189` |
@@ -52,8 +56,8 @@ A Template is what a user/agent picks when spawning a Sandbox. Each maps to one 
 
 | Template | Image | What it is | Persistence | Required? |
 |---|---|---|---|---|
-| **slim** | `matrx-sandbox:slim` (~886 MB) | Lightweight coding box. The **default** for new spawns. No Chromium, no Playwright. | **git** (clone → work → push). No volume, no S3. | **yes** — orchestrator spawns from it |
-| **aidream** | `matrx-sandbox:aidream` (~4.9 GB) | Full AI Dream box — runs the agent loop *inside* the container with credentials baked in. | per-user Docker volume (hosted) / S3 hot-cold (ec2) | **yes** |
+| **slim** | `matrx-sandbox:slim` | Lightweight coding box. | Depends on tier and lifecycle configuration; do not infer durability from the template name. | **yes** — orchestrator spawns from it |
+| **aidream** | `matrx-sandbox:aidream` | Full AI Dream box — runs the agent loop inside the container with runtime-injected configuration. Hosted-only; EC2 creation rejects it. | per-user Docker volume | **yes** |
 | **core** | `matrx-sandbox:core` | Base image. A **build dependency** of `:aidream`; not spawned directly. | n/a | no (build-only) |
 | **local** | `matrx-sandbox:local` | The deprecated static starter-pool image (`sandbox-1`…`5`). | per-slot volume | no (legacy) |
 
@@ -67,17 +71,14 @@ A Template is what a user/agent picks when spawning a Sandbox. Each maps to one 
 | **Claim** | `POST /sandboxes/claim` — adopt a warm Sandbox in ~0.5s (vs cold-create's minutes), hydrate the user's memory, replenish the pool. A claimed box gets a DB row; an unclaimed warm box has the `warm_pool=1` label and *no* DB row. |
 | **Memory** | Cross-project, per-user state in Postgres (`user_memory`, keyed on `user_id`). Hydrated into `~/.matrx/memory/` on create/claim; captured back on teardown. **Not** the cloud-files bridge. |
 | **Expiry / reaper / resume** | The reaper (60s loop) tears down past-TTL Sandboxes (keeps the volume) → status `expired`. `POST /sandboxes/{id}/resume` respawns on the same volume. |
-| **Agent-binding** | `POST /sandboxes/{id}/agent-binding` → `{ sandbox_id, base_url, access_token, root_path }`. The handoff object AI Dream uses to drive a Sandbox's tools remotely. `base_url` is the Orchestrator's **private** address on EC2 (LAN-speed tool calls). |
+| **Agent-binding** | `POST /sandboxes/{id}/agent-binding` → `{ sandbox_id, base_url, access_token, root_path }`. Portable tool capability; transport selection and expiry contract are in sandbox STATE. |
 
-### Co-located AI Dream replica (the AWS-local agent-loop path)
+### Co-located AI Dream replica (historical term)
 
-A full AI Dream `sandbox_host` replica runs on its own EC2 box
-(`matrx-python-server`) in the **same AWS AZ** as the EC2 sandbox host, so its
-tool calls to the Orchestrator ride the private LAN. This is **not** the
-primary public `app_server`, the Orchestrator, or the in-box `aidream` Template.
-It is a separate full API runtime whose *tools* reach into lean Sandboxes via
-the agent-binding. The primary public API remains on Coolify. See
-`matrx-sandbox/docs/COLOCATED_AIDREAM.md`.
+This names the retired full AI Dream API replica, not a sandbox orchestrator or
+the in-box `aidream` Template. Current routing lives only in the production
+inventory linked above. Historical provisioning remains at
+`matrx-sandbox/docs/archive/2026/COLOCATED_AIDREAM.md`.
 
 ---
 
@@ -108,7 +109,7 @@ The specific things people (and agents) get wrong:
 
 3. **The Orchestrator ≠ the Manager.** The Orchestrator (`matrx-orchestrator`) spawns Sandboxes. The Manager (`matrx-manager`) manages Deployments + the Server and *proxies* sandbox ops to the Orchestrator. Two services, two jobs.
 
-4. **The EC2 AI Dream replica ≠ the public app server ≠ the Orchestrator ≠ the in-box `aidream` Template.** Four different things: (a) the Coolify `app_server` is the primary public brain; (b) the Orchestrator spawns boxes; (c) the `aidream` Template is a heavy box that runs the loop *inside* itself; (d) the EC2 `sandbox_host` replica drives lean AWS-local boxes remotely. The AWS-local direction is (d) + slim boxes; it never changes the public DNS authority.
+4. **The retired AI Dream replica, current API, Orchestrator and in-box `aidream` Template have distinct roles.** Use the production inventory for runtime ownership; a historical name never authorizes restarting the replica or redirecting its API hostname to an orchestrator.
 
 5. **`cloud-files` ≠ `cld_files`.** `~/cloud-files/` is the user-visible directory inside a Sandbox; `cld_files` is the AIDream Supabase schema it syncs with; `/api/cloud-files/*` is the bridge between them. Different layers, intentionally. (Slim boxes don't use this — they persist via git; the watcher sits dormant there.)
 
@@ -148,7 +149,7 @@ The proposed schema rename `infra_instances → infra_deployments` (in the Ship 
 | "warm pool / claim" | Pre-booted Sandboxes + the ~0.5s adoption call |
 | "memory" | Per-user Postgres state hydrated into `~/.matrx/memory/` |
 | "cloud-files" | `~/cloud-files/` ↔ `cld_files` bridge (heavy boxes only) |
-| "co-located AI Dream" | The EC2 `sandbox_host` replica that drives lean AWS-local boxes remotely; never the primary public `app_server` |
+| "co-located AI Dream" | Historical name for the retired EC2 `sandbox_host` API replica |
 | "tier" | `ec2` or `hosted` — where a Sandbox runs |
 
 ---
@@ -156,6 +157,6 @@ The proposed schema rename `infra_instances → infra_deployments` (in the Ship 
 ## See also
 
 - `UI_REFACTOR_PLAN.md` — the plan that applies this taxonomy to the admin UI structure.
-- `matrx-sandbox/docs/COLOCATED_AIDREAM.md` — the co-located AI Dream topology.
+- `matrx-sandbox/docs/COLOCATED_AIDREAM.md` — pointer to current topology and historical evidence.
 - `matrx-sandbox/CLAUDE.md` — the three-things-named-sandbox orientation (this doc supersedes its terminology section).
 - `/srv/CLAUDE.md` — host orientation.
