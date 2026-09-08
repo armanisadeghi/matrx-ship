@@ -64,6 +64,7 @@ data "aws_iam_policy_document" "aidream_github_deploy" {
       # must be allowed to describe/update it — without this, every AI Dream
       # deploy stopped after workflow-worker and the API never rolled.
       "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:service/${aws_ecs_cluster.production.name}/meet-note-taker",
+      "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:service/${aws_ecs_cluster.production.name}/livekit-worker",
       "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:service/${aws_ecs_cluster.production.name}/workflow-studio",
       "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:service/${aws_ecs_cluster.production.name}/workflow-worker",
     ]
@@ -77,6 +78,7 @@ data "aws_iam_policy_document" "aidream_github_deploy" {
       "arn:aws:iam::${var.aws_account_id}:role/matrx/platform/matrx-production-aidream-task",
       "arn:aws:iam::${var.aws_account_id}:role/matrx/platform/matrx-production-admin-dashboard-task",
       "arn:aws:iam::${var.aws_account_id}:role/matrx/platform/matrx-production-browser-worker-task",
+      "arn:aws:iam::${var.aws_account_id}:role/matrx/platform/matrx-production-livekit-worker-task",
       "arn:aws:iam::${var.aws_account_id}:role/matrx/platform/matrx-production-workflow-studio-task",
       "arn:aws:iam::${var.aws_account_id}:role/matrx/platform/matrx-production-workflow-worker-task",
     ]

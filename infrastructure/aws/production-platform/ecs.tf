@@ -90,6 +90,7 @@ resource "aws_secretsmanager_secret" "service" {
   for_each = toset([
     "aidream",
     "workflow-worker",
+    "livekit-worker",
     "matrx-files",
     "matrx-seo",
   ])

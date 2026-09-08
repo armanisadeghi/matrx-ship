@@ -28,6 +28,7 @@ locals {
     "workflow-studio",
     "aidream",
     "workflow-worker",
+    "livekit-worker",
     "matrx-files",
     "matrx-seo",
   ])

@@ -76,3 +76,14 @@ variable "browser_worker_image_tag" {
     error_message = "Cloud Browser worker images must be deployed by a full 40-character Git SHA."
   }
 }
+
+variable "livekit_worker_image_tag" {
+  description = "Immutable AI Dream Git SHA for the canonical LiveKit room worker. The worker is the same image as the API; the aidream release script advances the live revision."
+  type        = string
+  default     = "1c620f79a63087f974cee040f53a3ed47e6562ef"
+
+  validation {
+    condition     = can(regex("^[0-9a-f]{40}$", var.livekit_worker_image_tag))
+    error_message = "LiveKit worker images must be deployed by a full 40-character Git SHA."
+  }
+}

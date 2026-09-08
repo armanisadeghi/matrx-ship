@@ -128,3 +128,31 @@ Persistent Cloud Browser lease maintenance runs here. The browser-worker securit
 signed control port (`8002`) from exactly the AI Dream API and workflow-worker security groups; the
 interactive stream port (`8080`) remains API-only. This distinction is load-bearing: browser actions
 originate in AI Dream, while idle lease renewal originates in the workflow worker.
+
+## Production LiveKit room worker
+
+`livekit-worker.tf` declares the canonical Meet note-taker: the same AI Dream image running with
+`MATRX_ROLE=livekit_worker`, dispatched by the image's own `entrypoint.sh` with no command override.
+It is 1 vCPU / 2 GB, has no ingress, runs in the private subnets with `assignPublicIp` disabled, and
+reaches LiveKit Cloud (wss), Supabase, and the speech-to-text providers through the NAT gateways —
+the same egress path as the workflow worker. Its container health check is the LiveKit agents SDK
+worker endpoint on `http://localhost:8081/`.
+
+Its runtime values live in the dedicated secret `/matrx/production/livekit-worker` with the keys
+`MATRX_RUNTIME_ENV_JSON`, `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`, and
+`LIVEKIT_AGENT_NAME` (`matrx-note-taker`). Terraform owns the container only; the value is populated
+outside Terraform like every other `/matrx/production/*` secret. The service-specific task role
+`matrx-production-livekit-worker-task` may read that one secret and nothing else — no S3, no KMS, no
+AI-provider access, because reasoning deliberately never runs in this process.
+
+**Rollout state:** the service is declared with `desired_count = 0` and the
+`matrx-production-livekit-worker-not-running` alarm therefore sits in ALARM. That is the honest
+state of an unfinished rollout, not a defect: the `livekit_worker` role does not exist in the
+deployed image yet, so a task started now would exit loudly. The count moves to 1 once an image
+carrying the role is live.
+
+The hand-created `meet-note-taker` ECS service (task-definition family
+`matrx-production-meet-note-taker`, log group `/matrx/production/meet-note-taker`) is still the live
+note-taker and is **not** declared in Terraform. It is a retirement target: it is drained and deleted
+only after this worker has served a verified meeting. Tracked in
+[/projects/meet-realtime-intelligence/REGISTER.md](../../../../common-docs/projects/meet-realtime-intelligence/REGISTER.md).

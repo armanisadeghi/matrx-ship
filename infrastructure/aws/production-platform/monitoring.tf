@@ -78,6 +78,53 @@ resource "aws_cloudwatch_metric_alarm" "browser_worker_memory" {
   }
 }
 
+# MRI-B1 / D13: no autoscaling. One task is the whole pool until a
+# concurrent-room load test says otherwise, so "fewer than one running task"
+# is the correct availability signal.
+#
+# HONEST STATE: this alarm sits in ALARM from creation until MRI-C1 raises the
+# service's desired count from 0 to 1 with an image that carries the
+# `livekit_worker` role. That is the truth — there is no note-taker worker
+# running under the canonical service yet — and it is deliberately visible
+# rather than suppressed.
+resource "aws_cloudwatch_metric_alarm" "livekit_worker_running" {
+  alarm_name          = "matrx-production-livekit-worker-not-running"
+  alarm_description   = "The canonical LiveKit room worker has no running ECS task. Until MRI-C1 flips desired_count from 0 to 1, this is the expected, declared state of an unfinished rollout."
+  namespace           = "ECS/ContainerInsights"
+  metric_name         = "RunningTaskCount"
+  comparison_operator = "LessThanThreshold"
+  threshold           = 1
+  evaluation_periods  = 2
+  datapoints_to_alarm = 2
+  period              = 60
+  statistic           = "Minimum"
+  treat_missing_data  = "breaching"
+
+  dimensions = {
+    ClusterName = aws_ecs_cluster.production.name
+    ServiceName = aws_ecs_service.livekit_worker.name
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "livekit_worker_memory" {
+  alarm_name          = "matrx-production-livekit-worker-memory-high"
+  alarm_description   = "The canonical LiveKit room worker averaged more than 85 percent memory utilization for 15 minutes. Transcription streams scale with concurrent rooms; this is the signal that 1 vCPU / 2 GB (D13) is no longer enough."
+  namespace           = "AWS/ECS"
+  metric_name         = "MemoryUtilization"
+  comparison_operator = "GreaterThanThreshold"
+  threshold           = 85
+  evaluation_periods  = 3
+  datapoints_to_alarm = 3
+  period              = 300
+  statistic           = "Average"
+  treat_missing_data  = "breaching"
+
+  dimensions = {
+    ClusterName = aws_ecs_cluster.production.name
+    ServiceName = aws_ecs_service.livekit_worker.name
+  }
+}
+
 resource "aws_cloudwatch_dashboard" "production" {
   dashboard_name = "matrx-production"
 
@@ -167,6 +214,8 @@ resource "aws_cloudwatch_dashboard" "production" {
               ["AWS/ECS", "MemoryUtilization", "ServiceName", aws_ecs_service.workflow_worker.name, "ClusterName", aws_ecs_cluster.production.name, { label = "workflow-worker memory" }],
               ["AWS/ECS", "CPUUtilization", "ServiceName", aws_ecs_service.browser_worker.name, "ClusterName", aws_ecs_cluster.production.name, { label = "browser-worker CPU" }],
               ["AWS/ECS", "MemoryUtilization", "ServiceName", aws_ecs_service.browser_worker.name, "ClusterName", aws_ecs_cluster.production.name, { label = "browser-worker memory" }],
+              ["AWS/ECS", "CPUUtilization", "ServiceName", aws_ecs_service.livekit_worker.name, "ClusterName", aws_ecs_cluster.production.name, { label = "livekit-worker CPU" }],
+              ["AWS/ECS", "MemoryUtilization", "ServiceName", aws_ecs_service.livekit_worker.name, "ClusterName", aws_ecs_cluster.production.name, { label = "livekit-worker memory" }],
             ],
           )
           yAxis = { left = { min = 0, max = 100 } }
@@ -206,6 +255,42 @@ resource "aws_cloudwatch_dashboard" "production" {
           region = var.aws_region
           view   = "table"
           query  = "SOURCE '${aws_cloudwatch_log_group.application["aidream"].name}' | fields @timestamp, @message | filter @logStream like /browser-worker/ | sort @timestamp desc | limit 50"
+        }
+      },
+      {
+        type   = "metric"
+        x      = 0
+        y      = 20
+        width  = 12
+        height = 6
+        properties = {
+          title  = "LiveKit room worker task count"
+          region = var.aws_region
+          period = 60
+          stat   = "Minimum"
+          metrics = [[
+            "ECS/ContainerInsights",
+            "RunningTaskCount",
+            "ServiceName",
+            aws_ecs_service.livekit_worker.name,
+            "ClusterName",
+            aws_ecs_cluster.production.name,
+            { label = "running livekit workers" },
+          ]]
+          yAxis = { left = { min = 0 } }
+        }
+      },
+      {
+        type   = "log"
+        x      = 12
+        y      = 20
+        width  = 12
+        height = 6
+        properties = {
+          title  = "LiveKit room worker logs"
+          region = var.aws_region
+          view   = "table"
+          query  = "SOURCE '${aws_cloudwatch_log_group.application["livekit-worker"].name}' | fields @timestamp, @message | sort @timestamp desc | limit 50"
         }
       },
     ]
