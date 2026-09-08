@@ -91,6 +91,46 @@ tags each with the full release SHA, registers new task definitions, and waits f
 protected rolling deployments to reach the exact completed state. Terraform owns service shape and
 ignores the release-owned task-definition pointer.
 
+## The release-ownership guard (read before adding an ECS service)
+
+`aidream/scripts/deploy_ecs_primary.sh` is the release pipeline for every ECS service in this root.
+For each service it reads the LIVE task definition, rewrites it through
+`render_ecs_task_definition.jq` (container image, plus materialized `secrets` entries expanded from
+`MATRX_RUNTIME_ENV_JSON` for the runtime-secret services), registers a new revision, and points the
+service at it. Terraform's tracked revision is therefore permanently behind the live one.
+
+Without a guard, an untargeted `terraform apply` silently becomes a production rollback. That is
+exactly what happened: on 2026-09-08 a baseline plan wanted to roll `browser-worker` 17 -> 13,
+`admin-dashboard` 334 -> 3, `workflow-studio` 331 -> 3, flip `aidream` and `workflow-worker`
+`platform_version` from the resolved `1.4.0` back to `LATEST` (a deployment for zero value), and
+replace `aws_ecs_task_definition.workflow_worker`. Repaired under MRI-B2.
+
+**Every `aws_ecs_service` in this root therefore carries:**
+
+```hcl
+lifecycle { ignore_changes = [desired_count, task_definition, platform_version] }
+```
+
+(`desired_count` only where autoscaling or an operator owns it; `browser_worker` omits it.)
+
+**Every `aws_ecs_task_definition` in this root carries:**
+
+```hcl
+lifecycle { ignore_changes = [container_definitions] }
+```
+
+Terraform owns the SHAPE — family, cpu, memory, execution/task roles, volumes, runtime platform —
+and the initial definition. The release pipeline owns the container content.
+
+To change container content deliberately: edit the block, then
+`terraform apply -replace=aws_ecs_task_definition.<name>`. That registers a new revision; it does
+NOT deploy. A release, or an explicit `aws ecs update-service`, does that.
+
+To move a service to a specific Fargate platform version: set `platform_version` AND remove it from
+`ignore_changes` in the same change — that is a deliberate, reviewed deployment.
+
+A new service added here must ship both guards, or the next untargeted apply rolls it back.
+
 ## Production AI Dream API
 
 AI Dream runs from the exact immutable SHA selected by `aidream_image_tag`, with two 2-vCPU/4-GB

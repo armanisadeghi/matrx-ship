@@ -267,6 +267,21 @@ resource "aws_ecs_task_definition" "browser_worker" {
       hardLimit = 65536
     }]
   }])
+
+  # RELEASE-OWNED CONTENT (drift class fixed 2026-09-08, MRI-B2).
+  # aidream/scripts/deploy_ecs_primary.sh registers a new revision of this
+  # family on every release: render_ecs_task_definition.jq rewrites the
+  # container image and, for the runtime-secret services, expands
+  # MATRX_RUNTIME_ENV_JSON into materialized `secrets` entries. Terraform's
+  # tracked revision is therefore always behind the live one, and re-asserting
+  # this block would register a phantom revision and deregister the tracked one
+  # on every untargeted apply. Terraform owns the SHAPE (family, cpu, memory,
+  # roles, volumes, runtime platform) and the initial definition; the release
+  # pipeline owns the container content.
+  # To change container content deliberately: edit this block, then
+  # `terraform apply -replace=aws_ecs_task_definition.browser_worker` (registers a new revision; it does NOT deploy
+  # — a release or an explicit `aws ecs update-service` does that).
+  lifecycle { ignore_changes = [container_definitions] }
 }
 
 resource "aws_ecs_service" "browser_worker" {
@@ -303,4 +318,17 @@ resource "aws_ecs_service" "browser_worker" {
   depends_on = [aws_efs_mount_target.browser_profiles]
 
   tags = { Name = "${local.name_prefix}-browser-worker" }
+
+  # `deploy_ecs_primary.sh` deploys browser-worker (gated on
+  # DEPLOY_BROWSER_WORKER + a drain confirmation) and advances its
+  # task_definition revision; without this guard an untargeted apply rolled the
+  # live revision back to Terraform's tracked one (17 -> 13 on 2026-09-08).
+  # ECS resolves `LATEST` to a concrete Fargate platform version on the live
+  # service, and nothing in the release pipeline sets platform_version.
+  # aidream and workflow-worker already read back `1.4.0`, so re-asserting
+  # `LATEST` is a zero-value change that would force a production deployment.
+  # LATEST stays the declared intent; the read-back value is ignored. To move a
+  # service to a specific platform version, set it here AND drop it from
+  # ignore_changes — that is a deliberate deployment.
+  lifecycle { ignore_changes = [task_definition, platform_version] }
 }
