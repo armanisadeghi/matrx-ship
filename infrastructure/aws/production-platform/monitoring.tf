@@ -117,7 +117,11 @@ resource "aws_cloudwatch_metric_alarm" "livekit_worker_memory" {
   datapoints_to_alarm = 3
   period              = 300
   statistic           = "Average"
-  treat_missing_data  = "breaching"
+
+  # Absent memory data means no task is running, which the running-count alarm
+  # already states plainly. Treating it as breaching here would put a "memory
+  # high" alarm on screen while memory usage is zero — a screen that lies.
+  treat_missing_data = "notBreaching"
 
   dimensions = {
     ClusterName = aws_ecs_cluster.production.name
