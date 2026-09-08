@@ -17,6 +17,7 @@ interface Ec2Info { state?: string; type?: string; az?: string; privateIp?: stri
 interface Host {
   id: string;
   role: string;
+  lifecycle: "active" | "retired";
   instanceId: string;
   region: string;
   online: boolean;
@@ -128,18 +129,18 @@ export default function HostsPage() {
         <Card><CardContent className="p-6 text-center text-sm text-muted-foreground">Loading fleet…</CardContent></Card>
       ) : (
         data?.hosts?.map((h) => (
-          <Card key={h.id} className={h.online ? "" : "border-amber-500/40"}>
+          <Card key={h.id} className={h.online || h.lifecycle === "retired" ? "" : "border-amber-500/40"}>
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between gap-3 flex-wrap">
                 <CardTitle className="text-base flex items-center gap-2">
                   <Server className="size-4 text-muted-foreground" />
                   <span className="font-mono">{h.id}</span>
-                  {h.online
+                  {h.lifecycle === "retired" ? <Badge variant="secondary">retired · inventory only</Badge> : h.online
                     ? <Badge variant="success" className="text-[10px]"><CheckCircle2 className="size-3 mr-1" />online</Badge>
                     : <Badge variant="destructive" className="text-[10px]"><XCircle className="size-3 mr-1" />{h.ssm?.ping || "offline"}</Badge>}
                   {h.ec2?.state && <Badge variant="secondary" className="text-[10px]">{h.ec2.state}</Badge>}
                 </CardTitle>
-                {canPower && (
+                {canPower && h.lifecycle !== "retired" && (
                   <div className="flex items-center gap-1">
                     <Button size="sm" variant="outline" disabled={!!busy} onClick={() => power(h.id, "reboot")} title="Reboot instance">
                       <RotateCw className="size-4" /> Reboot
@@ -164,7 +165,7 @@ export default function HostsPage() {
               </div>
 
               {/* Run a command via SSM */}
-              <div className="flex items-center gap-2">
+              {h.lifecycle !== "retired" && <div className="flex items-center gap-2">
                 <Terminal className="size-4 text-muted-foreground shrink-0" />
                 <Input
                   className="font-mono text-xs"
@@ -177,7 +178,7 @@ export default function HostsPage() {
                 <Button size="sm" disabled={!canExec || !!busy || !(cmd[h.id] || "").trim()} onClick={() => runCommand(h.id)}>
                   {busy === `${h.id}:exec` ? <Loader2 className="size-4 animate-spin" /> : <Play className="size-4" />} Run
                 </Button>
-              </div>
+              </div>}
 
               {result[h.id] && (
                 <div className="rounded-lg bg-zinc-950 text-zinc-300 p-3 font-mono text-xs max-h-80 overflow-y-auto">

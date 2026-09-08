@@ -90,6 +90,7 @@ export async function deletePrivateTransferObject(bucket, key) {
 // Run a shell command on an instance via SSM RunShellScript; poll to completion.
 // Returns { status, stdout, stderr, exitCode, commandId }.
 export async function ssmRun(instanceId, command, { timeout = 120, comment } = {}) {
+  assertHostOperational(instanceId);
   const client = ssm();
   const t = Math.min(Math.max(Number(timeout) || 120, 30), 600);
   const sent = await client.send(
@@ -166,6 +167,7 @@ export async function ec2Describe(instanceIds) {
 }
 
 export async function ec2Power(action, instanceId) {
+  assertHostOperational(instanceId);
   const ids = [instanceId];
   if (action === "start") return ec2().send(new StartInstancesCommand({ InstanceIds: ids }));
   if (action === "stop") return ec2().send(new StopInstancesCommand({ InstanceIds: ids }));
@@ -179,11 +181,25 @@ export const FLEET_HOSTS = {
   "matrx-sandbox-host-dev": {
     instanceId: "i-084f757c1e47d4efb",
     role: "EC2-tier sandbox orchestrator",
+    lifecycle: "active",
     region: "us-east-1",
   },
   "matrx-python-server": {
     instanceId: "i-0241f4fee60fb02f6",
-    role: "AWS-local AI Dream sandbox_host replica",
+    role: "Retired AI Dream replica — replaced by ECS; inventory only",
+    lifecycle: "retired",
     region: "us-east-1",
   },
 };
+
+// Shared policy for every SSM consumer, power action, and interactive terminal.
+// Describing retained infrastructure remains available; executing on it does not.
+export function assertHostOperational(instanceId) {
+  const entry = Object.entries(FLEET_HOSTS).find(([, host]) => host.instanceId === instanceId);
+  if (entry?.[1].lifecycle === "retired") {
+    const error = new Error(`Host '${entry[0]}' is retired and inventory-only. Use the current ECS AI Dream service; host execution and power controls are unavailable.`);
+    error.code = "HOST_RETIRED";
+    error.status = 409;
+    throw error;
+  }
+}

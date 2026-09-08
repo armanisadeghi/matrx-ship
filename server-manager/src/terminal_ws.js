@@ -19,7 +19,7 @@
 import { WebSocketServer } from "ws";
 import pty from "node-pty";
 import { parse as parseUrl } from "node:url";
-import { FLEET_HOSTS } from "./aws.js";
+import { FLEET_HOSTS, assertHostOperational } from "./aws.js";
 
 const MAX_SESSION_MS = 4 * 60 * 60 * 1000; // hard cap: 4h per terminal.
 
@@ -65,6 +65,7 @@ function spawnForTarget(target, { cols, rows }) {
   if (e) {
     const h = FLEET_HOSTS[e[1]];
     if (!h) throw new Error(`unknown EC2 host '${e[1]}'`);
+    assertHostOperational(h.instanceId);
     const env = {
       ...process.env,
       AWS_ACCESS_KEY_ID: process.env.MATRX_ADMIN_AWS_ACCESS_KEY_ID || "",

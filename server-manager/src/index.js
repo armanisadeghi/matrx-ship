@@ -4512,6 +4512,7 @@ app.get("/api/hosts", authMiddleware, async (_req, res) => {
     const hosts = Object.entries(FLEET_HOSTS).map(([name, h]) => ({
       id: name,
       role: h.role,
+      lifecycle: h.lifecycle,
       instanceId: h.instanceId,
       region: h.region,
       ssm: ssmById[h.instanceId] || null,
@@ -4561,7 +4562,7 @@ app.post("/api/hosts/:id/exec", authMiddleware, requireSuperadmin, async (req, r
     } catch { /* audit is best-effort */ }
     res.json({ host: req.params.id, instanceId: host.instanceId, ...result });
   } catch (e) {
-    res.status(502).json({ error: `SSM error: ${e.message}` });
+    res.status(e.status || 502).json({ error: `SSM error: ${e.message}`, code: e.code });
   }
 });
 
@@ -4577,7 +4578,7 @@ app.post("/api/hosts/:id/power", authMiddleware, requireSuperadmin, async (req, 
     try { auditLog(req.tokenEntry?.label || "manager", `host_power_${action}`, req.params.id, {}); } catch { /* */ }
     res.json({ host: req.params.id, action, ok: true });
   } catch (e) {
-    res.status(502).json({ error: `EC2 error: ${e.message}` });
+    res.status(e.status || 502).json({ error: `EC2 error: ${e.message}`, code: e.code });
   }
 });
 
@@ -5193,7 +5194,7 @@ const FILES_REMOTE_CHUNK = 16 * 1024;         // per-SSM-call read chunk
 function filesTargets() {
   return [
     { id: "local", label: "This server (/srv host)", kind: "local", roots: Object.keys(FILES_LOCAL_ROOTS) },
-    ...Object.entries(FLEET_HOSTS).map(([name, h]) => ({ id: `ec2:${name}`, label: `${name} (${h.role})`, kind: "ec2", roots: ["/"] })),
+    ...Object.entries(FLEET_HOSTS).filter(([, h]) => h.lifecycle !== "retired").map(([name, h]) => ({ id: `ec2:${name}`, label: `${name} (${h.role})`, kind: "ec2", roots: ["/"] })),
   ];
 }
 

@@ -21,6 +21,7 @@ interface SystemInfo {
   containers: string[];
 }
 interface Ec2Host {
+  lifecycle: "active" | "retired";
   id: string; role: string; instanceId: string; region: string; online: boolean;
   ssm: { platform?: string; platformVersion?: string } | null;
   ec2: { state?: string; type?: string; az?: string; privateIp?: string; publicIp?: string } | null;
@@ -116,12 +117,12 @@ export default function ServersPage() {
       )}
 
       {ec2?.map((h) => (
-        <Card key={h.id} className={h.online ? "" : "border-amber-500/40"}>
+        <Card key={h.id} className={h.online || h.lifecycle === "retired" ? "" : "border-amber-500/40"}>
           <CardHeader className="pb-2">
             <CardTitle className="text-base flex items-center gap-2 flex-wrap">
               <Cloud className="size-4 text-muted-foreground" />
               <span>{h.id}</span>
-              {h.online
+              {h.lifecycle === "retired" ? <Badge variant="secondary">retired · inventory only</Badge> : h.online
                 ? <Badge variant="success" className="text-[10px]"><CheckCircle2 className="size-3 mr-1" />online</Badge>
                 : <Badge variant="destructive" className="text-[10px]"><XCircle className="size-3 mr-1" />offline</Badge>}
               {h.ec2?.state && <Badge variant="secondary" className="text-[10px]">{h.ec2.state}</Badge>}
@@ -136,7 +137,7 @@ export default function ServersPage() {
               {h.ec2?.privateIp && <span>priv {h.ec2.privateIp}</span>}
               {h.ssm?.platform && <span>{h.ssm.platform} {h.ssm.platformVersion}</span>}
             </div>
-            {isSuperadmin && (
+            {isSuperadmin && h.lifecycle !== "retired" && (
               <div className="pt-1">
                 <Button size="sm" variant="outline" onClick={() => router.push("/hosts")}>Manage (command / power) <ChevronRight className="size-3.5" /></Button>
               </div>

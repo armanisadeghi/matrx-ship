@@ -28,8 +28,12 @@ installed Python package version, host-local health, and `/opt/<service>/CURRENT
 ## AI Dream API ownership
 
 AWS ECS/Fargate is the sole AI Dream API runtime and release owner. The retired
-`matrx-python-server` replica has no Manager secret store or Apply action, so
-the control plane cannot restart or revive the superseded API deployment.
+`matrx-python-server` replica remains visible as retired inventory, with no
+Manager secret store, Apply, power, command, file-access, or terminal action.
+The shared AWS execution boundary rejects retired instance IDs before dispatch;
+the interactive SSM terminal applies the same policy. Active fleet hosts retain
+their controls. This is a Manager workflow guard, not an IAM security boundary
+against an operator deliberately using the unrestricted local admin shell.
 
 ## Microservice deploys must leave the host deployable
 

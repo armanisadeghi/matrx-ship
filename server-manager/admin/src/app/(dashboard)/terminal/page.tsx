@@ -58,8 +58,8 @@ export default function TerminalPage() {
     api<{ containers: Target[] }>(API.CONTAINERS)
       .then((d) => setContainers((d.containers || []).filter((c) => c.state === "running")))
       .catch(() => {});
-    api<{ hosts?: { id: string; role: string; online: boolean }[] }>(API.HOSTS)
-      .then((d) => setEc2(d.hosts || []))
+    api<{ hosts?: { id: string; role: string; online: boolean; lifecycle: string }[] }>(API.HOSTS)
+      .then((d) => setEc2((d.hosts || []).filter((h) => h.lifecycle !== "retired")))
       .catch(() => {});
   }, [authed]);
 
