@@ -59,6 +59,11 @@ data "aws_iam_policy_document" "aidream_github_deploy" {
       "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:service/${aws_ecs_cluster.production.name}/aidream",
       "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:service/${aws_ecs_cluster.production.name}/admin-dashboard",
       "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:service/${aws_ecs_cluster.production.name}/browser-worker",
+      # Added 2026-09-08: aidream's release script (scripts/deploy_ecs_primary.sh)
+      # started moving meet-note-taker with every release, so the deploy role
+      # must be allowed to describe/update it — without this, every AI Dream
+      # deploy stopped after workflow-worker and the API never rolled.
+      "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:service/${aws_ecs_cluster.production.name}/meet-note-taker",
       "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:service/${aws_ecs_cluster.production.name}/workflow-studio",
       "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:service/${aws_ecs_cluster.production.name}/workflow-worker",
     ]
