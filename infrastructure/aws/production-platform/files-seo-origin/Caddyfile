@@ -1,4 +1,4 @@
-# Shared public origin for the EC2-hosted Matrx Files and Matrx SEO services.
+# Shared public origin for EC2 Files, SEO and sandbox tool transport.
 # Caddy obtains and renews publicly trusted certificates with ACME HTTP-01.
 files.matrxserver.com {
 	reverse_proxy 127.0.0.1:8080
@@ -6,4 +6,10 @@ files.matrxserver.com {
 
 seo.matrxserver.com {
 	reverse_proxy 127.0.0.1:8081
+}
+
+# Dedicated orchestrator contract; sandbox.matrxserver.com was an AI Dream API.
+# Create the Cloudflare-proxied DNS record before applying this configuration.
+sandbox-orchestrator.matrxserver.com {
+	reverse_proxy 127.0.0.1:8000
 }

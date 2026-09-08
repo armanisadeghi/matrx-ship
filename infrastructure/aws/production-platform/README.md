@@ -13,6 +13,15 @@ Cross-repo system-of-record: /Users/armanisadeghi/code/common-docs/systems/infra
 
 Browser-free operations use the `aws-production-operations` skill in this repository.
 
+Sandbox restoration and its independent acceptance gates are tracked in
+[/systems/infrastructure/sandboxes/REGISTER.md](../../../../common-docs/systems/infrastructure/sandboxes/REGISTER.md).
+`sandbox-orchestrator.tf` declares the private orchestrator record and ECS ingress;
+the existing shared Caddy configuration declares its separate public HTTPS hostname.
+Apply the private saved plan before updating ECS consumers. Create and verify the
+Cloudflare-proxied public hostname before applying Caddy or changing browser and
+Manager URLs. The old `sandbox.matrxserver.com` API hostname is retired only after
+caller evidence and both-tier acceptance; never use it for the orchestrator API.
+
 Terraform state is encrypted, versioned, and lock-protected at:
 
 `s3://matrx-terraform-state-872515272894/aws/production-platform/terraform.tfstate`
