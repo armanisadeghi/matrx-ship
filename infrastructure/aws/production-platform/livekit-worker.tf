@@ -80,15 +80,19 @@ resource "aws_ecs_task_definition" "livekit_worker" {
       { name = "MATRX_ROLE", value = "livekit_worker" },
     ]
 
-    # Every value comes from this service's OWN secret container. The whole
-    # runtime JSON arrives as MATRX_RUNTIME_ENV_JSON (the image expands it);
-    # the four LiveKit values are read as individual JSON keys so the worker's
-    # registration identity is legible in the task definition without any
-    # secret value ever entering Terraform state.
+    # Every value comes from this service's OWN secret container, whose WHOLE
+    # string is the flat runtime document (the same convention as aidream and
+    # workflow-worker): MATRX_RUNTIME_ENV_JSON is the bare secret ARN and the
+    # image expands the document; the four LiveKit values are top-level keys of
+    # that same document, read as individual JSON-key selectors so the worker's
+    # registration identity is legible in the task definition. A nested
+    # document (secret key MATRX_RUNTIME_ENV_JSON inside the secret) breaks
+    # render_ecs_task_definition.jq, which appends `:KEY::` to this ARN on every
+    # release — proven 2026-09-08 by ResourceInitializationError at C1.
     secrets = [
       {
         name      = "MATRX_RUNTIME_ENV_JSON"
-        valueFrom = "${aws_secretsmanager_secret.service["livekit-worker"].arn}:MATRX_RUNTIME_ENV_JSON::"
+        valueFrom = aws_secretsmanager_secret.service["livekit-worker"].arn
       },
       {
         name      = "LIVEKIT_URL"
