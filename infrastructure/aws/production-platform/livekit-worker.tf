@@ -11,11 +11,9 @@
 # still live and is NOT touched here; it is drained and deleted by MRI-C6 only
 # after this worker has served a verified meeting.
 #
-# SAFE ROLLOUT: desired_count is 0 on purpose. The `livekit_worker` role does
-# not exist in the deployed image yet (MRI-A1 ships it), so a task started now
-# would exit loudly on the entrypoint's unknown-role branch. MRI-C1 flips the
-# count to 1 once an image carrying the role is live. The operator owns
-# desired_count from then on (see the lifecycle block below).
+# desired_count 2 across AZs (D13) since MRI-C3 passed on 2026-09-09; the
+# initial rollout ran at 0 until the image carried the livekit_worker role.
+# Terraform ignores desired_count from then on (see the lifecycle block below).
 
 resource "aws_security_group" "livekit_worker" {
   name        = "${local.name_prefix}-livekit-worker"
@@ -165,7 +163,7 @@ resource "aws_ecs_service" "livekit_worker" {
   name                   = "livekit-worker"
   cluster                = aws_ecs_cluster.production.id
   task_definition        = aws_ecs_task_definition.livekit_worker.arn
-  desired_count          = 0
+  desired_count          = 2
   enable_execute_command = true
   launch_type            = "FARGATE"
   platform_version       = "LATEST"
