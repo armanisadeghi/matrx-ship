@@ -185,14 +185,13 @@ outside Terraform like every other `/matrx/production/*` secret. The service-spe
 `matrx-production-livekit-worker-task` may read that one secret and nothing else — no S3, no KMS, no
 AI-provider access, because reasoning deliberately never runs in this process.
 
-**Rollout state:** the service is declared with `desired_count = 0` and the
-`matrx-production-livekit-worker-not-running` alarm therefore sits in ALARM. That is the honest
-state of an unfinished rollout, not a defect: the `livekit_worker` role does not exist in the
-deployed image yet, so a task started now would exit loudly. The count moves to 1 once an image
-carrying the role is live.
+**Rollout state:** live at `desired_count = 2` across AZs (D13) since MRI-C3 passed on 2026-09-09;
+Terraform ignores `desired_count` from then on. This is the ONE service that answers the LiveKit
+dispatch name `matrx-note-taker`.
 
-The hand-created `meet-note-taker` ECS service (task-definition family
-`matrx-production-meet-note-taker`, log group `/matrx/production/meet-note-taker`) is still the live
-note-taker and is **not** declared in Terraform. It is a retirement target: it is drained and deleted
-only after this worker has served a verified meeting. Tracked in
+*History — retired 2026-09-09 (MRI-C6):* the hand-created `meet-note-taker` ECS service (never
+declared in Terraform; task-definition family `matrx-production-meet-note-taker`, all 10 revisions
+deregistered) was drained and deleted once this worker had served verified meetings, and its ARN was
+removed from the `ECSServiceDeploy` deploy-role statement. Its log group
+`/matrx/production/meet-note-taker` is deliberately left to expire on its own retention. Tracked in
 [/projects/meet-realtime-intelligence/REGISTER.md](../../../../common-docs/projects/meet-realtime-intelligence/REGISTER.md).

@@ -7,9 +7,10 @@
 # process, which is the failure class entrypoint.sh's role switch exists to
 # prevent.
 #
-# It replaces the hand-created `meet-note-taker` ECS service. That service is
-# still live and is NOT touched here; it is drained and deleted by MRI-C6 only
-# after this worker has served a verified meeting.
+# It REPLACED the hand-created `meet-note-taker` ECS service, which was drained,
+# deleted and erased from the deploy role, the aidream deploy script and the
+# task renderer on 2026-09-09 (MRI-C6). This is now the ONE service that answers
+# the LiveKit dispatch name `matrx-note-taker`.
 #
 # desired_count 2 across AZs (D13) since MRI-C3 passed on 2026-09-09; the
 # initial rollout ran at 0 until the image carried the livekit_worker role.
