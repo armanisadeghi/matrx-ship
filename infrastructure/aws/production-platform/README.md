@@ -194,4 +194,4 @@ declared in Terraform; task-definition family `matrx-production-meet-note-taker`
 deregistered) was drained and deleted once this worker had served verified meetings, and its ARN was
 removed from the `ECSServiceDeploy` deploy-role statement. Its log group
 `/matrx/production/meet-note-taker` is deliberately left to expire on its own retention. Tracked in
-[/projects/meet-realtime-intelligence/REGISTER.md](../../../../common-docs/projects/meet-realtime-intelligence/REGISTER.md).
+[/projects/archive/meet-realtime-intelligence/REGISTER.md](../../../../common-docs/projects/archive/meet-realtime-intelligence/REGISTER.md).
