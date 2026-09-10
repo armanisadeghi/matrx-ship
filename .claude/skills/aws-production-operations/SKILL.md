@@ -1,6 +1,6 @@
 ---
 name: aws-production-operations
-description: Operate, inspect, diagnose, and safely deploy the AI Matrx ECS/Fargate production platform in AWS us-east-1 without browser access. Use for AWS platform status, ECS services/tasks, CloudWatch logs, alarms, ECR images, ECS Exec, Terraform changes, failover checks, or migration-stage verification.
+description: "Runbook for AI Matrx production on AWS ECS/Fargate (us-east-1). Use when checking ECS services, tasks, or alarms, tailing CloudWatch logs, deploying an ECR image, ECS Exec, Terraform in `infrastructure/aws/production-platform`, or failover and migration-stage checks. NOT for an unplanned outage (use fleet-incident)."
 ---
 
 # AWS production operations

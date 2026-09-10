@@ -1,6 +1,6 @@
 ---
 name: add-managed-service
-description: Add a new PyPI-published aidream package as a fully-managed microservice — auto-deploy from PyPI, fleet check, Secrets store, Services page — like matrx-files and matrx-seo. Use when the user says "set up <package> to autodeploy / be managed on the ship server" for a service from the aidream packages/ tree.
+description: "Onboarding recipe for a PyPI-published aidream package as a managed microservice on the ship server. Use when asked to make a `packages/` service autodeploy or be managed like matrx-files or matrx-seo, or when adding a `MICROSERVICES` or `REMOTE_SECRET_STORES` entry in `server-manager/src/index.js`."
 ---
 
 # Adding a managed microservice (the matrx-files pattern)

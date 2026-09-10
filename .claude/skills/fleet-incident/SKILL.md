@@ -1,6 +1,6 @@
 ---
 name: fleet-incident
-description: Diagnose and durably fix anything broken on the Matrx fleet (deploys stuck, services behind/unreachable, red fleet-health, sandboxes misbehaving). Use whenever the operator reports "X isn't working / isn't updating / shows behind" on the /srv host, the EC2 boxes, or any managed service. Encodes the house method - verify claims live, find the FIRST error, fix in the repo, let the pipeline deploy, prove it live, make the failure loud.
+description: "Incident method for the Matrx fleet: the /srv host, EC2 boxes, and every managed service. Use when the operator says X isn't working, isn't updating, or shows behind, a deploy is stuck, fleet-health is red, a service is unreachable, or sandboxes misbehave."
 ---
 
 # Fleet incident response — the method

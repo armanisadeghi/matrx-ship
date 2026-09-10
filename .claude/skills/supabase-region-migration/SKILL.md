@@ -1,6 +1,6 @@
 ---
 name: supabase-region-migration
-description: Safely inspect, rehearse, verify, and cut over the AI Matrx Supabase Postgres region migration from Matrx Main in us-west-1 to the prepared AI Matrx project in us-east-1. Use for Supabase region-move status, logical backup/restore, project capacity, Auth/config synchronization, cron or pg_net isolation, credential rotation, consumer inventory, acceptance checks, rollback, or database cutover work.
+description: "Post-mortem and rollback reference for the finished Supabase region move (us-west-1 to us-east-1). Use when a task names `txzxabzwovsujtloxrus` or a `runner-*.sh` script, or needs rollback, logical dump/restore, Auth/config sync, Vault key copy, cron/pg_net isolation, or consumer credential rotation."
 ---
 
 # Supabase region migration
