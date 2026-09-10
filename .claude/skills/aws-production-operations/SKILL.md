@@ -1,6 +1,6 @@
 ---
 name: aws-production-operations
-description: "Runbook for AI Matrx production on AWS ECS/Fargate (us-east-1). Use when checking ECS services, tasks, or alarms, tailing CloudWatch logs, deploying an ECR image, ECS Exec, Terraform in `infrastructure/aws/production-platform`, or failover and migration-stage checks. NOT for an unplanned outage (use fleet-incident)."
+description: "Runbook for AI Matrx production on AWS ECS/Fargate (us-east-1). Use when checking AWS platform status, ECS services, tasks, or alarms, tailing CloudWatch logs, inspecting or deploying ECR images, ECS Exec, Terraform in `infrastructure/aws/production-platform`, or failover and migration-stage checks. NOT for an unplanned outage (use fleet-incident)."
 ---
 
 # AWS production operations
