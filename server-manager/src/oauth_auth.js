@@ -40,6 +40,9 @@ function jwtSecret() {
 function supabaseUrl() {
   return (process.env.SUPABASE_MATRIX_URL || "").replace(/\/$/, "");
 }
+function oauthIssuerUrl() {
+  return (process.env.SUPABASE_MATRIX_OAUTH_ISSUER_URL || `${supabaseUrl()}/auth/v1`).replace(/\/$/, "");
+}
 function supabaseKey() {
   return process.env.SUPABASE_MATRIX_KEY || "";
 }
@@ -124,7 +127,10 @@ export async function verifySupabaseJwt(token) {
   const aud = payload.aud;
   const audOk = aud === JWT_AUDIENCE || (Array.isArray(aud) && aud.includes(JWT_AUDIENCE));
   if (aud && !audOk) throw codedError(`bad audience ${aud}`, "bad_audience");
-  const expectedIssuer = `${supabaseUrl()}/auth/v1`;
+  // A custom Supabase domain may serve Auth and JWKS while tokens retain the
+  // canonical project issuer. Keep the issuer explicit instead of assuming it
+  // can always be derived from the public API URL.
+  const expectedIssuer = oauthIssuerUrl();
   if (payload.iss && payload.iss.replace(/\/$/, "") !== expectedIssuer) {
     throw codedError(`bad issuer ${payload.iss}`, "bad_issuer");
   }

@@ -6,6 +6,7 @@ import { authenticateOAuthAdmin, verifySupabaseJwt } from "./oauth_auth.js";
 const originalFetch = globalThis.fetch;
 const originalEnv = {
   url: process.env.SUPABASE_MATRIX_URL,
+  issuer: process.env.SUPABASE_MATRIX_OAUTH_ISSUER_URL,
   key: process.env.SUPABASE_MATRIX_KEY,
   secret: process.env.SUPABASE_MATRIX_JWT_SECRET,
 };
@@ -13,6 +14,7 @@ const originalEnv = {
 afterEach(() => {
   globalThis.fetch = originalFetch;
   restoreEnv("SUPABASE_MATRIX_URL", originalEnv.url);
+  restoreEnv("SUPABASE_MATRIX_OAUTH_ISSUER_URL", originalEnv.issuer);
   restoreEnv("SUPABASE_MATRIX_KEY", originalEnv.key);
   restoreEnv("SUPABASE_MATRIX_JWT_SECRET", originalEnv.secret);
 });
@@ -82,6 +84,28 @@ test("accepts current Supabase ES256 tokens and resolves the admin", async () =>
   assert.equal(result.ok, true);
   assert.equal(result.isSuperadmin, true);
   assert.equal(jwksRequests, 1, "JWKS should be cached between verifications");
+});
+
+test("accepts the canonical project issuer when Auth is served on a custom domain", async () => {
+  const apiUrl = "https://db.example.com";
+  const issuerUrl = "https://project-ref.supabase.co/auth/v1";
+  process.env.SUPABASE_MATRIX_URL = apiUrl;
+  process.env.SUPABASE_MATRIX_OAUTH_ISSUER_URL = issuerUrl;
+  process.env.SUPABASE_MATRIX_KEY = "test-service-key";
+  delete process.env.SUPABASE_MATRIX_JWT_SECRET;
+
+  const { privateKey, publicKey } = generateKeyPairSync("ec", { namedCurve: "P-256" });
+  const token = es256Token(privateKey, "custom-domain-key", {
+    ...claims(apiUrl),
+    iss: issuerUrl,
+  });
+  globalThis.fetch = async (requestUrl) => {
+    const target = String(requestUrl);
+    assert.ok(target.startsWith(apiUrl), "JWKS must be fetched through the configured API URL");
+    return Response.json({ keys: [publicJwk(publicKey, "custom-domain-key")] });
+  };
+
+  assert.equal((await verifySupabaseJwt(token)).sub, "user-1");
 });
 
 test("refreshes a valid JWKS cache immediately when Supabase rotates kid", async () => {
