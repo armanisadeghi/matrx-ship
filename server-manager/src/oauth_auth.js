@@ -32,6 +32,7 @@ const JWKS_FORCED_REFRESH_MIN_INTERVAL_MS = 30_000;
 // userId -> { level, isAdmin, ts }
 const _adminCache = new Map();
 let _jwksCache = { url: "", keys: [], ts: 0 };
+let _issuerCache = { url: "", issuer: "", ts: 0 };
 let _lastForcedJwksRefresh = 0;
 
 function jwtSecret() {
@@ -40,8 +41,22 @@ function jwtSecret() {
 function supabaseUrl() {
   return (process.env.SUPABASE_MATRIX_URL || "").replace(/\/$/, "");
 }
-function oauthIssuerUrl() {
-  return (process.env.SUPABASE_MATRIX_OAUTH_ISSUER_URL || `${supabaseUrl()}/auth/v1`).replace(/\/$/, "");
+async function oauthIssuerUrl() {
+  const configured = process.env.SUPABASE_MATRIX_OAUTH_ISSUER_URL;
+  if (configured) return configured.replace(/\/$/, "");
+
+  const apiUrl = supabaseUrl();
+  const derived = `${apiUrl}/auth/v1`;
+  const discoveryUrl = `${derived}/.well-known/openid-configuration`;
+  if (_issuerCache.url === discoveryUrl && Date.now() - _issuerCache.ts < JWKS_CACHE_TTL_MS) {
+    return _issuerCache.issuer;
+  }
+  const resp = await fetch(discoveryUrl, { headers: { Accept: "application/json" } });
+  if (!resp.ok) throw codedError(`OIDC discovery failed: HTTP ${resp.status}`, "issuer_unavailable");
+  const issuer = String((await resp.json())?.issuer || "").replace(/\/$/, "");
+  if (!issuer) throw codedError("OIDC discovery response has no issuer", "issuer_invalid");
+  _issuerCache = { url: discoveryUrl, issuer, ts: Date.now() };
+  return issuer;
 }
 function supabaseKey() {
   return process.env.SUPABASE_MATRIX_KEY || "";
@@ -130,9 +145,15 @@ export async function verifySupabaseJwt(token) {
   // A custom Supabase domain may serve Auth and JWKS while tokens retain the
   // canonical project issuer. Keep the issuer explicit instead of assuming it
   // can always be derived from the public API URL.
-  const expectedIssuer = oauthIssuerUrl();
-  if (payload.iss && payload.iss.replace(/\/$/, "") !== expectedIssuer) {
-    throw codedError(`bad issuer ${payload.iss}`, "bad_issuer");
+  if (payload.iss) {
+    const actualIssuer = payload.iss.replace(/\/$/, "");
+    const derivedIssuer = `${supabaseUrl()}/auth/v1`;
+    if (actualIssuer !== derivedIssuer) {
+      const expectedIssuer = await oauthIssuerUrl();
+      if (actualIssuer !== expectedIssuer) {
+        throw codedError(`bad issuer ${payload.iss}`, "bad_issuer");
+      }
+    }
   }
 
   return payload;

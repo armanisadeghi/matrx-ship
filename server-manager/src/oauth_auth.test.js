@@ -90,7 +90,7 @@ test("accepts the canonical project issuer when Auth is served on a custom domai
   const apiUrl = "https://db.example.com";
   const issuerUrl = "https://project-ref.supabase.co/auth/v1";
   process.env.SUPABASE_MATRIX_URL = apiUrl;
-  process.env.SUPABASE_MATRIX_OAUTH_ISSUER_URL = issuerUrl;
+  delete process.env.SUPABASE_MATRIX_OAUTH_ISSUER_URL;
   process.env.SUPABASE_MATRIX_KEY = "test-service-key";
   delete process.env.SUPABASE_MATRIX_JWT_SECRET;
 
@@ -101,8 +101,14 @@ test("accepts the canonical project issuer when Auth is served on a custom domai
   });
   globalThis.fetch = async (requestUrl) => {
     const target = String(requestUrl);
-    assert.ok(target.startsWith(apiUrl), "JWKS must be fetched through the configured API URL");
-    return Response.json({ keys: [publicJwk(publicKey, "custom-domain-key")] });
+    assert.ok(target.startsWith(apiUrl), "OAuth metadata must be fetched through the configured API URL");
+    if (target.endsWith("/.well-known/jwks.json")) {
+      return Response.json({ keys: [publicJwk(publicKey, "custom-domain-key")] });
+    }
+    if (target.endsWith("/.well-known/openid-configuration")) {
+      return Response.json({ issuer: issuerUrl });
+    }
+    throw new Error(`unexpected URL: ${target}`);
   };
 
   assert.equal((await verifySupabaseJwt(token)).sub, "user-1");
