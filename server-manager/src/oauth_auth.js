@@ -10,7 +10,7 @@
 //     (a) its signature checks out against the project's Supabase JWKS (ES256 /
 //         RS256), or the legacy HS256 secret while old tokens are still in use,
 //     (b) it isn't expired and has aud "authenticated", and
-//     (c) the subject is present in public.admins.
+//     (c) the subject is present in admin.admins.
 //   * The SUPERADMIN gate is the admins.level column == "super_admin".
 //
 // Verification uses node:crypto — no JWT dependency. Supabase's asymmetric
@@ -159,7 +159,7 @@ export async function verifySupabaseJwt(token) {
   return payload;
 }
 
-// Look the user up in public.admins (automation-matrix). Returns
+// Look the user up in admin.admins (automation-matrix). Returns
 // { isAdmin, level, isSuperadmin }. Cached per user for ADMIN_CACHE_TTL_MS.
 // Throws on transport error (fail-closed — caller treats as not-admin/denied).
 export async function resolveAdmin(userId) {
@@ -174,9 +174,9 @@ export async function resolveAdmin(userId) {
       apikey: supabaseKey(),
       Authorization: `Bearer ${supabaseKey()}`,
       Accept: "application/json",
-      // This Supabase project's PostgREST defaults to the `api` schema; admins
-      // lives in `public`. Accept-Profile selects the schema for this read.
-      "Accept-Profile": "public",
+      // This Supabase project's PostgREST defaults to the `api` schema; the
+      // canonical admin registry lives in `admin`. Select it explicitly.
+      "Accept-Profile": "admin",
     },
   });
   if (!resp.ok) {

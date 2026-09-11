@@ -66,13 +66,14 @@ test("accepts current Supabase ES256 tokens and resolves the admin", async () =>
   const { privateKey, publicKey } = generateKeyPairSync("ec", { namedCurve: "P-256" });
   const token = es256Token(privateKey, "current-key", claims(url));
   let jwksRequests = 0;
-  globalThis.fetch = async (requestUrl) => {
+  globalThis.fetch = async (requestUrl, options = {}) => {
     const target = String(requestUrl);
     if (target.endsWith("/.well-known/jwks.json")) {
       jwksRequests += 1;
       return Response.json({ keys: [publicJwk(publicKey, "current-key")] });
     }
     if (target.includes("/rest/v1/admins?")) {
+      assert.equal(options.headers?.["Accept-Profile"], "admin");
       return Response.json([{ user_id: "user-1", level: "super_admin" }]);
     }
     throw new Error(`unexpected URL: ${target}`);
