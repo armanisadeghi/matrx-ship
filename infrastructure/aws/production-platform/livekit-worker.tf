@@ -200,9 +200,9 @@ resource "aws_ecs_service" "livekit_worker" {
 
   depends_on = [aws_iam_role_policy.livekit_worker_secret]
 
-  # The operator owns the declared steady count of two; the aidream release
+  # Target tracking owns the count above the redundant floor; the aidream release
   # workflow advances the immutable image revision in task_definition.
-  # No autoscaling by design (D13) — measure a concurrent-room load test first.
+  # Four concurrent two-speaker rooms passed on two tasks on 2026-09-12.
   # ECS resolves `LATEST` to a concrete Fargate platform version on the live
   # service, and nothing in the release pipeline sets platform_version.
   # aidream and workflow-worker already read back `1.4.0`, so re-asserting
@@ -211,4 +211,36 @@ resource "aws_ecs_service" "livekit_worker" {
   # service to a specific platform version, set it here AND drop it from
   # ignore_changes — that is a deliberate deployment.
   lifecycle { ignore_changes = [desired_count, task_definition, platform_version] }
+}
+
+# Reuse the platform's ECS resource-pressure signals. The measured four-room
+# floor is not a claim about maximum room capacity. Scale-in remains disabled
+# until a fresh-image termination/handoff canary proves the receiving worker.
+resource "aws_appautoscaling_target" "livekit_worker" {
+  max_capacity       = var.livekit_worker_scaling.max_tasks
+  min_capacity       = var.livekit_worker_scaling.min_tasks
+  resource_id        = "service/${aws_ecs_cluster.production.name}/${aws_ecs_service.livekit_worker.name}"
+  scalable_dimension = "ecs:service:DesiredCount"
+  service_namespace  = "ecs"
+}
+
+resource "aws_appautoscaling_policy" "livekit_worker" {
+  for_each = {
+    cpu    = { target = var.livekit_worker_scaling.cpu_target, metric = "ECSServiceAverageCPUUtilization" }
+    memory = { target = var.livekit_worker_scaling.memory_target, metric = "ECSServiceAverageMemoryUtilization" }
+  }
+
+  name               = "livekit-worker-${each.key}"
+  policy_type        = "TargetTrackingScaling"
+  resource_id        = aws_appautoscaling_target.livekit_worker.resource_id
+  scalable_dimension = aws_appautoscaling_target.livekit_worker.scalable_dimension
+  service_namespace  = aws_appautoscaling_target.livekit_worker.service_namespace
+
+  target_tracking_scaling_policy_configuration {
+    target_value       = each.value.target
+    scale_in_cooldown  = var.livekit_worker_scaling.scale_in_cooldown
+    scale_out_cooldown = var.livekit_worker_scaling.scale_out_cooldown
+    disable_scale_in   = !var.livekit_worker_scaling.scale_in_enabled
+    predefined_metric_specification { predefined_metric_type = each.value.metric }
+  }
 }

@@ -87,3 +87,38 @@ variable "livekit_worker_image_tag" {
     error_message = "LiveKit worker images must be deployed by a full 40-character Git SHA."
   }
 }
+
+variable "livekit_worker_scaling" {
+  description = "Operator-adjustable LiveKit capacity policy. Initial values follow the 2026-09-12 four-room measurement; review against real demand by 2026-10-12. Enable scale-in only after the fresh-image handoff canary passes."
+  type = object({
+    min_tasks          = number
+    max_tasks          = number
+    cpu_target         = number
+    memory_target      = number
+    scale_in_cooldown  = number
+    scale_out_cooldown = number
+    scale_in_enabled   = bool
+  })
+  default = {
+    min_tasks          = 2
+    max_tasks          = 4
+    cpu_target         = 55
+    memory_target      = 70
+    scale_in_cooldown  = 600
+    scale_out_cooldown = 60
+    scale_in_enabled   = false
+  }
+  validation {
+    condition = (
+      var.livekit_worker_scaling.min_tasks >= 2 &&
+      floor(var.livekit_worker_scaling.min_tasks) == var.livekit_worker_scaling.min_tasks &&
+      var.livekit_worker_scaling.max_tasks >= var.livekit_worker_scaling.min_tasks &&
+      floor(var.livekit_worker_scaling.max_tasks) == var.livekit_worker_scaling.max_tasks &&
+      var.livekit_worker_scaling.cpu_target > 0 && var.livekit_worker_scaling.cpu_target < 100 &&
+      var.livekit_worker_scaling.memory_target > 0 && var.livekit_worker_scaling.memory_target < 100 &&
+      var.livekit_worker_scaling.scale_in_cooldown >= 60 &&
+      var.livekit_worker_scaling.scale_out_cooldown >= 0
+    )
+    error_message = "Keep at least two workers, integral ordered capacity bounds, utilization targets between 0 and 100, and nonnegative cooldowns (scale-in at least 60 seconds)."
+  }
+}
