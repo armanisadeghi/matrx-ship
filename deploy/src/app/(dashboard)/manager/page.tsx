@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
   Settings, Wrench, Loader2, ExternalLink,
   CheckCircle2, AlertTriangle, Globe, RefreshCw,
@@ -12,6 +12,7 @@ import { Badge } from "@matrx/admin-ui/ui/badge";
 import { BuildLogViewer } from "@matrx/admin-ui/components/build-log-viewer";
 import { PageShell } from "@matrx/admin-ui/components/page-shell";
 import { useAuth } from "@/lib/auth-context";
+import { startManagerRecoveryPoll } from "@/lib/manager-recovery-poll";
 
 export default function ManagerPage() {
   const { api } = useAuth();
@@ -20,21 +21,28 @@ export default function ManagerPage() {
   const [rebuilding, setRebuilding] = useState(false);
   const [buildLogs, setBuildLogs] = useState<string[]>([]);
   const [buildPhase, setBuildPhase] = useState<string | null>(null);
+  const recoveryPoll = useRef<ReturnType<typeof startManagerRecoveryPoll> | null>(null);
+  const mounted = useRef(true);
+
+  useEffect(() => {
+    // React Strict Mode replays setup → cleanup → setup in development.
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      recoveryPoll.current?.dispose();
+    };
+  }, []);
 
   const checkManagerStatus = useCallback(async () => {
     try {
-      const res = await fetch("https://manager.dev.codematrx.com/health");
-      if (res.ok) {
-        setManagerStatus("running");
-      } else {
-        setManagerStatus("down");
-      }
+      const body = await api("/api/manager/status", { cache: "no-store" }) as { health_status?: "unknown" | "running" | "down" };
+      setManagerStatus(body.health_status ?? "unknown");
     } catch {
-      setManagerStatus("down");
+      setManagerStatus("unknown");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [api]);
 
   useEffect(() => { checkManagerStatus(); }, [checkManagerStatus]);
 
@@ -58,7 +66,7 @@ export default function ManagerPage() {
       if (reader) {
         while (true) {
           const { done, value } = await reader.read();
-          if (done) break;
+          if (done || !mounted.current) break;
           buffer += decoder.decode(value, { stream: true });
           const lines = buffer.split("\n");
           buffer = lines.pop() || "";
@@ -68,6 +76,7 @@ export default function ManagerPage() {
             else if (line.startsWith("data: ")) {
               try {
                 const data = JSON.parse(line.slice(6));
+                if (!mounted.current) break;
                 if (eventType === "log") setBuildLogs((prev) => [...prev, data.message]);
                 else if (eventType === "phase") { setBuildPhase(data.phase); setBuildLogs((prev) => [...prev, `── ${data.message} ──`]); }
                 else if (eventType === "done") { toast.success("Manager updated + recreated (env reloaded)."); setBuildPhase("done"); }
@@ -78,27 +87,15 @@ export default function ManagerPage() {
         }
       }
 
-      // Poll until manager comes back
-      let attempts = 0;
-      const poll = setInterval(async () => {
-        attempts++;
-        try {
-          const res = await fetch("https://manager.dev.codematrx.com/health");
-          if (res.ok) {
-            clearInterval(poll);
-            toast.success("Server Manager is back online!");
-            setRebuilding(false);
-            setManagerStatus("running");
-          }
-        } catch {
-          if (attempts > 60) {
-            clearInterval(poll);
-            setRebuilding(false);
-            toast.error("Server Manager didn't come back. Check manually.");
-          }
-        }
-      }, 3000);
+      if (!mounted.current) return;
+      recoveryPoll.current?.dispose();
+      recoveryPoll.current = startManagerRecoveryPoll({
+        request: (signal) => api("/api/manager/status", { cache: "no-store", signal }) as Promise<{ health_status?: string }>,
+        onRunning: () => { if (mounted.current) { toast.success("Server Manager is back online!"); setRebuilding(false); setManagerStatus("running"); } },
+        onDeadline: () => { if (mounted.current) { setRebuilding(false); toast.error("Server Manager didn't come back. Check manually."); } },
+      });
     } catch {
+      if (!mounted.current) return;
       toast.info("Server Manager is rebuilding. Connection may drop as it restarts.");
       setBuildPhase("done");
       setRebuilding(false);
@@ -131,6 +128,8 @@ export default function ManagerPage() {
                 <Badge variant="secondary"><Loader2 className="size-3 animate-spin mr-1" /> checking...</Badge>
               ) : managerStatus === "running" ? (
                 <Badge variant="success"><CheckCircle2 className="size-3 mr-1" /> running</Badge>
+              ) : managerStatus === "unknown" ? (
+                <Badge variant="secondary"><AlertTriangle className="size-3 mr-1" /> unable to verify</Badge>
               ) : (
                 <Badge variant="destructive"><AlertTriangle className="size-3 mr-1" /> down</Badge>
               )}
