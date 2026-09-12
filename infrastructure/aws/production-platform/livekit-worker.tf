@@ -40,12 +40,24 @@ resource "aws_security_group" "livekit_worker" {
 # workflow worker carries.
 data "aws_iam_policy_document" "livekit_worker_secret" {
   statement {
-    sid = "ReadOwnRuntimeSecret"
-    actions = [
-      "secretsmanager:DescribeSecret",
-      "secretsmanager:GetSecretValue",
-    ]
+    sid       = "DescribeOwnRuntimeSecret"
+    actions   = ["secretsmanager:DescribeSecret"]
     resources = [aws_secretsmanager_secret.service["livekit-worker"].arn]
+  }
+
+  statement {
+    sid       = "ReadCurrentRuntimeSecretOnly"
+    actions   = ["secretsmanager:GetSecretValue"]
+    resources = [aws_secretsmanager_secret.service["livekit-worker"].arn]
+
+    # Secrets Manager retains the prior broad document as AWSPREVIOUS after a
+    # narrowing write. ECS injects AWSCURRENT by default; bind this role to
+    # that stage so a compromised worker cannot request the retained version.
+    condition {
+      test     = "StringEquals"
+      variable = "secretsmanager:VersionStage"
+      values   = ["AWSCURRENT"]
+    }
   }
 }
 
