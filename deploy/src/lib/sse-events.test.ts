@@ -59,3 +59,22 @@ test("rebuild stream consumer treats done as terminal even when transport EOF ne
   await consumeOperationSseEvents(reader, () => {});
   assert.equal(reads, 1);
 });
+
+test("terminal completion does not wait for a best-effort reader cancellation", async () => {
+  const reader = {
+    async read() {
+      return {
+        done: false as const,
+        value: new TextEncoder().encode("event: done\ndata: {\"success\":true}\n\n"),
+      };
+    },
+    async cancel() {
+      await new Promise<void>((resolve) => setTimeout(resolve, 100));
+    },
+  };
+
+  await Promise.race([
+    consumeOperationSseEvents(reader, () => {}),
+    new Promise<never>((_, reject) => setTimeout(() => reject(new Error("terminal completion waited for cancel")), 25)),
+  ]);
+});

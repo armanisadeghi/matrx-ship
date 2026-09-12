@@ -48,7 +48,14 @@ export async function consumeSseEvents(
     for (const event of parser.push(decoder.decode(value, { stream: true }))) {
       onEvent(event);
       if (options.stopWhen?.(event)) {
-        await reader.cancel?.("received terminal SSE event");
+        // Cancellation only releases transport resources. It cannot delay the
+        // application terminal: browsers may leave its promise pending while
+        // an intermediary drains the stream.
+        try {
+          void reader.cancel?.("received terminal SSE event").catch(() => {});
+        } catch {
+          // A terminal result remains authoritative even if cleanup rejects.
+        }
         return;
       }
     }
