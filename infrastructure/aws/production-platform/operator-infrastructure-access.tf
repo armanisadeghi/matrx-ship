@@ -281,7 +281,21 @@ resource "aws_iam_policy" "operator_infrastructure_access" {
   name        = "matrx-production-operator-infrastructure"
   path        = "/matrx/platform/"
   description = "Terraform resource inspection and the declared private AI Dream path."
-  policy      = data.aws_iam_policy_document.operator_infrastructure_access.json
+  # Statement labels remain readable above; IAM does not require them. Omitting
+  # these nonsemantic labels leaves headroom under the 6,144-character quota.
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [for statement in jsondecode(data.aws_iam_policy_document.operator_infrastructure_access.json).Statement : {
+      for key, value in statement : key => value if key != "Sid"
+    }]
+  })
+
+  lifecycle {
+    postcondition {
+      condition     = length(self.policy) <= 6144
+      error_message = "The operator infrastructure policy exceeds IAM's 6,144-character quota; split or compact it before applying."
+    }
+  }
 }
 
 resource "aws_iam_role_policy_attachment" "operator_infrastructure_access" {
