@@ -1,4 +1,23 @@
 data "aws_iam_policy_document" "operator_infrastructure_access" {
+  # RegisterScalableTarget with the platform's mandatory default tags requires
+  # TagResource as well as the existing scaling-management permission.
+  statement {
+    sid       = "TagDeclaredPlatformScalingTargets"
+    actions   = ["application-autoscaling:TagResource"]
+    resources = ["arn:aws:application-autoscaling:${var.aws_region}:${var.aws_account_id}:scalable-target/*"]
+
+    condition {
+      test     = "StringEquals"
+      variable = "aws:RequestTag/System"
+      values   = [local.common_tags.System]
+    }
+    condition {
+      test     = "StringEquals"
+      variable = "aws:RequestTag/Environment"
+      values   = [local.common_tags.Environment]
+    }
+  }
+
   statement {
     sid = "ReadTerraformManagedResourceDetails"
     actions = [
