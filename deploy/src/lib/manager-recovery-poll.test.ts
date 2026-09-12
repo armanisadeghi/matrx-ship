@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { startManagerRecoveryPoll, type RecoveryClock } from "./manager-recovery-poll";
+import { createBrowserRecoveryClock, startManagerRecoveryPoll, type RecoveryClock } from "./manager-recovery-poll";
 
 function fakeClock() {
   let now = 0, next = 0;
@@ -43,4 +43,29 @@ test("deadline aborts a hung request and reports once", async () => {
   });
   fake.advance(20); await flush();
   assert.equal(aborted, true); assert.equal(deadlines, 1);
+});
+
+test("browser clock preserves the native timer receiver through a recovery completion", async () => {
+  let timerReceiver: unknown;
+  let clearReceiver: unknown;
+  const timerHost = {
+    setTimeout(this: unknown, _callback: () => void, _milliseconds?: number) {
+      timerReceiver = this;
+      return 1 as never;
+    },
+    clearTimeout(this: unknown, _handle?: ReturnType<typeof setTimeout>) {
+      clearReceiver = this;
+    },
+  };
+  let running = false;
+  startManagerRecoveryPoll({
+    clock: createBrowserRecoveryClock(timerHost),
+    request: async () => ({ health_status: "running" }),
+    onRunning: () => { running = true; },
+    onDeadline: () => assert.fail("running response must not reach the deadline"),
+  });
+  await flush();
+  assert.equal(timerReceiver, timerHost, "native timer must not be rebound to the recovery-clock object");
+  assert.equal(clearReceiver, timerHost, "native timer cleanup must preserve its browser receiver");
+  assert.equal(running, true);
 });

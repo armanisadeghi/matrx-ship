@@ -13,9 +13,21 @@ type RecoveryOptions = {
   maxAttempts?: number;
 };
 
-const browserClock: RecoveryClock = {
-  now: () => Date.now(), setTimeout, clearTimeout,
+type BrowserTimerHost = {
+  setTimeout(callback: () => void, milliseconds?: number): ReturnType<typeof setTimeout>;
+  clearTimeout(handle?: ReturnType<typeof setTimeout>): void;
 };
+
+/** Native timer methods require the browser global as their receiver. */
+export function createBrowserRecoveryClock(timerHost: BrowserTimerHost = globalThis): RecoveryClock {
+  return {
+    now: () => Date.now(),
+    setTimeout: (callback, milliseconds) => timerHost.setTimeout(callback, milliseconds),
+    clearTimeout: (handle) => timerHost.clearTimeout(handle),
+  };
+}
+
+const browserClock = createBrowserRecoveryClock();
 
 /** One bounded, abortable recovery request at a time. */
 export function startManagerRecoveryPoll(options: RecoveryOptions) {
