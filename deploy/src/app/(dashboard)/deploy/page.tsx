@@ -6,8 +6,11 @@ import { Loader2 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { DeployTab } from "@/components/deploy/deploy-tab";
 import { BuildLogViewer } from "@/components/deploy/build-log-viewer";
-import { consumeSseEvents } from "@/lib/sse-events";
+import { consumeOperationSseEvents } from "@/lib/sse-events";
 import type { BuildInfo, BuildRecord } from "@/lib/types";
+
+const BUILD_STREAM_TIMEOUT_MS = 10 * 60 * 1000;
+const MANAGER_STREAM_TIMEOUT_MS = 180_000 + 60_000 + 90_000 + 30_000;
 
 export default function DeployPage() {
   const { api } = useAuth();
@@ -29,26 +32,33 @@ export default function DeployPage() {
 
   useEffect(() => { loadData(); }, [loadData]);
 
-  async function readStream(url: string, body?: Record<string, unknown>) {
+  async function readStream(url: string, body?: Record<string, unknown>, timeoutMs = BUILD_STREAM_TIMEOUT_MS) {
     const token = typeof window !== "undefined" ? localStorage.getItem("deploy_token") || "" : "";
-    const response = await fetch(url, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-      body: body ? JSON.stringify(body) : undefined,
-    });
-    if (!response.ok) throw new Error(`Stream request failed (${response.status})`);
-    const reader = response.body?.getReader();
-    if (!reader) throw new Error("No response stream");
-    let terminal = false;
-    let streamError: string | null = null;
-    await consumeSseEvents(reader, ({ event, data }) => {
-      if (event === "log") setBuildLogs((prev) => [...prev, String(data.message)]);
-      else if (event === "phase") { setBuildPhase(String(data.phase)); setBuildLogs((prev) => [...prev, `── ${String(data.message)} ──`]); }
-      else if (event === "done") { terminal = true; toast.success(Array.isArray(data.instances_restarted) ? `Deploy complete — ${data.instances_restarted.length} instance(s) restarted in ${Math.round((Number(data.duration_ms) || 0) / 1000)}s` : String(data.message || "Operation complete")); setBuildPhase("done"); }
-      else if (event === "error") { terminal = true; streamError = String(data.error || "operation failed"); setBuildPhase("error"); }
-    });
-    if (streamError) throw new Error(streamError);
-    if (!terminal) throw new Error("Operation stream ended without a completion result");
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: body ? JSON.stringify(body) : undefined,
+        signal: controller.signal,
+      });
+      if (!response.ok) throw new Error(`Stream request failed (${response.status})`);
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error("No response stream");
+      let terminal = false;
+      let streamError: string | null = null;
+      await consumeOperationSseEvents(reader, ({ event, data }) => {
+        if (event === "log") setBuildLogs((prev) => [...prev, String(data.message)]);
+        else if (event === "phase") { setBuildPhase(String(data.phase)); setBuildLogs((prev) => [...prev, `── ${String(data.message)} ──`]); }
+        else if (event === "done") { terminal = true; toast.success(Array.isArray(data.instances_restarted) ? `Deploy complete — ${data.instances_restarted.length} instance(s) restarted in ${Math.round((Number(data.duration_ms) || 0) / 1000)}s` : String(data.message || "Operation complete")); setBuildPhase("done"); }
+        else if (event === "error") { terminal = true; streamError = String(data.error || "operation failed"); setBuildPhase("error"); }
+      });
+      if (streamError) throw new Error(streamError);
+      if (!terminal) throw new Error("Operation stream ended without a completion result");
+    } finally {
+      window.clearTimeout(timeout);
+    }
   }
 
   async function handleDeploy(name?: string) {
@@ -77,7 +87,7 @@ export default function DeployPage() {
     setDeployingMgr(true);
     setBuildLogs([]);
     setBuildPhase("self-rebuild");
-    try { await readStream("/api/self-rebuild/stream"); }
+    try { await readStream("/api/self-rebuild/stream", undefined, MANAGER_STREAM_TIMEOUT_MS); }
     catch (error) { toast.error(`Manager rebuild was not confirmed: ${(error as Error).message}`); setBuildPhase("error"); }
     finally { setDeployingMgr(false); }
   }

@@ -1,0 +1,76 @@
+import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
+import test from "node:test";
+import { streamingSelfRebuild } from "./docker";
+
+class FakeProcess extends EventEmitter {
+  stdout = new EventEmitter();
+  stderr = new EventEmitter();
+}
+
+test("manual Manager rebuild refuses the existing host deploy lock before compose can run", async () => {
+  const child = new FakeProcess();
+  const events: Array<{ event: string; data: Record<string, unknown> }> = [];
+  let command: string | undefined;
+  const completed = streamingSelfRebuild(
+    (event, data) => events.push({ event, data }),
+    {
+      existsSync: () => true,
+      spawn: ((file: string, args: string[]) => {
+        command = `${file} ${args.join(" ")}`;
+        queueMicrotask(() => child.emit("close", 75));
+        return child as never;
+      }) as unknown as typeof import("node:child_process").spawn,
+    },
+  );
+  await completed;
+  assert.match(command || "", /flock -n -E 75 \/host-srv\/apps\/deploy-state\/.ship-deploy\.lock sh -ceu/);
+  assert.deepEqual(events.at(-1), {
+    event: "error",
+    data: { success: false, error: "A Ship deployment is already running; Manager recreation was not started." },
+  });
+});
+
+test("manual Manager rebuild reports done only after the health-gated locked process succeeds", async () => {
+  const child = new FakeProcess();
+  const events: Array<{ event: string; data: Record<string, unknown> }> = [];
+  const completed = streamingSelfRebuild(
+    (event, data) => events.push({ event, data }),
+    {
+      existsSync: () => true,
+      spawn: ((_: string, args: string[]) => {
+        const script = args.at(-1) || "";
+        assert.match(script, /timeout 60 docker compose up -d --force-recreate server-manager/);
+        assert.match(script, /MATRX_MANAGER_HEALTH=ready/);
+        assert.match(script, /127\.0\.0\.1:3000\/health/);
+        queueMicrotask(() => child.emit("close", 0));
+        return child as never;
+      }) as unknown as typeof import("node:child_process").spawn,
+    },
+  );
+  await completed;
+  assert.deepEqual(events.at(-1), {
+    event: "done",
+    data: { success: true, message: "Manager updated, recreated, and passed its in-container health check." },
+  });
+});
+
+test("unhealthy Manager recreation is an error, never a success terminal", async () => {
+  const child = new FakeProcess();
+  const events: Array<{ event: string; data: Record<string, unknown> }> = [];
+  const completed = streamingSelfRebuild(
+    (event, data) => events.push({ event, data }),
+    {
+      existsSync: () => true,
+      spawn: ((_: string, _args: string[]) => {
+        queueMicrotask(() => child.emit("close", 42));
+        return child as never;
+      }) as unknown as typeof import("node:child_process").spawn,
+    },
+  );
+  await completed;
+  assert.deepEqual(events.at(-1), {
+    event: "error",
+    data: { success: false, error: "Manager recreation completed but its in-container health check did not become ready." },
+  });
+});

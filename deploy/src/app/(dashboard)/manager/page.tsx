@@ -13,7 +13,11 @@ import { BuildLogViewer } from "@matrx/admin-ui/components/build-log-viewer";
 import { PageShell } from "@matrx/admin-ui/components/page-shell";
 import { useAuth } from "@/lib/auth-context";
 import { startManagerRecoveryPoll } from "@/lib/manager-recovery-poll";
-import { consumeSseEvents } from "@/lib/sse-events";
+import { consumeOperationSseEvents } from "@/lib/sse-events";
+
+// Reuses the operation's existing 180s pull, 60s compose, and 90s health
+// bounds, plus a small delivery margin.  A lost SSE connection cannot pin UI.
+const MANAGER_STREAM_TIMEOUT_MS = 180_000 + 60_000 + 90_000 + 30_000;
 
 export default function ManagerPage() {
   const { api } = useAuth();
@@ -53,11 +57,14 @@ export default function ManagerPage() {
     setBuildPhase("self-rebuild");
 
     const token = typeof window !== "undefined" ? localStorage.getItem("deploy_token") || "" : "";
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), MANAGER_STREAM_TIMEOUT_MS);
 
     try {
       const response = await fetch("/api/self-rebuild/stream", {
         method: "POST",
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        signal: controller.signal,
       });
 
       if (!response.ok) throw new Error(`Stream request failed (${response.status})`);
@@ -65,7 +72,7 @@ export default function ManagerPage() {
       if (!reader) throw new Error("No response stream");
       let terminal = false;
       let streamError: string | null = null;
-      await consumeSseEvents(reader, ({ event, data }) => {
+      await consumeOperationSseEvents(reader, ({ event, data }) => {
         if (!mounted.current) return;
         if (event === "log") setBuildLogs((prev) => [...prev, String(data.message)]);
         else if (event === "phase") { setBuildPhase(String(data.phase)); setBuildLogs((prev) => [...prev, `── ${String(data.message)} ──`]); }
@@ -92,6 +99,8 @@ export default function ManagerPage() {
         onRunning: () => { if (mounted.current) { toast.info("Server Manager is responding after an interrupted rebuild stream. Verify its update state."); setRebuilding(false); setManagerStatus("running"); } },
         onDeadline: () => { if (mounted.current) { setRebuilding(false); toast.error("Server Manager could not be verified after the interrupted rebuild stream."); } },
       });
+    } finally {
+      window.clearTimeout(timeout);
     }
   }
 

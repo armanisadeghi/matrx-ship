@@ -12,6 +12,14 @@ const APPS_DIR = join(HOST_SRV, "apps");
 const DEPLOYMENTS_FILE = join(APPS_DIR, "deployments.json");
 const BUILD_HISTORY_FILE = join(APPS_DIR, "build-history.json");
 const TOKENS_FILE = join(APPS_DIR, "tokens.json");
+// Shared by the host pull deployer and the CI SSH deploy.  Manual Manager
+// recreation must take this exact host-mounted lock, not invent another one.
+const SHIP_DEPLOY_LOCK_FILE = join(APPS_DIR, "deploy-state", ".ship-deploy.lock");
+
+type SelfRebuildDependencies = {
+  existsSync: typeof existsSync;
+  spawn: typeof spawn;
+};
 
 // For local development, check for tokens.local.json in the project root
 const LOCAL_TOKENS_FILE = join(process.cwd(), "tokens.local.json");
@@ -509,9 +517,15 @@ export function streamingRebuild(
 
 export function streamingSelfRebuild(
   send: (event: string, data: Record<string, unknown>) => void,
+  dependencies: SelfRebuildDependencies = { existsSync, spawn },
 ): Promise<void> {
   return new Promise((resolve) => {
     const managerDir = join(HOST_SRV, "apps", "server-manager");
+    if (!dependencies.existsSync(join(managerDir, "docker-compose.yml"))) {
+      send("error", { success: false, error: "docker-compose.yml not found in /srv/apps/server-manager/" });
+      resolve();
+      return;
+    }
 
     // The Manager deploys from a prebuilt image (no build: section in its
     // compose file), so this action is really: pull the newest CI image from
@@ -520,21 +534,30 @@ export function streamingSelfRebuild(
     // this button is also the "apply Manager env changes" path, since the
     // Manager's own Secrets store deliberately has no Apply (it can't safely
     // recreate itself; overseeing it is this Deploy server's whole job).
-    send("phase", { phase: "pull", message: "Pulling latest Manager image from GHCR (best-effort)..." });
-    const pull = exec("docker pull ghcr.io/armanisadeghi/matrx-ship-manager:latest", { timeout: 180000 });
-    if (pull.success) {
-      exec("docker tag matrx-ship-manager:latest matrx-ship-manager:rollback 2>/dev/null");
-      exec("docker tag ghcr.io/armanisadeghi/matrx-ship-manager:latest matrx-ship-manager:latest");
-      send("log", { message: "Pulled + retagged latest GHCR image (previous kept as :rollback)." });
-    } else {
-      send("log", { message: "GHCR pull failed (offline or auth) — recreating with the image already on this host." });
-    }
-
-    send("phase", { phase: "recreate", message: "Recreating Manager container (env re-read)..." });
-    send("log", { message: "Running: docker compose up -d --force-recreate server-manager" });
-    send("log", { message: `Working directory: ${managerDir}` });
-
-    const proc = spawn("docker", ["compose", "up", "-d", "--force-recreate", "server-manager"], {
+    send("phase", { phase: "serialize", message: "Waiting for the shared Ship deployment lock..." });
+    send("log", { message: "Manual Manager recreation uses the same lock as CI and the host deploy poller." });
+    const command = `
+      set -u
+      if timeout 180 docker pull ghcr.io/armanisadeghi/matrx-ship-manager:latest; then
+        docker tag matrx-ship-manager:latest matrx-ship-manager:rollback 2>/dev/null || true
+        docker tag ghcr.io/armanisadeghi/matrx-ship-manager:latest matrx-ship-manager:latest
+        echo "MATRX_MANAGER_PULL=latest"
+      else
+        echo "MATRX_MANAGER_PULL=local-fallback" >&2
+      fi
+      timeout 60 docker compose up -d --force-recreate server-manager
+      for _ in $(seq 1 45); do
+        if docker inspect matrx-manager --format '{{.State.Running}}' 2>/dev/null | grep -qx true \\
+          && timeout 5 docker exec matrx-manager node -e 'fetch("http://127.0.0.1:3000/health",{signal:AbortSignal.timeout(3000)}).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))'; then
+          echo "MATRX_MANAGER_HEALTH=ready"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "MATRX_MANAGER_HEALTH=timeout" >&2
+      exit 42
+    `;
+    const proc = dependencies.spawn("flock", ["-n", "-E", "75", SHIP_DEPLOY_LOCK_FILE, "sh", "-ceu", command], {
       cwd: managerDir,
       env: { ...process.env, PATH: process.env.PATH },
     });
@@ -553,7 +576,11 @@ export function streamingSelfRebuild(
 
     proc.on("close", (code: number | null) => {
       if (code === 0) {
-        send("done", { success: true, message: "Manager updated + recreated (latest image, env reloaded). Connection may drop momentarily while it comes up." });
+        send("done", { success: true, message: "Manager updated, recreated, and passed its in-container health check." });
+      } else if (code === 75) {
+        send("error", { success: false, error: "A Ship deployment is already running; Manager recreation was not started." });
+      } else if (code === 42) {
+        send("error", { success: false, error: "Manager recreation completed but its in-container health check did not become ready." });
       } else {
         send("error", { success: false, error: `docker compose exited with code ${code}` });
       }

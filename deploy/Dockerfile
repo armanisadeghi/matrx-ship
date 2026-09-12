@@ -5,7 +5,7 @@
 FROM node:22-alpine AS base
 
 # Install Docker CLI (with buildx), git, and AWS CLI
-RUN apk add --no-cache docker-cli docker-cli-buildx docker-cli-compose git curl aws-cli
+RUN apk add --no-cache docker-cli docker-cli-buildx docker-cli-compose git curl aws-cli util-linux
 
 # Install pnpm
 RUN corepack enable && corepack prepare pnpm@10.28.2 --activate
@@ -42,7 +42,7 @@ RUN pnpm build
 FROM node:22-alpine AS runner
 
 # Install Docker CLI (with buildx), git, and AWS CLI
-RUN apk add --no-cache docker-cli docker-cli-buildx docker-cli-compose git curl aws-cli
+RUN apk add --no-cache docker-cli docker-cli-buildx docker-cli-compose git curl aws-cli util-linux
 
 WORKDIR /app
 ENV NODE_ENV=production
