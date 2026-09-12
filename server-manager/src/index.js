@@ -2562,7 +2562,7 @@ const ORCH_URL = (process.env.MATRX_HOSTED_ORCHESTRATOR_URL || "https://orchestr
 const ORCH_KEY = process.env.MATRX_HOSTED_ORCHESTRATOR_API_KEY || process.env.SANDBOX_ORCHESTRATOR_HOSTED_API_KEY || "";
 // EC2-tier orchestrator (matrx-sandbox-host-dev). Only its public root (`/`) is
 // read for drift detection — no API key needed. Override via env if the IP moves.
-const EC2_ORCH_URL = (process.env.MATRX_EC2_ORCHESTRATOR_URL || "http://54.144.86.132:8000").replace(/\/$/, "");
+const EC2_ORCH_URL = (process.env.MATRX_EC2_ORCHESTRATOR_URL || "https://sandbox-orchestrator.matrxserver.com").replace(/\/$/, "");
 
 async function orchFetch(path, init = {}) {
   const headers = { ...(init.headers || {}) };

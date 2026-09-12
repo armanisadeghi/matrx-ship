@@ -126,16 +126,6 @@ data "aws_iam_policy_document" "operator_infrastructure_access" {
   }
 
   statement {
-    sid = "ManageBrowserProfileMountPolicy"
-    actions = [
-      "iam:DeleteRolePolicy",
-      "iam:GetRolePolicy",
-      "iam:PutRolePolicy",
-    ]
-    resources = [aws_iam_role.browser_worker_task.arn]
-  }
-
-  statement {
     sid = "ManageDedicatedBrowserWorkerRole"
     actions = [
       "iam:AttachRolePolicy",
@@ -152,14 +142,21 @@ data "aws_iam_policy_document" "operator_infrastructure_access" {
     resources = ["arn:aws:iam::${var.aws_account_id}:role/matrx/platform/matrx-production-browser-worker-task"]
   }
 
+  # Keep all inline-role-policy administration explicit and tightly scoped.
+  # The sandbox entry is solely for the Manager's encrypted, random,
+  # short-lived secret-transfer prefix; it grants no broad bucket access.
   statement {
-    sid = "ManageAidreamGithubDeployPolicy"
+    sid = "ManageDeclaredInlineRolePolicies"
     actions = [
       "iam:DeleteRolePolicy",
       "iam:GetRolePolicy",
       "iam:PutRolePolicy",
     ]
-    resources = ["arn:aws:iam::${var.aws_account_id}:role/matrx-aidream-gha-deploy"]
+    resources = [
+      aws_iam_role.browser_worker_task.arn,
+      "arn:aws:iam::${var.aws_account_id}:role/matrx-aidream-gha-deploy",
+      "arn:aws:iam::${var.aws_account_id}:role/matrx-sandbox-host-dev",
+    ]
   }
 
   statement {
