@@ -53,6 +53,7 @@ import {
 import http from "node:http";
 import { attachTerminalWs } from "./terminal_ws.js";
 import { oauthEnabled, authenticateOAuthAdmin } from "./oauth_auth.js";
+import { waitForOrchestratorReady } from "./orchestrator_readiness.js";
 
 const PORT = process.env.PORT || 3000;
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -4182,29 +4183,19 @@ if (FLEET_OPS_SYNC_SECONDS > 0) {
   console.log(`[fleet-ops-sync] mirroring fleet health to ops-triage every ${FLEET_OPS_SYNC_SECONDS}s (configured=${opsConfigured()})`);
 }
 
-// Wait for the hosted orchestrator's `/` to respond 200. The Manager hits this
+// Wait for an orchestrator's `/` to respond 200. The Manager hits this
 // after a recreate so the UI sees "ready" before it tries the next call (and
 // stops surfacing the brief Traefik 404 / connection-refused window).
-async function waitForOrchestratorReady(url = ORCH_URL, totalMs = 30000, stepMs = 1000) {
-  const start = Date.now();
-  while (Date.now() - start < totalMs) {
-    try {
-      const r = await fetch(`${url}/`, { signal: AbortSignal.timeout(3000) });
-      if (r.ok) return { ready: true, waited_ms: Date.now() - start };
-    } catch { /* still booting */ }
-    await new Promise((r) => setTimeout(r, stepMs));
-  }
-  return { ready: false, waited_ms: Date.now() - start };
-}
-
 // Public readiness probe — the UI calls this AFTER a rebuild/recreate to know
 // when it's safe to refresh the rest of the page without hitting the brief
 // post-recreate "Orchestrator 404 page not found" (which is just Traefik
 // returning its default 404 before the new container is registered).
 app.get("/api/orchestrator/ready", authMiddleware, async (req, res) => {
-  const target = req.query.target === "ec2" ? EC2_ORCH_URL : ORCH_URL;
+  const isEc2 = req.query.target === "ec2";
+  const target = isEc2 ? EC2_ORCH_URL : ORCH_URL;
+  const apiKey = isEc2 ? EC2_ORCH_KEY : ORCH_KEY;
   const totalMs = Math.min(60000, Math.max(1000, Number(req.query.wait_ms) || 30000));
-  const r = await waitForOrchestratorReady(target, totalMs);
+  const r = await waitForOrchestratorReady({ url: target, apiKey, totalMs });
   res.status(r.ready ? 200 : 504).json({ ...r, target });
 });
 

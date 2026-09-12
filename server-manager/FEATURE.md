@@ -66,6 +66,11 @@ both running tiers with the tested `deploy/hosted` approval ref. The latest
 successful Deploy workflow is useful context, but it is neither the desired
 release nor proof of what is running.
 
+Every Manager probe of an orchestrator root, including
+`GET /api/orchestrator/ready`, sends that tier's configured `X-API-Key`.
+An unauthenticated 401/403 is not an orchestrator outage and must never be
+reported as one.
+
 Legacy EC2 orchestrators may not expose `source_sha` yet. In that case the
 Manager reads `/home/ec2-user/orchestrator/.source-sha` over SSM while also
 requiring the systemd service to be active. If the moving GitHub approval ref
@@ -149,5 +154,6 @@ For changes to this surface:
 
 ## Change log
 
+- 2026-09-11 — Readiness probes authenticate separately to the hosted and EC2 orchestrators instead of turning protected healthy roots into false 504 outages.
 - 2026-08-23 — Fleet ops events require the registered operation's explicit organization; removed recent-event organization borrowing.
 - 2026-08-21 — Fleet ops sync refuses generic Supabase project substitution.
