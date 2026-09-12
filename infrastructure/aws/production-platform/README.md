@@ -157,6 +157,12 @@ bootstrap value; the bootstrap expands it into the application process environme
 wrapper value before executing the image's canonical entrypoint. Terraform never reads or stores the
 secret payload.
 
+The AI Dream and workflow-worker task roles share a separate, object-only recording-custody grant
+for `matrx-voice-recordings-prod-872515272894/twilio/us1/owner-beta/*`: `GetObject` authorizes
+HEAD and streamed adoption/read, and `DeleteObject` permits the canonical governed retention path.
+They receive no recording-bucket list, write, ACL/tag, bucket-administration, or outside-prefix
+permission. The Twilio writer's separate write-only boundary is unchanged.
+
 ## Production workflow worker
 
 The workflow worker is the single production scheduler/queue consumer in AWS. Its database claims

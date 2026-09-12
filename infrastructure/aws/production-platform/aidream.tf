@@ -75,6 +75,20 @@ data "aws_iam_policy_document" "aidream_aws_services" {
     ]
   }
 
+  # The completed recording worker runs in either the API or workflow task.
+  # Both need only object-level custody over Twilio's dedicated owner-beta prefix:
+  # HEAD/streaming adoption authorizes as GetObject, and governed retention as DeleteObject.
+  statement {
+    sid = "ManageVoiceRecordingCustodyObjects"
+    actions = [
+      "s3:DeleteObject",
+      "s3:GetObject",
+    ]
+    resources = [
+      "arn:aws:s3:::matrx-voice-recordings-prod-872515272894/twilio/us1/owner-beta/*",
+    ]
+  }
+
   statement {
     sid = "UseRedactionEscrowKey"
     actions = [
