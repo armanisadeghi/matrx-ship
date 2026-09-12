@@ -188,8 +188,8 @@ resource "aws_ecs_service" "livekit_worker" {
 
   depends_on = [aws_iam_role_policy.livekit_worker_secret]
 
-  # The operator owns desired_count (MRI-C1 raises it from 0 to 1); the aidream
-  # release workflow advances the immutable image revision in task_definition.
+  # The operator owns the declared steady count of two; the aidream release
+  # workflow advances the immutable image revision in task_definition.
   # No autoscaling by design (D13) — measure a concurrent-room load test first.
   # ECS resolves `LATEST` to a concrete Fargate platform version on the live
   # service, and nothing in the release pipeline sets platform_version.

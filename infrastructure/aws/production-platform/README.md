@@ -186,7 +186,7 @@ originate in AI Dream, while idle lease renewal originates in the workflow worke
 
 `livekit-worker.tf` declares the canonical Meet note-taker: the same AI Dream image running with
 `MATRX_ROLE=livekit_worker`, dispatched by the image's own `entrypoint.sh` with no command override.
-It is 1 vCPU / 2 GB, has no ingress, runs in the private subnets with `assignPublicIp` disabled, and
+It is 2 vCPU / 8 GiB, has no ingress, runs in the private subnets with `assignPublicIp` disabled, and
 reaches LiveKit Cloud (wss), Supabase, and the speech-to-text providers through the NAT gateways —
 the same egress path as the workflow worker. Its container health check is the LiveKit agents SDK
 worker endpoint on `http://localhost:8081/`.

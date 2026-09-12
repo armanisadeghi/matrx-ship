@@ -78,22 +78,16 @@ resource "aws_cloudwatch_metric_alarm" "browser_worker_memory" {
   }
 }
 
-# MRI-B1 / D13: no autoscaling. One task is the whole pool until a
-# concurrent-room load test says otherwise, so "fewer than one running task"
-# is the correct availability signal.
-#
-# HONEST STATE: this alarm sits in ALARM from creation until MRI-C1 raises the
-# service's desired count from 0 to 1 with an image that carries the
-# `livekit_worker` role. That is the truth — there is no note-taker worker
-# running under the canonical service yet — and it is deliberately visible
-# rather than suppressed.
+# D13 deliberately has no autoscaling until a concurrent-room load test selects
+# its signal. The declared steady pool is nevertheless two tasks across two
+# availability zones, so losing one task is a redundancy failure and must alarm.
 resource "aws_cloudwatch_metric_alarm" "livekit_worker_running" {
   alarm_name          = "matrx-production-livekit-worker-not-running"
-  alarm_description   = "The canonical LiveKit room worker has no running ECS task. Until MRI-C1 flips desired_count from 0 to 1, this is the expected, declared state of an unfinished rollout."
+  alarm_description   = "The canonical LiveKit room worker has fewer than two running tasks; Meet has lost its declared cross-AZ redundancy."
   namespace           = "ECS/ContainerInsights"
   metric_name         = "RunningTaskCount"
   comparison_operator = "LessThanThreshold"
-  threshold           = 1
+  threshold           = 2
   evaluation_periods  = 2
   datapoints_to_alarm = 2
   period              = 60
@@ -108,7 +102,7 @@ resource "aws_cloudwatch_metric_alarm" "livekit_worker_running" {
 
 resource "aws_cloudwatch_metric_alarm" "livekit_worker_memory" {
   alarm_name          = "matrx-production-livekit-worker-memory-high"
-  alarm_description   = "The canonical LiveKit room worker averaged more than 85 percent memory utilization for 15 minutes. Transcription streams scale with concurrent rooms; this is the signal that 1 vCPU / 2 GB (D13) is no longer enough."
+  alarm_description   = "The canonical LiveKit room worker averaged more than 85 percent memory utilization for 15 minutes. Transcription streams scale with concurrent rooms; this is the signal that the declared 2 vCPU / 8 GiB task size needs review."
   namespace           = "AWS/ECS"
   metric_name         = "MemoryUtilization"
   comparison_operator = "GreaterThanThreshold"
