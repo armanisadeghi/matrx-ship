@@ -157,6 +157,13 @@ bootstrap value; the bootstrap expands it into the application process environme
 wrapper value before executing the image's canonical entrypoint. Terraform never reads or stores the
 secret payload.
 
+`FORWARDED_ALLOW_IPS` is a runtime-secret network boundary, not a Terraform value. It must name
+only the CIDRs of the live public and internal ALB subnets (currently `10.42.0.0/20`,
+`10.42.16.0/20`, `10.42.128.0/20`, and `10.42.144.0/20`) so Uvicorn accepts the ALB's forwarded
+scheme without trusting a broader VPC or `*`. Keep that list synchronized with ALB subnet changes:
+the aidream security group permits port 8000 only from the two ALB security groups, which is the
+corresponding network admission boundary.
+
 The AI Dream and workflow-worker task roles share a separate, object-only recording-custody grant
 for `matrx-voice-recordings-prod-872515272894/twilio/us1/owner-beta/*`: `GetObject` authorizes
 HEAD and streamed adoption/read, and `DeleteObject` permits the canonical governed retention path.
