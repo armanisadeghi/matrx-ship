@@ -562,19 +562,24 @@ export function streamingSelfRebuild(
       env: { ...process.env, PATH: process.env.PATH },
     });
 
+    let terminalSent = false;
     proc.stdout.on("data", (chunk: Buffer) => {
+      if (terminalSent) return;
       for (const line of chunk.toString().split("\n").filter(Boolean)) {
         send("log", { message: line });
       }
     });
 
     proc.stderr.on("data", (chunk: Buffer) => {
+      if (terminalSent) return;
       for (const line of chunk.toString().split("\n").filter(Boolean)) {
         send("log", { message: line });
       }
     });
 
-    proc.on("close", (code: number | null) => {
+    const finish = (code: number | null) => {
+      if (terminalSent) return;
+      terminalSent = true;
       if (code === 0) {
         send("done", { success: true, message: "Manager updated, recreated, and passed its in-container health check." });
       } else if (code === 75) {
@@ -585,9 +590,18 @@ export function streamingSelfRebuild(
         send("error", { success: false, error: `docker compose exited with code ${code}` });
       }
       resolve();
-    });
+    };
 
-    proc.on("error", (err: Error) => {
+    // `close` waits for stdio, but a Docker/utility child can exit after
+    // producing its final health marker while that close notification stalls.
+    // A zero exit is already health-gated by the command above, so terminalize
+    // on either lifecycle event and make duplicate delivery harmless.
+    proc.once("exit", finish);
+    proc.once("close", finish);
+
+    proc.once("error", (err: Error) => {
+      if (terminalSent) return;
+      terminalSent = true;
       send("error", { success: false, error: err.message });
       resolve();
     });
