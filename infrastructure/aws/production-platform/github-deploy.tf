@@ -4,6 +4,21 @@ data "aws_iam_role" "aidream_github_deploy" {
 
 data "aws_iam_policy_document" "aidream_github_deploy" {
   statement {
+    sid     = "VerifyCurrentLiveKitWorkerSecretContract"
+    actions = ["secretsmanager:GetSecretValue"]
+    resources = [
+      aws_secretsmanager_secret.service["aidream"].arn,
+      aws_secretsmanager_secret.service["livekit-worker"].arn,
+    ]
+
+    condition {
+      test     = "StringEquals"
+      variable = "secretsmanager:VersionStage"
+      values   = ["AWSCURRENT"]
+    }
+  }
+
+  statement {
     sid       = "ECRAuth"
     actions   = ["ecr:GetAuthorizationToken"]
     resources = ["*"]
