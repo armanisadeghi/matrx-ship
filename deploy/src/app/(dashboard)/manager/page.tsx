@@ -13,6 +13,7 @@ import { BuildLogViewer } from "@matrx/admin-ui/components/build-log-viewer";
 import { PageShell } from "@matrx/admin-ui/components/page-shell";
 import { useAuth } from "@/lib/auth-context";
 import { startManagerRecoveryPoll } from "@/lib/manager-recovery-poll";
+import { consumeSseEvents } from "@/lib/sse-events";
 
 export default function ManagerPage() {
   const { api } = useAuth();
@@ -59,46 +60,38 @@ export default function ManagerPage() {
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
       });
 
+      if (!response.ok) throw new Error(`Stream request failed (${response.status})`);
       const reader = response.body?.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-
-      if (reader) {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done || !mounted.current) break;
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split("\n");
-          buffer = lines.pop() || "";
-          let eventType = "";
-          for (const line of lines) {
-            if (line.startsWith("event: ")) eventType = line.slice(7);
-            else if (line.startsWith("data: ")) {
-              try {
-                const data = JSON.parse(line.slice(6));
-                if (!mounted.current) break;
-                if (eventType === "log") setBuildLogs((prev) => [...prev, data.message]);
-                else if (eventType === "phase") { setBuildPhase(data.phase); setBuildLogs((prev) => [...prev, `── ${data.message} ──`]); }
-                else if (eventType === "done") { toast.success("Manager updated + recreated (env reloaded)."); setBuildPhase("done"); }
-                else if (eventType === "error") { toast.error(`Rebuild failed: ${data.error}`); setBuildPhase("error"); }
-              } catch { /* skip */ }
-            }
-          }
-        }
-      }
+      if (!reader) throw new Error("No response stream");
+      let terminal = false;
+      let streamError: string | null = null;
+      await consumeSseEvents(reader, ({ event, data }) => {
+        if (!mounted.current) return;
+        if (event === "log") setBuildLogs((prev) => [...prev, String(data.message)]);
+        else if (event === "phase") { setBuildPhase(String(data.phase)); setBuildLogs((prev) => [...prev, `── ${String(data.message)} ──`]); }
+        else if (event === "done") { terminal = true; toast.success("Manager updated + recreated (env reloaded)."); setBuildPhase("done"); }
+        else if (event === "error") { terminal = true; streamError = String(data.error || "rebuild failed"); setBuildPhase("error"); }
+      });
 
       if (!mounted.current) return;
+      if (streamError) throw new Error(streamError);
+      if (!terminal) throw new Error("Manager rebuild stream ended without a completion result");
       recoveryPoll.current?.dispose();
       recoveryPoll.current = startManagerRecoveryPoll({
         request: (signal) => api("/api/manager/status", { cache: "no-store", signal }) as Promise<{ health_status?: string }>,
         onRunning: () => { if (mounted.current) { toast.success("Server Manager is back online!"); setRebuilding(false); setManagerStatus("running"); } },
         onDeadline: () => { if (mounted.current) { setRebuilding(false); toast.error("Server Manager didn't come back. Check manually."); } },
       });
-    } catch {
+    } catch (error) {
       if (!mounted.current) return;
-      toast.info("Server Manager is rebuilding. Connection may drop as it restarts.");
-      setBuildPhase("done");
-      setRebuilding(false);
+      setBuildPhase("error");
+      toast.error(`Manager rebuild was not confirmed: ${(error as Error).message}. Checking availability.`);
+      recoveryPoll.current?.dispose();
+      recoveryPoll.current = startManagerRecoveryPoll({
+        request: (signal) => api("/api/manager/status", { cache: "no-store", signal }) as Promise<{ health_status?: string }>,
+        onRunning: () => { if (mounted.current) { toast.info("Server Manager is responding after an interrupted rebuild stream. Verify its update state."); setRebuilding(false); setManagerStatus("running"); } },
+        onDeadline: () => { if (mounted.current) { setRebuilding(false); toast.error("Server Manager could not be verified after the interrupted rebuild stream."); } },
+      });
     }
   }
 

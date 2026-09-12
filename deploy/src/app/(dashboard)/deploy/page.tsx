@@ -6,6 +6,7 @@ import { Loader2 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { DeployTab } from "@/components/deploy/deploy-tab";
 import { BuildLogViewer } from "@/components/deploy/build-log-viewer";
+import { consumeSseEvents } from "@/lib/sse-events";
 import type { BuildInfo, BuildRecord } from "@/lib/types";
 
 export default function DeployPage() {
@@ -35,30 +36,19 @@ export default function DeployPage() {
       headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
       body: body ? JSON.stringify(body) : undefined,
     });
+    if (!response.ok) throw new Error(`Stream request failed (${response.status})`);
     const reader = response.body?.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
     if (!reader) throw new Error("No response stream");
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop() || "";
-      let eventType = "";
-      for (const line of lines) {
-        if (line.startsWith("event: ")) eventType = line.slice(7);
-        else if (line.startsWith("data: ")) {
-          try {
-            const data = JSON.parse(line.slice(6));
-            if (eventType === "log") setBuildLogs((prev) => [...prev, data.message]);
-            else if (eventType === "phase") { setBuildPhase(data.phase); setBuildLogs((prev) => [...prev, `── ${data.message} ──`]); }
-            else if (eventType === "done") { toast.success(data.instances_restarted ? `Deploy complete — ${data.instances_restarted.length} instance(s) restarted in ${Math.round((data.duration_ms || 0) / 1000)}s` : data.message || "Operation complete"); setBuildPhase("done"); }
-            else if (eventType === "error") { toast.error(`Failed: ${data.error}`); setBuildPhase("error"); }
-          } catch { /* skip */ }
-        }
-      }
-    }
+    let terminal = false;
+    let streamError: string | null = null;
+    await consumeSseEvents(reader, ({ event, data }) => {
+      if (event === "log") setBuildLogs((prev) => [...prev, String(data.message)]);
+      else if (event === "phase") { setBuildPhase(String(data.phase)); setBuildLogs((prev) => [...prev, `── ${String(data.message)} ──`]); }
+      else if (event === "done") { terminal = true; toast.success(Array.isArray(data.instances_restarted) ? `Deploy complete — ${data.instances_restarted.length} instance(s) restarted in ${Math.round((Number(data.duration_ms) || 0) / 1000)}s` : String(data.message || "Operation complete")); setBuildPhase("done"); }
+      else if (event === "error") { terminal = true; streamError = String(data.error || "operation failed"); setBuildPhase("error"); }
+    });
+    if (streamError) throw new Error(streamError);
+    if (!terminal) throw new Error("Operation stream ended without a completion result");
   }
 
   async function handleDeploy(name?: string) {
@@ -88,7 +78,7 @@ export default function DeployPage() {
     setBuildLogs([]);
     setBuildPhase("self-rebuild");
     try { await readStream("/api/self-rebuild/stream"); }
-    catch { toast.info("Server Manager is rebuilding. Connection may drop."); setBuildPhase("done"); }
+    catch (error) { toast.error(`Manager rebuild was not confirmed: ${(error as Error).message}`); setBuildPhase("error"); }
     finally { setDeployingMgr(false); }
   }
 
