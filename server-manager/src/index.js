@@ -1,4 +1,5 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { formatDurationMs, formatFileSize } from "@ai-matrx/kit/format";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import express from "express";
 import { z } from "zod";
@@ -264,13 +265,6 @@ function exec(cmd, { timeout = 30000, cwd } = {}) {
   }
 }
 
-function formatBytes(bytes) {
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  let i = 0;
-  let val = bytes;
-  while (val >= 1024 && i < units.length - 1) { val /= 1024; i++; }
-  return `${val.toFixed(1)} ${units[i]}`;
-}
 
 // ── Input safety ─────────────────────────────────────────────────────────────
 // Instance/container names flow into shell-built `docker` commands all over this
@@ -913,8 +907,7 @@ function getBuildInfo() {
     const id = parts[0]?.replace("sha256:", "").substring(0, 12);
     const created = parts.slice(1).join(" ");
     const ageMs = created ? Date.now() - new Date(created).getTime() : 0;
-    const ageHours = Math.floor(ageMs / 3600000);
-    currentImage = { id, created, age: ageHours < 24 ? `${ageHours}h` : `${Math.floor(ageHours / 24)}d ${ageHours % 24}h` };
+    currentImage = { id, created, age: formatDurationMs(ageMs, { style: "coarse" }) };
   }
 
   // Git info from source
@@ -1145,9 +1138,9 @@ function getSystemInfo() {
     cpus: cpus().length,
     cpu_model: cpus()[0]?.model || "unknown",
     memory: {
-      total: formatBytes(totalmem()),
-      free: formatBytes(freemem()),
-      used: formatBytes(totalmem() - freemem()),
+      total: formatFileSize(totalmem()),
+      free: formatFileSize(freemem()),
+      used: formatFileSize(totalmem() - freemem()),
       percent: ((1 - freemem() / totalmem()) * 100).toFixed(1) + "%",
     },
     disk: { total: diskParts[0] || "?", used: diskParts[1] || "?", available: diskParts[2] || "?", percent: diskParts[3] || "?" },
@@ -1464,7 +1457,7 @@ function createServer(ctx = {}) {
       const file = `${name}_${ts}.sql`;
       const path = join(BACKUPS_DIR, name, file);
       const result = exec(`docker exec db-${name} pg_dump -U ship ship > ${path}`, { timeout: 60000 });
-      if (result.success) return textResult({ success: true, instance: name, backup_file: `/srv/apps/backups/${name}/${file}`, size: formatBytes(statSync(path).size) });
+      if (result.success) return textResult({ success: true, instance: name, backup_file: `/srv/apps/backups/${name}/${file}`, size: formatFileSize(statSync(path).size) });
       return textResult({ success: false, error: result.error });
     }
   );
@@ -1691,7 +1684,7 @@ app.get("/api/instances/:name", authMiddleware, async (req, res) => {
         .filter((f) => f.endsWith(".sql"))
         .map((f) => {
           const st = statSync(join(backupDir, f));
-          return { file: f, size: formatBytes(st.size), created: st.mtime.toISOString() };
+          return { file: f, size: formatFileSize(st.size), created: st.mtime.toISOString() };
         })
         .sort((a, b) => b.created.localeCompare(a.created));
     }
@@ -1761,7 +1754,7 @@ app.get("/api/instances/:name/backups", authMiddleware, async (req, res) => {
     if (existsSync(backupDir)) {
       for (const f of readdirSync(backupDir).filter((x) => x.endsWith(".sql"))) {
         const st = statSync(join(backupDir, f));
-        backups.push({ file: f, size: formatBytes(st.size), created: st.mtime.toISOString() });
+        backups.push({ file: f, size: formatFileSize(st.size), created: st.mtime.toISOString() });
       }
       backups.sort((a, b) => b.created.localeCompare(a.created));
     }
@@ -1812,7 +1805,7 @@ app.post("/api/instances/:name/backup", authMiddleware, requireRole("admin", "de
   const file = `${name}_${ts}.sql`;
   const path = join(BACKUPS_DIR, name, file);
   const result = exec(`docker exec db-${name} pg_dump -U ship ship > ${path}`, { timeout: 60000 });
-  if (result.success) res.json({ success: true, backup_file: `/srv/apps/backups/${name}/${file}`, size: formatBytes(statSync(path).size) });
+  if (result.success) res.json({ success: true, backup_file: `/srv/apps/backups/${name}/${file}`, size: formatFileSize(statSync(path).size) });
   else res.status(500).json({ success: false, error: result.error });
 });
 
@@ -2951,8 +2944,9 @@ async function buildVersionsReport() {
     const running = exec("docker inspect matrx-manager --format '{{.Image}}' 2>/dev/null");
     const runningId = (running.output || "").trim().replace("sha256:", "").slice(0, 12) || null;
     const current = !!runningId && !!mgr.id && runningId === mgr.id;
-    const ageH = mgr.created ? Math.floor((Date.now() - new Date(mgr.created).getTime()) / 3600000) : null;
-    const age = ageH == null ? "" : ageH < 24 ? `${ageH}h old` : `${Math.floor(ageH / 24)}d old`;
+    const age = mgr.created
+      ? `${formatDurationMs(Date.now() - new Date(mgr.created).getTime(), { style: "coarse" })} old`
+      : "";
     systems.push({
       id: "manager", name: "Server Manager (this admin UI)", kind: "manager",
       current: `running image ${runningId || "unknown"}`,
@@ -3311,7 +3305,7 @@ async function checkOrchestratorDrift() {
     if (startedAgoMs !== null && startedAgoMs < 150000) {
       return {
         id: "orchestrator-drift", label: "Orchestrator freshness", status: "restarting",
-        detail: `Hosted orchestrator was recreated ${Math.round(startedAgoMs / 1000)}s ago and is not answering yet (${hErr}) — normal for ~a minute after a release. Goes critical if it stays down.`,
+        detail: `Hosted orchestrator was recreated ${formatDurationMs(startedAgoMs, { style: "compact" })} ago and is not answering yet (${hErr}) — normal for ~a minute after a release. Goes critical if it stays down.`,
         hosted, ec2, repo, actions: [],
       };
     }
@@ -3700,9 +3694,9 @@ async function computeFleetHealth() {
     if (c.status !== "critical" && c.status !== "warning") continue;
     const e = expectedRestart(c.id);
     if (e) {
-      const left = Math.max(0, Math.round((e.until - Date.now()) / 1000));
+      const leftMs = Math.max(0, e.until - Date.now());
       c.status = "restarting";
-      c.detail = `Restarting (expected) — ${e.label} was just restarted from the UI; this normally clears within a minute (going critical in ${left}s if it doesn't). Underlying: ${c.detail}`;
+      c.detail = `Restarting (expected) — ${e.label} was just restarted from the UI; this normally clears within a minute (going critical in ${formatDurationMs(leftMs, { style: "compact" })} if it doesn't). Underlying: ${c.detail}`;
     }
   }
   const rank = { ok: 0, unknown: 0, restarting: 0, warning: 1, critical: 2 };

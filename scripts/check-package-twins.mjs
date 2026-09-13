@@ -1,0 +1,1133 @@
+#!/usr/bin/env node
+/**
+ * check-package-twins.mjs — a capability collapsed into an `@ai-matrx/*`
+ * package must never re-grow a local definition in a consumer repo.
+ *
+ * THE CLASS. Arman's standing order for the client-package campaign: *"the
+ * logic of the packages is NEVER duplicated outside of the package — the logic
+ * all needs to live inside the packages."* Every collapse the campaign has run
+ * (data, diff, print, agents, realtime, icons, kit) deleted a host twin. The
+ * failure mode is not the first twin — it is the SECOND one, written months
+ * later by an agent that never saw the package export, which then drifts,
+ * accumulates its own bug fixes, and cancels the package's out. The census of
+ * what has already been collapsed is
+ * `/projects/npm-package-extraction/DUPLICATION-CENSUS.md` (common-docs).
+ *
+ * THE RULE. `scripts/package-twins.json` names every export that has been
+ * collapsed. A top-level `function <name>` / `const <name> =` / `class <name>`
+ * in this repo's tracked TypeScript, for any registered name, is a twin and
+ * fails this guard — unless that exact file is in the row's `allow` list with a
+ * written reason (an allowlist entry means "provably a DIFFERENT capability",
+ * never "we know, we will fix it later").
+ *
+ * …OR in the row's `census` list, which is the OTHER thing (added 2026-09-12).
+ * The shape lanes have had `shapeCensus` — loud every run, ratcheted so it can
+ * only shrink — since they were built, and the NAME lane had no such list at
+ * all: a body that genuinely IS the capability but cannot be collapsed in this
+ * session had exactly one place to go, `allow`, which is silent and means
+ * something else. That is the abuse an adversarial review caught on the byte
+ * shape lane, and the name lane had no honest alternative to offer. It does
+ * now: same contract, same ratchet, same rule — `census` is never an exemption,
+ * it is a debt that is READ OUT every run and may only get smaller.
+ *
+ * Portable by construction: pure Node stdlib, no install, no repo-specific
+ * import. Copy it plus its JSON register into matrx-extend / matrx-local /
+ * matrx-games unchanged.
+ *
+ * THE SHAPE LANES (added 2026-09-11). The name register has a hole its own
+ * census named: a twin under an UNREGISTERED name is invisible. Byte-size
+ * formatting proved it — `formatFileSize` was registered and clean, while 134
+ * live byte-size bodies sat in 67 files under `formatBytes`, `fmtBytes`,
+ * `humanSize`, `bytesHuman`, `formatSize`, and as bare inline JSX that is not a
+ * definition at all. Durations proved it a second time the same day — all four
+ * `formatDuration*` exports registered and clean, while aidream's dashboard
+ * carried seven `fmtMs` / `fmtMsSummary` bodies. So a second KIND of lane
+ * matches the SHAPE of a capability rather than its spelling. Each lane is a
+ * module beside this one (`scripts/byte-size-shape.mjs`,
+ * `scripts/duration-shape.mjs`) carrying the pattern, the reason a lookalike
+ * (`80 * 1024 * 1024`, `TIMEOUT_MS = 30 * 1000`) can never match it, and a
+ * self-test that plants a body. Adding a shape rule is one entry in
+ * `SHAPE_RULES` below plus its module — never a new lane of copied code.
+ *
+ * TWO LISTS, TWO MEANINGS, on the shape rule's register row:
+ *   `shapeAllow`  — provably NOT this capability (byte arithmetic feeding a
+ *                   form field, say). Silent. Same rule as `allow`: never
+ *                   "we know, we will fix it later".
+ *   `shapeCensus` — pre-existing bodies that ARE this capability and have not
+ *                   been collapsed yet. NOT an exemption: reported loudly every
+ *                   run, and RATCHETED — a census entry whose file no longer
+ *                   has a finding FAILS, so the list can only shrink. Same
+ *                   contract as `scripts/client-hard-delete-allowlist.json`.
+ *
+ * Modes:
+ *   default     — advisory: loud report, exit 0
+ *   --strict    — exit 1 on any re-grown twin (the release-gate mode)
+ *   --self-test — plant a twin in memory and prove this guard reports it
+ *                 (a guard that cannot fail is not a guard) — every lane
+ */
+
+import { byteShapeIn, selfTestByteShape } from "./byte-size-shape.mjs";
+import { durationShapeIn, selfTestDurationShape } from "./duration-shape.mjs";
+import {
+  formatInputShapeIn,
+  selfTestFormatInputShape,
+} from "./format-input-shape.mjs";
+import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import process from "node:process";
+
+const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const STRICT = process.argv.includes("--strict");
+const SELF_TEST = process.argv.includes("--self-test");
+
+const register = JSON.parse(
+  readFileSync(resolve(ROOT, "scripts/package-twins.json"), "utf8"),
+);
+const TWINS = register.twins;
+const BY_NAME = new Map(TWINS.map((t) => [t.name, t]));
+
+/**
+ * THE OWNING PACKAGE'S OWN SOURCE — the one legitimate definition (2026-09-12).
+ *
+ * WHY THIS EXISTS. Until a third adversarial review, every ROOT this guard ran
+ * in was a CONSUMER app, so `git ls-files` never reached `aidream/apps/shared/`
+ * — the `@ai-matrx/*` packages themselves, ~937 tracked TS files, and the very
+ * place this class was first found duplicated BETWEEN packages. The packages
+ * directory is now the seventh root, and in it the register's own statements
+ * become checkable: `formatFileSize` really is defined in `kit/src/format.ts`,
+ * and every one of the 119 collapsed names really is defined in its package's
+ * `src/`. Those definitions are the THING, not twins of it.
+ *
+ * WHY A MAP IN THE REGISTER RATHER THAN 121 `allow` ENTRIES. An `allow` list is
+ * per-file and never ratchets, so 121 hand-written exemptions would rot into a
+ * list nobody can audit — and the first thing to rot would be the exemption
+ * that is supposed to be narrow. WHY NOT DERIVE THE DIRECTORY FROM THE PACKAGE
+ * NAME, either: `@ai-matrx/agents` lives in `matrx-agents/`, so a name-to-path
+ * guess is wrong on the first package you try it on, and a guess that is wrong
+ * SILENTLY grants an exemption to the wrong directory. So the mapping is DATA:
+ * one `ownedBy` block in that root's register, `@ai-matrx/<pkg>` → the path
+ * prefix that package's source actually occupies, written once and readable.
+ *
+ * WHAT IT CANNOT HIDE, which is the whole point: the prefix is the OWNER's, so
+ * `media/src/viewers/chrome.tsx` re-growing `formatFileSize` is still a finding
+ * — a package duplicating another package is the worst form of this class and
+ * the reason this root exists. A consumer repo's register has no `ownedBy` key
+ * at all, so nothing about the other six roots changes.
+ */
+const OWNED_BY = register.ownedBy ?? {};
+
+/** `"@ai-matrx/kit/format"` → the owning package's source prefix, or null. */
+function ownerPrefixFor(packageSpecifier) {
+  const scoped = /^(@[^/]+\/[^/]+)/.exec(packageSpecifier ?? "");
+  if (!scoped) return null;
+  return OWNED_BY[scoped[1]] ?? null;
+}
+
+/** Is `file` the definition this register row is ABOUT, rather than a twin? */
+function isOwningSource(row, file) {
+  const prefix = ownerPrefixFor(row?.package);
+  return prefix !== null && file.startsWith(prefix);
+}
+
+/**
+ * THE SHAPE RULES. One row each: the register row that owns the capability,
+ * the detector, its self-test, and the sentence the report prints. The
+ * detector modules are never scanned — each one carries the pattern it hunts
+ * in its own source and would report itself forever.
+ */
+const SHAPE_RULES = [
+  {
+    id: "byte-size",
+    rowName: "formatFileSize",
+    module: "scripts/byte-size-shape.mjs",
+    detect: byteShapeIn,
+    selfTest: selfTestByteShape,
+    what: "a byte count becoming a unit string",
+    fix:
+      "delete the arithmetic — including the \" KB\"/\" MB\" literal beside " +
+      "it, because formatFileSize returns the unit. A capacity CONSTANT never " +
+      "matches this rule (it multiplies)",
+  },
+  {
+    id: "duration",
+    rowName: "formatDurationMs",
+    module: "scripts/duration-shape.mjs",
+    detect: durationShapeIn,
+    selfTest: selfTestDurationShape,
+    what: "a millisecond count becoming a unit string",
+    fix:
+      "delete the arithmetic and pick the voice the site rendered — " +
+      '`style: "clock"` (9:04), `"compact"` (5.2s, 5m 30s) or `"coarse"` ' +
+      "(45 min). THE UNIT LAW: the unit is in the NAME — formatDurationMs / " +
+      "formatDurationSeconds / formatDurationMinutes, never a bare number. A " +
+      "relative \"3m ago\" is formatRelativeTime, not a duration. Plain time " +
+      "arithmetic (a timeout budget, an API field) never matches this rule",
+  },
+  {
+    id: "format-input",
+    rowName: "formatFileSize",
+    module: "scripts/format-input-shape.mjs",
+    detect: formatInputShapeIn,
+    selfTest: selfTestFormatInputShape,
+    what: "a NON-byte quantity entering formatFileSize",
+    // THE LANE THE COLLAPSE ITSELF NEEDED. The byte-size lane asks whether a
+    // byte count is becoming a unit string; once the arithmetic is collapsed
+    // onto the package it is satisfied forever and nothing asks what the
+    // number IS. matrx-frontend 738ea2ba55 collapsed five CHARACTER counts
+    // onto formatFileSize, and "1.2 MB captured" for 1,258,291 characters
+    // passed every lane. Same row, own facts — see `allowKey`.
+    allowKey: "inputAllow",
+    censusKey: "inputCensus",
+    fix:
+      "render a COUNT with formatCount from the same module plus the word it " +
+      'counts ("1,258,291 chars"), or convert to real bytes with ' +
+      'new TextEncoder().encode(s).length / Buffer.byteLength(s, "utf8"). A ' +
+      "figure already in KB/MB/GB is multiplied up first. A genuine byte " +
+      "length says so in its NAME (byteLength, contentLengthBytes), which is " +
+      "worth more than an allowlist entry",
+  },
+];
+const SHAPE_MODULES = new Set(SHAPE_RULES.map((r) => r.module));
+
+/**
+ * Top-level (column-zero) value definitions only. An inner helper inside a
+ * function body is indented and is not what this guard is about; a shadowed
+ * local name in a closure is not a twin of a package export.
+ */
+const DEF_RE =
+  /^(?:export\s+)?(?:default\s+)?(?:declare\s+)?(?:async\s+)?(?:function\*?|class|const|let|var)\s+([A-Za-z_$][\w$]*)/;
+
+/**
+ * THE ALIAS LANE (2026-09-12, the sixth adversarial review).
+ *
+ * THE CLASS. A collapsed export that is imported under a SECOND name puts
+ * every one of its call sites outside the guards that judge that export. The
+ * input lane (`format-input-shape.mjs`) asks what ENTERS `formatFileSize`, and
+ * it hunts that spelling — so `export { formatFileSize as fmtBytes }` in an
+ * inspector barrel took ~31 call sites out of the guard in one line, and
+ * `export const formatBytes = formatFileSize` took six more. The live miss that
+ * opened the review was the same shape in its third form: an earlier repair
+ * round replaced a local byte-size body with `function formatBytes(n) { return
+ * formatFileSize(n); }` and KEPT THE NAME, converting a body the shape lane
+ * caught into an input nothing looked at — and the very next line handed it a
+ * character count.
+ *
+ * THE FIX IS SIMPLICITY, NOT A SMARTER GUARD: one export, one name. Four
+ * spellings of the same evasion are findings:
+ *   `import { X as Y } from "@ai-matrx/…"`,
+ *   `export { X as Y } from "@ai-matrx/…"`,
+ *   `const Y = X` where X is imported from an `@ai-matrx/*` package here,
+ *   a top-level function whose whole body is `return X(<its own parameter>…)`.
+ *
+ * WHAT IS NOT A FINDING, deliberately: a wrapper that adds real logic (a
+ * fallback word, a bound option applied to a TRANSFORMED input, a type guard)
+ * is a different capability under a different name — it is judged by the
+ * ordinary name lane, not this one. An alias whose module is NOT an
+ * `@ai-matrx/*` specifier is renaming a LOCAL binding (a repo's own styled
+ * `ResizableHandle`), which is not this class. And `allow` / `census` mean
+ * exactly what they mean for a re-grown body: provably something else, or debt
+ * that is read out loud every run and may only shrink.
+ */
+const ALIAS_PACKAGE_RE = /^["'`]@ai-matrx\//;
+
+/**
+ * THE SOURCE WITH STRINGS AND COMMENTS BLANKED, line structure preserved.
+ *
+ * An `import { X as Y } from "@ai-matrx/…"` written INSIDE a template literal
+ * is not an import — `@ai-matrx/diff`'s `verify-tarball.mjs` builds an ESM
+ * canary as a string and would have been reported forever, and a test whose
+ * name reads `it("reads a valueless Progress as INDETERMINATE")` is prose. A
+ * lane that cannot tell code from text is a lane that cries wolf.
+ */
+function codeOnly(source) {
+  let out = "";
+  let i = 0;
+  const keepNewlines = (text) => text.replace(/[^\n]/g, " ");
+  while (i < source.length) {
+    const c = source[i];
+    const next = source[i + 1];
+    if (c === "/" && next === "/") {
+      const end = source.indexOf("\n", i);
+      const stop = end === -1 ? source.length : end;
+      out += keepNewlines(source.slice(i, stop));
+      i = stop;
+      continue;
+    }
+    if (c === "/" && next === "*") {
+      const end = source.indexOf("*/", i + 2);
+      const stop = end === -1 ? source.length : end + 2;
+      out += keepNewlines(source.slice(i, stop));
+      i = stop;
+      continue;
+    }
+    // TEMPLATE LITERALS ONLY. A module specifier is a quoted string and this
+    // lane reads it, so `"` / `'` runs are left alone; a `\`` block is the one
+    // that carries whole import STATEMENTS as text (the diff package's ESM
+    // canary), and a quoted string can never start a line with `import` and
+    // still be a string.
+    if (c === "`") {
+      let j = i + 1;
+      while (j < source.length) {
+        if (source[j] === "\\") { j += 2; continue; }
+        if (source[j] === "`") break;
+        j += 1;
+      }
+      const stop = Math.min(j + 1, source.length);
+      out += "`" + keepNewlines(source.slice(i + 1, stop));
+      i = stop;
+      continue;
+    }
+    out += c;
+    i += 1;
+  }
+  return out;
+}
+
+/** The `X as Y` specifiers of an import/export statement, when it names a package. */
+function aliasSpecifiers(statement) {
+  const braces = /\{([^}]*)\}/s.exec(statement);
+  if (!braces) return [];
+  const from = /from\s*(["'`][^"'`]+["'`])/.exec(statement);
+  if (!from || !ALIAS_PACKAGE_RE.test(from[1])) return [];
+  const out = [];
+  for (const raw of braces[1].split(",")) {
+    const m = /^\s*(?:type\s+)?([A-Za-z_$][\w$]*)\s+as\s+([A-Za-z_$][\w$]*)\s*$/.exec(raw);
+    if (m && m[1] !== m[2]) out.push({ name: m[1], alias: m[2] });
+  }
+  return out;
+}
+
+/** Names imported in this file FROM an `@ai-matrx/*` package, under their own spelling. */
+function packageImports(source) {
+  const names = new Set();
+  for (const st of source.matchAll(/^[ \t]*(?:import|export)\s*(?:type\s*)?\{([^}]*)\}\s*from\s*(["'`][^"'`]+["'`])/gms)) {
+    if (!ALIAS_PACKAGE_RE.test(st[2])) continue;
+    for (const raw of st[1].split(",")) {
+      const m = /^\s*(?:type\s+)?([A-Za-z_$][\w$]*)\s*$/.exec(raw);
+      if (m) names.add(m[1]);
+    }
+  }
+  return names;
+}
+
+/**
+ * Alias findings for one file. Each is {name, alias, line, text, form}; the
+ * caller attaches the register row exactly as it does for a re-grown body.
+ */
+export function aliasesIn(rawSource) {
+  const source = codeOnly(rawSource);
+  const out = [];
+  const lines = source.split("\n");
+  const imported = packageImports(source);
+
+  // ── import/export specifier aliases ──
+  for (const st of source.matchAll(/^[ \t]*(?:import|export)\s*(?:type\s*)?\{[^}]*\}\s*from\s*["'`][^"'`]+["'`]/gms)) {
+    const base = source.slice(0, st.index).split("\n").length - 1;
+    for (const { name, alias } of aliasSpecifiers(st[0])) {
+      const at = st[0].indexOf(`${name} as ${alias}`);
+      const line = base + (at < 0 ? 0 : st[0].slice(0, at).split("\n").length);
+      out.push({ name, alias, line, text: `${name} as ${alias}`, form: "specifier" });
+    }
+
+  }
+
+  // ── `const Y = X;` over a package import ──
+  for (let i = 0; i < lines.length; i++) {
+    const m = /^(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::[^=\n]+)?=\s*([A-Za-z_$][\w$]*)\s*;?\s*$/.exec(lines[i]);
+    if (m && m[1] !== m[2] && imported.has(m[2])) {
+      out.push({ name: m[2], alias: m[1], line: i + 1, text: lines[i].trim(), form: "assignment" });
+    }
+  }
+
+  // ── a top-level pass-through wrapper ──
+  for (const w of passThroughWrappers(source, imported)) out.push(w);
+
+  // ── an OBJECT PROPERTY that hands the export on under a second key ──
+  for (const w of objectPropertyAliases(lines, imported)) out.push(w);
+
+  return out;
+}
+
+/**
+ * AN OBJECT PROPERTY THAT RE-NAMES A COLLAPSED EXPORT (2026-09-12, the seventh
+ * review's declared-limit fixtures).
+ *
+ * THE TWO SHAPES, both live:
+ *   `formatBytes: (v) => formatFileSize(v),`   — a property PASS-THROUGH
+ *   `format: formatFileSize,`                  — a point-free HAND-OFF
+ * A registry, a column table, a transform map or a props object is exactly
+ * where a second name for a collapsed export survives longest, because the
+ * property key becomes the spelling every call site uses and NOTHING in the
+ * file mentions the export again. matrx-extend's tool-display registry carried
+ * `formatBytes: (v) => formatFileSize(v)` under a string-union key — the
+ * `format-input-shape.mjs` lane, which judges what ENTERS `formatFileSize`,
+ * hunts that spelling and could never have seen a field routed through it.
+ *
+ * These lines are INDENTED, which is why neither the name lane (column-zero
+ * definitions) nor `passThroughWrappers` (top-level only) could reach them.
+ *
+ * THE SAME DECLARED LIMIT AS THE WRAPPER LANE: an ADAPTER is not a finding.
+ * `duration: (v) => formatDurationMs(v, { style: "coarse" })` binds a decision
+ * and is the fleet's sanctioned shape, so an argument list that is not the
+ * parameter list verbatim never matches. A property whose key EQUALS the
+ * export's own name is the shorthand-equivalent and is not a rename.
+ */
+function objectPropertyAliases(lines, imported) {
+  const out = [];
+  const point = /^\s+([A-Za-z_$][\w$]*)\s*:\s*([A-Za-z_$][\w$]*)\s*,?\s*$/;
+  const arrow =
+    /^\s+([A-Za-z_$][\w$]*)\s*:\s*(?:async\s*)?\(([^)]*)\)\s*(?::[^=]+)?=>\s*(?:\{\s*return\s+)?([A-Za-z_$][\w$]*)\s*\(([^;)]*(?:\([^)]*\))?[^;]*?)\)\s*;?\s*\}?\s*,?\s*$/;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const pm = point.exec(line);
+    if (pm && pm[1] !== pm[2] && imported.has(pm[2])) {
+      out.push({
+        name: pm[2],
+        alias: pm[1],
+        line: i + 1,
+        text: line.trim(),
+        form: "object-property hand-off",
+      });
+      continue;
+    }
+    const am = arrow.exec(line);
+    if (!am) continue;
+    const [, key, params, callee, args] = am;
+    if (key === callee || !imported.has(callee)) continue;
+    const names = params
+      .split(",")
+      .map((prm) => /^\s*(?:\.\.\.)?([A-Za-z_$][\w$]*)/.exec(prm)?.[1])
+      .filter(Boolean);
+    const passed = args.split(",").map((a) => a.trim().replace(/^\.\.\./, "")).filter(Boolean);
+    if (passed.length === 0 || passed.length !== names.length) continue;
+    if (passed.some((a, k) => a !== names[k])) continue;
+    out.push({
+      name: callee,
+      alias: key,
+      line: i + 1,
+      text: line.trim(),
+      form: "object-property pass-through",
+    });
+  }
+  return out;
+}
+
+/**
+ * A TOP-LEVEL function or arrow whose entire body is `return X(<its own
+ * parameters, verbatim>)` — an alias with a `function` keyword. Nothing is
+ * bound, nothing is transformed, nothing is decided: the value flows through
+ * untouched under a second name, so the call site is outside the input guard
+ * exactly as `import { X as Y }` would be. THE LIVE MISS was this exact shape —
+ * `function formatBytes(n) { return formatFileSize(n); }` — written by an
+ * earlier repair round that replaced a local byte-size body with a
+ * pass-through and KEPT THE NAME.
+ *
+ * A DECLARED LIMIT, written here rather than discovered later: an ADAPTER —
+ * a wrapper that binds an option, a unit, a style or a fallback
+ * (`formatDurationMs(ms, { style: "coarse" })`) — is NOT a finding. The
+ * register's own `formatDurationMs` row says so in its `why` ("a local
+ * `formatDuration` that BINDS unit+style+fallback and delegates is an adapter,
+ * not a twin"), the fleet carries ~15 of them across six repos, and a lane that
+ * fired on all of them would be a lane someone deletes. The value still reaches
+ * the export unexamined through an adapter; what covers THAT is the name (the
+ * unit law) and the ordinary name lane, not this one.
+ */
+function passThroughWrappers(source, imported) {
+  const out = [];
+  const lines = source.split("\n");
+  const patterns = [
+    // function f(a, b) { return X(a); }   — brace body, one return
+    /^(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*(?:<[^>]*>)?\s*\(([^)]*)\)\s*(?::[^{]+)?\{\s*return\s+([A-Za-z_$][\w$]*)\s*\(([^;]*)\)\s*;?\s*\}/,
+    // const f = (a) => X(a);             — expression arrow
+    /^(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::[^=]+)?=\s*(?:async\s*)?\(([^)]*)\)\s*(?::[^=]+)?=>\s*([A-Za-z_$][\w$]*)\s*\(([^;]*)\)\s*;?/,
+    // const f = (a) => { return X(a); }  — brace arrow
+    /^(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::[^=]+)?=\s*(?:async\s*)?\(([^)]*)\)\s*(?::[^=]+)?=>\s*\{\s*return\s+([A-Za-z_$][\w$]*)\s*\(([^;]*)\)\s*;?\s*\}/,
+  ];
+  for (let i = 0; i < lines.length; i++) {
+    if (!/^(?:export\s+)?(?:default\s+)?(?:async\s+)?(?:function|const|let|var)\s/.test(lines[i])) continue;
+    // A body may sit on the next lines; join a small window, collapsing newlines.
+    const window = lines.slice(i, i + 6).join("\n").replace(/\s*\n\s*/g, " ");
+    for (const re of patterns) {
+      const m = re.exec(window);
+      if (!m) continue;
+      const [, alias, params, callee, args] = m;
+      if (alias === callee || !imported.has(callee)) continue;
+      const names = params
+        .split(",")
+        .map((prm) => /^\s*(?:\.\.\.)?([A-Za-z_$][\w$]*)/.exec(prm)?.[1])
+        .filter(Boolean);
+      const passed = args.split(",").map((a) => a.trim().replace(/^\.\.\./, "")).filter(Boolean);
+      // PURE pass-through only: the arguments ARE the parameters, verbatim and
+      // in order. One bound option and this is an adapter, not an alias.
+      if (passed.length === 0 || passed.length !== names.length) continue;
+      if (passed.some((a, k) => a !== names[k])) continue;
+      out.push({ name: callee, alias, line: i + 1, text: lines[i].trim(), form: "wrapper" });
+      break;
+    }
+  }
+  return out;
+}
+
+/** Findings for one file's source text. Exported shape: {name, line, text}. */
+function twinsIn(file, source) {
+  const out = [];
+  const lines = source.split("\n");
+  const push = (name, line, text, alias) => {
+    const row = BY_NAME.get(name);
+    if (!row) return;
+    if (isOwningSource(row, file)) return;
+    if ((row.allow ?? []).some((a) => a.file === file)) return;
+    const censused = (row.census ?? []).some((a) => a.file === file);
+    out.push({ name, line, text, row, censused, alias: alias ?? null });
+  };
+  for (let i = 0; i < lines.length; i++) {
+    const m = DEF_RE.exec(lines[i]);
+    if (!m) continue;
+    push(m[1], i + 1, lines[i].trim());
+  }
+  for (const a of aliasesIn(source)) {
+    push(a.name, a.line, `${a.text}   ← an ALIAS of ${a.name} (${a.form})`, a.alias);
+  }
+  return out;
+}
+
+/**
+ * One shape lane's verdict on one file. Named, rather than inlined in the scan
+ * loop, so the self-test can exercise the OWNER leg on a shape lane too: the
+ * name lane and the shape lanes must agree about what "this IS the definition"
+ * means, and a rule proven in only one of them is proven in neither.
+ */
+function shapeVerdict(lane, file, source) {
+  if (isOwningSource(lane.row, file)) return { kind: "owner", hits: [] };
+  if (lane.allow.has(file)) return { kind: "allow", hits: [] };
+  const hits = lane.rule.detect(source);
+  if (hits.length === 0) return { kind: "clean", hits: [] };
+  if (lane.census.has(file)) return { kind: "census", hits };
+  return { kind: "finding", hits };
+}
+
+if (SELF_TEST) {
+  const planted = [
+    'import { something } from "@/lib/thing";',
+    "",
+    "/** A re-grown twin of a collapsed package export. */",
+    "export function formatRelativeTime(iso: string): string {",
+    "  return iso;",
+    "}",
+    "",
+    "function notRegistered(x: number) {",
+    "  return x;",
+    "}",
+  ].join("\n");
+
+  const found = twinsIn("planted.ts", planted);
+  if (found.length !== 1 || found[0].name !== "formatRelativeTime") {
+    console.error(
+      `SELF-TEST FAILED: a re-grown \`formatRelativeTime\` twin was not ` +
+        `reported (found ${found.length}).`,
+    );
+    process.exit(1);
+  }
+  // The allowlist must be the ONLY way past the guard, and it must be per-file.
+  // Planted here rather than read from the register, so this self-test is
+  // repo-agnostic: the script and its JSON copy unchanged into every repo, and
+  // no repo's real allowlist paths are baked into the proof.
+  const row = BY_NAME.get("formatRelativeTime");
+  const realAllow = row.allow ?? [];
+  row.allow = [{ file: "planted.ts", reason: "self-test only" }];
+  const allowed = twinsIn("planted.ts", planted);
+  row.allow = realAllow;
+  if (allowed.length !== 0) {
+    console.error(
+      "SELF-TEST FAILED: an allowlisted file still reported its twin.",
+    );
+    process.exit(1);
+  }
+  // An indented (inner) definition is not a top-level twin.
+  if (twinsIn("planted.ts", "  const formatRelativeTime = (v) => v;").length !== 0) {
+    console.error("SELF-TEST FAILED: an inner helper was reported as a twin.");
+    process.exit(1);
+  }
+  // ── THE NAME CENSUS is LOUD, never silent, and never an `allow` ──
+  // A censused file still REPORTS its twin (that is the whole difference from
+  // `allow`); it is only spared the failure. If `census` ever starts behaving
+  // like `allow`, this goes red.
+  {
+    const row = BY_NAME.get("formatRelativeTime");
+    const realCensus = row.census ?? [];
+    row.census = [{ file: "planted.ts", reason: "self-test only" }];
+    const censused = twinsIn("planted.ts", planted);
+    row.census = realCensus;
+    if (censused.length !== 1 || censused[0].censused !== true) {
+      console.error(
+        "SELF-TEST FAILED: a `census` entry silenced its twin instead of " +
+          "reporting it — `census` has become a second `allow`.",
+      );
+      process.exit(1);
+    }
+  }
+  // ── THE OWNING PACKAGE'S OWN SOURCE is not a twin, and everyone else's is ──
+  // Planted in memory like the allowlist leg above, so the proof is
+  // repo-agnostic: no real package path is baked into a script that copies
+  // byte-for-byte into seven roots.
+  {
+    const row = BY_NAME.get("formatRelativeTime");
+    const realPackage = row.package;
+    row.package = "@ai-matrx/selftest";
+    OWNED_BY["@ai-matrx/selftest"] = "selftest/src/";
+    const lane = {
+      rule: { detect: () => [{ line: 1, text: "a planted shape body" }] },
+      row,
+      allow: new Set(),
+      census: new Set(),
+    };
+    const owned = twinsIn("selftest/src/format.ts", planted);
+    const elsewhere = twinsIn("other-package/src/format.ts", planted);
+    const shapeOwned = shapeVerdict(lane, "selftest/src/format.ts", "");
+    const shapeElsewhere = shapeVerdict(lane, "other-package/src/format.ts", "");
+    row.package = realPackage;
+    delete OWNED_BY["@ai-matrx/selftest"];
+
+    if (owned.length !== 0) {
+      console.error(
+        "SELF-TEST FAILED: the owning package's OWN source was reported as a " +
+          "twin of itself (name lane).",
+      );
+      process.exit(1);
+    }
+    if (elsewhere.length !== 1) {
+      console.error(
+        "SELF-TEST FAILED: another package re-growing an owned export was NOT " +
+          "reported (name lane) — the `ownedBy` prefix is exempting more than " +
+          "the owner.",
+      );
+      process.exit(1);
+    }
+    if (shapeOwned.kind !== "owner") {
+      console.error(
+        "SELF-TEST FAILED: a SHAPE lane reported the owning package's own " +
+          "source as a body outside the package.",
+      );
+      process.exit(1);
+    }
+    if (shapeElsewhere.kind !== "finding") {
+      console.error(
+        "SELF-TEST FAILED: a SHAPE lane did not report another package " +
+          "carrying the capability.",
+      );
+      process.exit(1);
+    }
+  }
+  // …and an UNMAPPED package gets no exemption. A missing `ownedBy` entry must
+  // fail CLOSED, never quietly exempt the directory that happens to share the
+  // package's name — that guess is wrong on `@ai-matrx/agents` (it lives in
+  // `matrx-agents/`) and a wrong guess grants the exemption to the wrong place.
+  if (isOwningSource({ package: "@ai-matrx/unmapped" }, "unmapped/src/x.ts")) {
+    console.error(
+      "SELF-TEST FAILED: a package with no `ownedBy` entry was granted an " +
+        "owner exemption by name.",
+    );
+    process.exit(1);
+  }
+  // ── THE NAME CENSUS RATCHET must be able to fail (added 2026-09-12) ──
+  // Mutation G8 — `if (!nameCensusHit.has(...))` → `if (false)` — left this
+  // self-test PASSED. The ratchet WAS real (a planted stale entry exits 1), but
+  // "real at run time" is not "proven", and the next refactor deletes what no
+  // fixture defends. Both legs are pinned: an entry nobody hit is stale, and an
+  // entry that WAS hit is not.
+  {
+    const rows = [
+      { name: "plantedExport", census: [{ file: "gone.ts", reason: "self-test only" }] },
+    ];
+    const unhit = staleNameCensus(rows, new Set());
+    if (unhit.length !== 1 || !unhit[0].includes("gone.ts")) {
+      console.error(
+        "SELF-TEST FAILED: a NAME `census` entry whose file no longer defines " +
+          "the registered name was NOT reported stale — the ratchet is gone, " +
+          "and the census can now only grow.",
+      );
+      process.exit(1);
+    }
+    const hit = staleNameCensus(rows, new Set(["plantedExport::gone.ts"]));
+    if (hit.length !== 0) {
+      console.error(
+        "SELF-TEST FAILED: a NAME `census` entry the scan DID hit was reported " +
+          "stale — the ratchet now fails every live census entry.",
+      );
+      process.exit(1);
+    }
+  }
+  // ── THE ALIAS LANE must be able to fail, on the THREE REAL SHAPES ──
+  // Planted verbatim from the live code the sixth adversarial review named, so
+  // a refactor that silently drops a form goes red with that form's sentence.
+  {
+    const KIT = 'import { formatFileSize } from "@ai-matrx/kit/format";';
+    const DUR = 'import { formatDurationMs } from "@ai-matrx/kit/format";';
+    const reds = [
+      // matrx-frontend features/organizations/admin/utils.ts:27, pre-fix.
+      ["assignment", [KIT, "export const formatBytes = formatFileSize;"].join("\n"), "formatBytes"],
+      // matrx-local src/lib/utils.ts:11 and components/media/types.ts:32, pre-fix.
+      ["re-export", 'export { formatFileSize, formatFileSize as formatBytes } from "@ai-matrx/kit/format";', "formatBytes"],
+      // aidream/apps/dashboard src/components/inspector/utils.ts:41, pre-fix.
+      ["import alias", 'import { formatFileSize as fmtBytes } from "@ai-matrx/kit/format";', "fmtBytes"],
+      // THE LIVE MISS: matrx-frontend build-kind-sandbox.ts:123 at e8838de841 —
+      // a wrapper that kept the old NAME and passed the input straight through.
+      [
+        "wrapper",
+        [KIT, "function formatBytes(n: number): string {", "  return formatFileSize(n);", "}"].join("\n"),
+        "formatBytes",
+      ],
+      // …and the same evasion spelled as an arrow.
+      [
+        "arrow wrapper",
+        ["const fmtBytes = (n: number): string => formatFileSize(n);"].map((l) => [KIT, l].join("\n"))[0],
+        "fmtBytes",
+      ],
+    ];
+    for (const [form, src, alias] of reds) {
+      const hits = aliasesIn(src).filter((a) => a.alias === alias);
+      if (hits.length !== 1) {
+        console.error(
+          `SELF-TEST FAILED: the ALIAS lane did not report a ${form} alias ` +
+            `(\`${alias}\`) of a collapsed export — its call sites are outside ` +
+            `the input guard, which is how the build readout printed a ` +
+            `character count as "KB raw".`,
+        );
+        process.exit(1);
+      }
+    }
+    const greens = [
+      // Not a package export: renaming a LOCAL binding is not this class.
+      ['import { ResizableHandle as StudioColumnHandle } from "@/components/ui/resizable";', "local module"],
+      ["export { ResizableHandle as StudioColumnHandle };", "no module at all"],
+      ['import { useState as useLocalState } from "react";', "a third-party import"],
+      // The same name is not an alias.
+      ['export { formatFileSize } from "@ai-matrx/kit/format";', "a same-name re-export"],
+      // A wrapper that adds REAL logic is a different capability, judged by the
+      // ordinary name lane — never silenced, never claimed by this one.
+      [
+        [
+          'import { formatFileSize } from "@ai-matrx/kit/format";',
+          "export function orDash(n: number | null): string {",
+          '  if (n === null) return "—";',
+          "  return formatFileSize(n);",
+          "}",
+        ].join("\n"),
+        "a wrapper with a fallback branch",
+      ],
+      // AN ADAPTER — binds a style/unit/fallback and delegates. The register's
+      // own `formatDurationMs` row calls this an adapter rather than a twin, so
+      // this lane must leave it alone or it fires on ~15 live bodies at once.
+      [
+        [DUR, 'const fmtMs = (ms: number): string => formatDurationMs(ms, { style: "compact" });'].join("\n"),
+        "an adapter that binds a style",
+      ],
+      [
+        [
+          DUR,
+          "export function humanRemaining(ms: number): string {",
+          '  return formatDurationMs(ms, { style: "coarse", fallback: "—" });',
+          "}",
+        ].join("\n"),
+        "an adapter that binds a style and a fallback",
+      ],
+      // …and one that TRANSFORMS its input: the value reaching the export is not
+      // the value reaching the wrapper, so the guard still sees the real thing.
+      [
+        [
+          'import { formatFileSize } from "@ai-matrx/kit/format";',
+          "const formatKb = (kb: number): string => formatFileSize(kb * 1024);",
+        ].join("\n"),
+        "a wrapper that converts its input",
+      ],
+    ];
+    for (const [src, why] of greens) {
+      const hits = aliasesIn(src);
+      if (hits.length !== 0) {
+        console.error(
+          `SELF-TEST FAILED: the ALIAS lane reported ${why} — a false positive ` +
+            `here is how a guard gets turned off (got: ${hits[0].text}).`,
+        );
+        process.exit(1);
+      }
+    }
+    // TEXT IS NOT CODE: an import statement inside a template literal (the diff
+    // package's ESM canary) and a test name that contains the word "as".
+    const asText = [
+      "const canary = `",
+      '  import { formatFileSize as rootSize } from "@ai-matrx/kit/format";',
+      "`;",
+      'it("reads a valueless Progress as INDETERMINATE, never a confident 0%", () => {});',
+    ].join("\n");
+    if (aliasesIn(asText).length !== 0) {
+      console.error(
+        "SELF-TEST FAILED: the ALIAS lane read TEXT as code — an import inside " +
+          `a template literal was reported (${aliasesIn(asText)[0].text}).`,
+      );
+      process.exit(1);
+    }
+
+    // An alias obeys `allow` and `census` exactly as a re-grown body does.
+    const row = BY_NAME.get("formatRelativeTime");
+    const aliased = 'import { formatRelativeTime as ago } from "@ai-matrx/kit/format";';
+    const bare = twinsIn("planted-alias.ts", aliased);
+    if (bare.length !== 1 || bare[0].alias !== "ago") {
+      console.error(
+        "SELF-TEST FAILED: an alias of a collapsed export was not reported as " +
+          "a finding by the name lane.",
+      );
+      process.exit(1);
+    }
+    const realAllow = row.allow ?? [];
+    row.allow = [{ file: "planted-alias.ts", reason: "self-test only" }];
+    const allowedAlias = twinsIn("planted-alias.ts", aliased);
+    row.allow = realAllow;
+    if (allowedAlias.length !== 0) {
+      console.error("SELF-TEST FAILED: an allowlisted file still reported its alias.");
+      process.exit(1);
+    }
+    const realCensus = row.census ?? [];
+    row.census = [{ file: "planted-alias.ts", reason: "self-test only" }];
+    const censusedAlias = twinsIn("planted-alias.ts", aliased);
+    row.census = realCensus;
+    if (censusedAlias.length !== 1 || censusedAlias[0].censused !== true) {
+      console.error(
+        "SELF-TEST FAILED: a `census` entry silenced an alias instead of " +
+          "reporting it — `census` has become a second `allow`.",
+      );
+      process.exit(1);
+    }
+
+  // ── THE TWO OBJECT-PROPERTY FORMS (2026-09-12, seventh review) ──
+  // Both were DECLARED LIMITS of the alias lane until this round: a registry,
+  // a column table or a transform map re-names a collapsed export through a
+  // property KEY, and every call site then speaks the key. The lines are
+  // indented, so the name lane (column-zero) and the top-level wrapper lane
+  // could not reach either of them. The live instance was matrx-extend's
+  // tool-display registry: `formatBytes: (v) => formatFileSize(v)`.
+  {
+    const KIT = 'import { formatFileSize } from "@ai-matrx/kit/format";';
+    const passThrough = [
+      KIT,
+      "export const TRANSFORMS = {",
+      "  formatBytes: (v) => formatFileSize(v),",
+      "};",
+    ].join("\n");
+    const found = twinsIn("planted-obj.ts", passThrough);
+    if (!found.some((f) => f.alias === "formatBytes")) {
+      console.error(
+        "SELF-TEST FAILED: an object-property PASS-THROUGH " +
+          "(`formatBytes: (v) => formatFileSize(v)`) was not reported.",
+      );
+      process.exit(1);
+    }
+    const handOff = [
+      KIT,
+      "const column = {",
+      "  header: \"Size\",",
+      "  format: formatFileSize,",
+      "};",
+    ].join("\n");
+    const handOffHits = twinsIn("planted-obj.ts", handOff);
+    if (!handOffHits.some((f) => f.alias === "format")) {
+      console.error(
+        "SELF-TEST FAILED: a point-free object-property HAND-OFF " +
+          "(`format: formatFileSize`) was not reported.",
+      );
+      process.exit(1);
+    }
+    // …AND THE DECLARED LIMIT HOLDS. An ADAPTER binds a decision and is the
+    // fleet's sanctioned shape; a lane that fired on ~15 of them across six
+    // repos is a lane somebody deletes.
+    const adapter = [
+      'import { formatDurationMs } from "@ai-matrx/kit/format";',
+      "const cells = {",
+      '  duration: (v) => formatDurationMs(v, { style: "coarse" }),',
+      "  formatFileSize: formatFileSize,",
+      "};",
+    ].join("\n");
+    const adapterHits = twinsIn("planted-obj.ts", adapter).filter(
+      (f) => f.alias === "duration" || f.alias === "formatFileSize",
+    );
+    if (adapterHits.length !== 0) {
+      console.error(
+        "SELF-TEST FAILED: an option-binding ADAPTER (or a property whose key " +
+          "IS the export's own name) was reported as an alias " +
+          `(${adapterHits.map((f) => f.text).join(" | ")}).`,
+      );
+      process.exit(1);
+    }
+  }
+
+  }
+  // ── every SHAPE lane must also be able to fail ──
+  for (const rule of SHAPE_RULES) {
+    const shape = rule.selfTest();
+    if (!shape.ok) {
+      console.error(`SELF-TEST FAILED (${rule.id} shape lane): ${shape.why}.`);
+      process.exit(1);
+    }
+  }
+  console.log(
+    `check:package-twins self-test PASSED (every lane can fail) — ` +
+      `${TWINS.length} collapsed export(s) registered, plus ` +
+      `${SHAPE_RULES.length} SHAPE rule(s): ` +
+      `${SHAPE_RULES.map((r) => r.id).join(", ")}, and the ALIAS lane in five forms (specifier, assignment, wrapper, object-property pass-through, object-property hand-off).`,
+  );
+  process.exit(0);
+}
+
+function trackedFiles() {
+  const out = execFileSync("git", ["ls-files", "*.ts", "*.tsx", "*.js", "*.jsx", "*.mjs", "*.cjs"], {
+    cwd: ROOT,
+    encoding: "utf8",
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  return out.split("\n").filter(Boolean);
+}
+
+/**
+ * Each live shape lane, resolved against the register: the row that owns the
+ * capability, the files provably NOT it (`shapeAllow`, silent) and the
+ * pre-existing bodies awaiting collapse (`shapeCensus`, loud and ratcheted).
+ */
+const LANES = SHAPE_RULES.flatMap((rule) => {
+  const row = BY_NAME.get(rule.rowName);
+  if (!row) return [];
+  return [
+    {
+      rule,
+      row,
+      // PER-LANE FACTS ON A SHARED ROW (2026-09-12). Two lanes now judge the
+      // SAME register row from opposite directions — byte-size asks what a
+      // local body computes, format-input asks what the call receives — and
+      // their allow/census lists cannot be the same list: a file provably not
+      // a byte formatter says nothing about the argument it passes, and the
+      // census RATCHET below fails any entry its own lane no longer hits. So
+      // a rule may name its own keys; default keys keep every existing row
+      // and every other repo's register working untouched.
+      allow: new Set((row[rule.allowKey ?? "shapeAllow"] ?? []).map((a) => a.file)),
+      census: new Set((row[rule.censusKey ?? "shapeCensus"] ?? []).map((a) => a.file)),
+      findings: [],
+      censusHit: new Set(),
+    },
+  ];
+});
+
+/**
+ * The NAME census entries this run did NOT hit — a file that no longer defines
+ * the registered name. Left in place, such an entry silently re-opens the hole
+ * the day someone re-grows that twin in that same file, so the ratchet fails on
+ * it and removing it is part of the collapse.
+ *
+ * A FUNCTION, NOT AN INLINE LOOP, since 2026-09-12, and that is the whole point
+ * of it. A fourth adversarial review mutated the ratchet's condition
+ * (`if (!nameCensusHit.has(...))` → `if (false)`) and `--self-test` still
+ * printed PASSED: the ratchet was real at run time — a planted stale entry
+ * exits 1 — but nothing PROVED it, and an unproven guard is one refactor away
+ * from being gone. Inline code cannot be planted against; this can.
+ */
+export function staleNameCensus(rows, hits) {
+  const stale = [];
+  for (const row of rows) {
+    for (const entry of row.census ?? []) {
+      if (!hits.has(`${row.name}::${entry.file}`)) {
+        stale.push(`${row.name} → ${entry.file}`);
+      }
+    }
+  }
+  return stale;
+}
+
+const findings = [];
+/** Every `<row>::<file>` pair the NAME census actually covered this run. */
+const nameCensusHit = new Set();
+const nameCensusFindings = [];
+let scanned = 0;
+for (const file of trackedFiles()) {
+  if (file.startsWith("scripts/package-twins.json")) continue;
+  if (file === "scripts/check-package-twins.mjs") continue;
+  if (SHAPE_MODULES.has(file)) continue;
+  let source;
+  try {
+    source = readFileSync(resolve(ROOT, file), "utf8");
+  } catch {
+    continue;
+  }
+  scanned++;
+  for (const f of twinsIn(file, source)) {
+    if (f.censused) {
+      nameCensusHit.add(`${f.row.name}::${file}`);
+      nameCensusFindings.push({ file, ...f });
+      continue;
+    }
+    findings.push({ file, ...f });
+  }
+  for (const lane of LANES) {
+    const verdict = shapeVerdict(lane, file, source);
+    if (verdict.kind === "census") {
+      lane.censusHit.add(file);
+      continue;
+    }
+    if (verdict.kind !== "finding") continue;
+    for (const h of verdict.hits) lane.findings.push({ file, ...h });
+  }
+}
+
+/**
+ * THE NAME CENSUS, read out loud and RATCHETED — same contract as
+ * `shapeCensus`. A census entry whose file no longer defines that name is
+ * stale, and left alone it would silently re-open the hole the day someone
+ * re-grows the twin in that same file, so removing it is part of the collapse.
+ */
+let nameCensusFailures = 0;
+{
+  const stale = staleNameCensus(TWINS, nameCensusHit);
+  if (stale.length > 0) {
+    nameCensusFailures += stale.length;
+    console.error(
+      `check:package-twins: ${stale.length} stale \`census\` entr(ies) — these ` +
+        `files no longer define the registered name, so the census must shrink ` +
+        `by them:\n`,
+    );
+    for (const s of stale) console.error(`  ${s}`);
+    console.error(
+      "\n  fix: delete those entries from the row's `census` list in " +
+        "scripts/package-twins.json.\n",
+    );
+  }
+  if (nameCensusFindings.length > 0) {
+    console.log(
+      `check:package-twins CENSUS: ${nameCensusFindings.length} pre-existing ` +
+        `definition(s) of a collapsed @ai-matrx export. NOT exempt — collapse ` +
+        `pending, and this list may only shrink:`,
+    );
+    for (const f of nameCensusFindings) {
+      const reason =
+        (f.row.census ?? []).find((a) => a.file === f.file)?.reason ?? "(no reason recorded)";
+      console.log(`  ${f.file}:${f.line}  ${f.name}  —  owns it: ${f.row.package}`);
+      console.log(`    blocked on: ${reason}`);
+    }
+    console.log("");
+  }
+}
+
+let shapeFailures = 0;
+for (const lane of LANES) {
+  const { rule, row } = lane;
+  // THE RATCHET: a census entry that no longer has a finding is stale. Left
+  // alone it would silently re-open the hole the day someone re-grows a body
+  // in that same file, so removing it is part of the collapse.
+  const stale = [...lane.census].filter((f) => !lane.censusHit.has(f));
+  if (stale.length > 0) {
+    shapeFailures += stale.length;
+    console.error(
+      `check:package-twins [SHAPE/${rule.id}]: ${stale.length} stale ` +
+        `\`${rule.censusKey ?? "shapeCensus"}\` entr(ies) on \`${row.name}\` — these files no longer ` +
+        `contain ${rule.what}, so the census must shrink by them:\n`,
+    );
+    for (const f of stale) console.error(`  ${f}`);
+    console.error(
+      `\n  fix: delete those entries from the \`${row.name}\` row's ` +
+        `\`${rule.censusKey ?? "shapeCensus"}\` list in scripts/package-twins.json.\n`,
+    );
+  }
+
+  if (lane.censusHit.size > 0) {
+    console.log(
+      `check:package-twins [SHAPE/${rule.id}] CENSUS: ${lane.censusHit.size} ` +
+        `pre-existing file(s) still carry ${rule.what} and belong to ` +
+        `${row.package}'s \`${row.name}\`. Not exempt — collapse pending. ` +
+        `This list may only shrink.`,
+    );
+  }
+
+  if (lane.findings.length === 0) continue;
+  shapeFailures += lane.findings.length;
+  console.error(
+    `check:package-twins [SHAPE/${rule.id}]: ${lane.findings.length} ` +
+      `body/bodies outside the package — ${rule.what} is ${row.package}'s ` +
+      `\`${row.name}\`, whatever the local name is (or even with no name at ` +
+      `all, inlined into JSX):\n`,
+  );
+  for (const f of lane.findings) {
+    console.error(`  ${f.file}:${f.line}  ${f.text}`);
+  }
+  console.error(
+    `\n  fix: import from "${row.package}" and ${rule.fix}. If a hit is ` +
+      `genuinely NOT this capability, add the file to the \`${row.name}\` ` +
+      `row's \`${rule.allowKey ?? "shapeAllow"}\` list in ` +
+      `scripts/package-twins.json WITH a reason. ` +
+      `"We cannot reach the package from here" is NOT that reason — a body ` +
+      `that IS this capability goes in \`${rule.censusKey ?? "shapeCensus"}\`, ` +
+      `loud and ratcheted.\n`,
+  );
+}
+
+/**
+ * THE TWO MODES ARE DELIBERATE, and this line exists so exit 0 can never be
+ * mistaken for "clean". The default run is a CENSUS that informs without
+ * blocking: it prints every finding loudly and exits 0, so a developer whose
+ * change has nothing to do with byte sizes is never stopped by a pre-existing
+ * body someone else left. `--strict` is the blocking run, and it is what the
+ * release gates call (`check:package-twins:strict`). An independent review in
+ * 2026-09-11 asked whether the split was an accident; it is not — but it was
+ * silent about itself, which is how a loud report gets read as a pass.
+ */
+function advisoryNote(count) {
+  if (STRICT) return;
+  console.error(
+    `check:package-twins: ADVISORY mode — ${count} finding(s) above and ` +
+      `exiting 0 anyway. Exit 0 here does NOT mean clean. The blocking run is ` +
+      `\`pnpm check:package-twins:strict\`, which the release gates call.\n`,
+  );
+}
+
+const clean =
+  findings.length === 0 && shapeFailures === 0 && nameCensusFailures === 0;
+
+if (clean) {
+  const censusTotal =
+    nameCensusFindings.length +
+    LANES.reduce((sum, lane) => sum + lane.censusHit.size, 0);
+  console.log(
+    `check:package-twins OK — ${scanned} file(s) scanned, zero UN-CENSUSED ` +
+      `local definitions of the ${TWINS.length} collapsed @ai-matrx export(s), ` +
+      `and zero un-censused bodies across ${LANES.length} SHAPE rule(s)` +
+      (censusTotal > 0
+        ? `. ${censusTotal} censused item(s) are listed above and are DEBT, not ` +
+          `clean — this line is not a claim that nothing is duplicated.`
+        : `, and nothing censused.`),
+  );
+} else {
+  if (findings.length > 0) {
+    console.error(
+      `check:package-twins: ${findings.length} re-grown twin(s) of logic that ` +
+        `lives in an @ai-matrx package:\n`,
+    );
+    for (const f of findings) {
+      console.error(`  ${f.file}:${f.line}  ${f.text}`);
+      console.error(`    owns it: ${f.row.package}  —  ${f.row.why}`);
+      console.error(
+        `    fix: import { ${f.name} } from "${f.row.package}" and delete ` +
+          `this definition. If it is genuinely a DIFFERENT capability, add ` +
+          `this file to the row's \`allow\` list in ` +
+          `scripts/package-twins.json WITH a reason. If it IS this capability ` +
+          `and you cannot collapse it in this session, it goes in the row's ` +
+          `\`census\` list — loud every run and ratcheted — and NEVER in ` +
+          `\`allow\`, which means "provably something else".\n`,
+      );
+    }
+  }
+  advisoryNote(findings.length + shapeFailures + nameCensusFailures);
+}
+
+/**
+ * `process.exitCode` rather than `process.exit()`. The advisory line above is
+ * the LAST thing written, and an explicit exit can cut a final piped stderr
+ * write off before it flushes — which is exactly what happened the first time
+ * this note was added, so it printed to a terminal and vanished into a pipe.
+ */
+process.exitCode = clean ? 0 : STRICT ? 1 : 0;

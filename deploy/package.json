@@ -11,6 +11,7 @@
     "show-token": "node -e \"console.log('Current token:', process.env.DEPLOY_TOKENS || 'Not set')\""
   },
   "dependencies": {
+    "@ai-matrx/kit": "latest",
     "@matrx/admin-ui": "workspace:*",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",

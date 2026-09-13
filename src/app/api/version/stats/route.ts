@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { formatDurationMs } from "@ai-matrx/kit/format";
 import { db } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { appVersion } from "@/lib/db/schema";
@@ -72,16 +73,7 @@ export async function GET() {
         totalDiff += times[i] - times[i - 1];
       }
       const avgDiffMs = totalDiff / (times.length - 1);
-      const avgDiffMinutes = avgDiffMs / (1000 * 60);
-      const avgDiffHours = avgDiffMs / (1000 * 60 * 60);
-
-      if (avgDiffMinutes < 60) {
-        averageTimeBetweenDeployments = `${Math.round(avgDiffMinutes)}m`;
-      } else if (avgDiffHours < 24) {
-        averageTimeBetweenDeployments = `${Math.round(avgDiffHours)}h`;
-      } else {
-        averageTimeBetweenDeployments = `${Math.round(avgDiffHours / 24)}d`;
-      }
+      averageTimeBetweenDeployments = formatDurationMs(avgDiffMs, { style: "coarse" });
     }
 
     return NextResponse.json({

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef } from "react";
+import { formatDurationSeconds, formatFileSize } from "@ai-matrx/kit/format";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { ChevronLeft, RefreshCw, CheckCircle2, XCircle, Clock, RotateCcw, ChevronRight, ChevronDown, File as FileIcon, Folder as FolderIcon, FolderOpen, Loader2, Trash2, TimerReset, Play } from "lucide-react";
 import { Button } from "@matrx/admin-ui/ui/button";
@@ -336,7 +337,7 @@ export default function OrchestratorSandboxDetailPage() {
         toast.error(`Extend failed (HTTP ${r.status}): ${(await r.text()).slice(0, 300)}`);
         return;
       }
-      toast.success(`Extended by ${Math.round(seconds / 60)} min.`);
+      toast.success(`Extended by ${formatDurationSeconds(seconds, { style: "coarse" })}.`);
       await loadSummary();
     } catch (e) {
       toast.error(`Extend error: ${e instanceof Error ? e.message : String(e)}`);
@@ -1094,7 +1095,7 @@ function FsTreeView({ node, onToggle, onSelectFile, selectedPath, depth = 0 }: {
         {node.loading && <Loader2 className="size-3 animate-spin text-muted-foreground" />}
         {node.error && <span className="text-destructive text-[10px]" title={node.error}>(error)</span>}
         {!node.isDir && typeof node.size === "number" && (
-          <span className="text-[10px] text-muted-foreground ml-auto pr-1">{formatBytes(node.size)}</span>
+          <span className="text-[10px] text-muted-foreground ml-auto pr-1">{formatFileSize(node.size)}</span>
         )}
       </div>
       {node.isDir && node.expanded && node.children.map((c) => (
@@ -1104,9 +1105,3 @@ function FsTreeView({ node, onToggle, onSelectFile, selectedPath, depth = 0 }: {
   );
 }
 
-function formatBytes(n: number): string {
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
-  return `${(n / 1024 / 1024 / 1024).toFixed(1)} GB`;
-}

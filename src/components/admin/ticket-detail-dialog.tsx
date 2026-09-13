@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { formatFileSize } from "@ai-matrx/kit/format";
 import {
   ArrowRight,
   CheckCircle2,
@@ -464,7 +465,7 @@ export function TicketDetailDialog({ ticket, onClose }: TicketDetailDialogProps)
                       <div className="flex-1 min-w-0">
                         <p className="text-sm font-medium text-foreground truncate">{att.originalName}</p>
                         <p className="text-xs text-muted-foreground">
-                          {att.mimeType} &middot; {(att.sizeBytes / 1024).toFixed(1)} KB &middot; by {att.uploadedBy}
+                          {att.mimeType} &middot; {formatFileSize(att.sizeBytes)} &middot; by {att.uploadedBy}
                         </p>
                       </div>
                     </div>

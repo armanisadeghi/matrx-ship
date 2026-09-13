@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback } from "react";
+import { formatDurationMs } from "@ai-matrx/kit/format";
 import { toast } from "sonner";
 import { useConfirm } from "@matrx/admin-ui/components/confirm-dialog";
 import { api, apiText, API } from "@/lib/api";
@@ -107,7 +108,7 @@ export function useAdminActions({
                 setBuildPhase(data.phase);
                 setBuildLogs((prev) => [...prev, `── ${data.message} ──`]);
               } else if (eventType === "done") {
-                toast.success(`Deploy complete — ${data.instances_restarted?.length || 0} instance(s) restarted in ${Math.round((data.duration_ms || 0) / 1000)}s`);
+                toast.success(`Deploy complete — ${data.instances_restarted?.length || 0} instance(s) restarted in ${formatDurationMs(data.duration_ms || 0, { style: "compact" })}`);
                 setBuildPhase("done");
               } else if (eventType === "error") {
                 toast.error(`Deploy failed: ${data.error}`);

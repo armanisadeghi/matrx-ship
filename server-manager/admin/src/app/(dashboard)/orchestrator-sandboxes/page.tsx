@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useMemo } from "react";
+import { formatFileSize, formatRelativeTime } from "@ai-matrx/kit/format";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { RefreshCw, ExternalLink, Power, AlertTriangle, Hammer, Terminal, Loader2, CheckCircle2, Plus, Trash2 } from "lucide-react";
@@ -38,19 +39,6 @@ const LIVE_STATUSES = new Set(["creating", "starting", "ready", "running"]);
 // confirmed alive recently — the orchestrator may have lost track of it (the
 // "stuck running" failure mode). 5 min = comfortably past several sweeps.
 const STALE_AFTER_MS = 5 * 60 * 1000;
-
-function relativeAge(iso?: string | null): string {
-  if (!iso) return "—";
-  const ms = Date.now() - new Date(iso).getTime();
-  if (Number.isNaN(ms)) return "—";
-  const s = Math.max(0, Math.round(ms / 1000));
-  if (s < 60) return `${s}s ago`;
-  const m = Math.round(s / 60);
-  if (m < 60) return `${m}m ago`;
-  const h = Math.round(m / 60);
-  if (h < 48) return `${h}h ago`;
-  return `${Math.round(h / 24)}d ago`;
-}
 
 function isStale(sbx: OrchSandbox): boolean {
   if (!LIVE_STATUSES.has(sbx.status)) return false;
@@ -106,12 +94,6 @@ interface DriftResponse {
 }
 
 const POLL_MS = 5000;
-
-function fmtSize(bytes?: number | null): string {
-  if (!bytes) return "—";
-  const gb = bytes / 1e9;
-  return gb >= 1 ? `${gb.toFixed(2)} GB` : `${Math.round(bytes / 1e6)} MB`;
-}
 
 export default function OrchestratorSandboxesPage() {
   const router = useRouter();
@@ -440,7 +422,7 @@ export default function OrchestratorSandboxesPage() {
                     <Badge
                       key={img.variant}
                       variant={img.present ? "secondary" : img.required ? "destructive" : "outline"}
-                      title={img.present ? `${img.tag} · ${fmtSize(img.size_bytes)} · ${img.created ? new Date(img.created).toLocaleString() : ""}` : img.required ? `${img.tag} is MISSING and REQUIRED — sandbox spawns using this image will fail until it is rebuilt.` : `${img.tag} is absent (not required for spawns — core is a build dep, local is the deprecated pool).`}
+                      title={img.present ? `${img.tag} · ${formatFileSize(img.size_bytes)} · ${img.created ? new Date(img.created).toLocaleString() : ""}` : img.required ? `${img.tag} is MISSING and REQUIRED — sandbox spawns using this image will fail until it is rebuilt.` : `${img.tag} is absent (not required for spawns — core is a build dep, local is the deprecated pool).`}
                     >
                       {!img.present && img.required && <AlertTriangle className="size-3" />} {img.variant}
                       {img.present ? "" : img.required ? " · missing" : " · absent"}
@@ -448,7 +430,7 @@ export default function OrchestratorSandboxesPage() {
                   ))}
                   <Badge
                     variant={images.orchestrator.present ? "secondary" : "destructive"}
-                    title={images.orchestrator.present ? `${images.orchestrator.tag} · ${fmtSize(images.orchestrator.size_bytes)}` : "orchestrator image missing"}
+                    title={images.orchestrator.present ? `${images.orchestrator.tag} · ${formatFileSize(images.orchestrator.size_bytes)}` : "orchestrator image missing"}
                   >
                     orchestrator{images.orchestrator.present ? "" : " · missing"}
                   </Badge>
@@ -761,8 +743,8 @@ export default function OrchestratorSandboxesPage() {
             key: "updated", header: "Last updated",
             sortValue: (s) => s.updated_at ? new Date(s.updated_at).getTime() : 0,
             render: (s) => isStale(s)
-              ? <Badge variant="destructive" title="Live status but not refreshed recently — the orchestrator may have lost track of this sandbox.">stale · {relativeAge(s.updated_at)}</Badge>
-              : <span className="text-muted-foreground text-xs" title={s.updated_at ?? undefined}>{relativeAge(s.updated_at)}</span>,
+              ? <Badge variant="destructive" title="Live status but not refreshed recently — the orchestrator may have lost track of this sandbox.">stale · {formatRelativeTime(s.updated_at)}</Badge>
+              : <span className="text-muted-foreground text-xs" title={s.updated_at ?? undefined}>{formatRelativeTime(s.updated_at)}</span>,
           },
           {
             key: "created", header: "Created",

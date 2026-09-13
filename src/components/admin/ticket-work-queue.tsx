@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { formatRelativeTime } from "@ai-matrx/kit/format";
 import {
   ArrowUpDown,
   CheckCircle2,
@@ -128,7 +129,7 @@ export function WorkQueue({ onOpenTicket }: WorkQueueProps) {
           <div className="text-right shrink-0">
             <div className="flex items-center gap-1 text-xs text-muted-foreground">
               <Clock className="w-3 h-3" />
-              {timeAgo(ticket.updatedAt)}
+              {formatRelativeTime(ticket.updatedAt, { suffix: false })}
             </div>
           </div>
 
@@ -141,14 +142,3 @@ export function WorkQueue({ onOpenTicket }: WorkQueueProps) {
   );
 }
 
-function timeAgo(date: string | Date) {
-  const now = Date.now();
-  const then = new Date(date).getTime();
-  const diff = now - then;
-  const mins = Math.floor(diff / 60000);
-  if (mins < 60) return `${mins}m`;
-  const hours = Math.floor(mins / 60);
-  if (hours < 24) return `${hours}h`;
-  const days = Math.floor(hours / 24);
-  return `${days}d`;
-}

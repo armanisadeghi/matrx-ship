@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { formatRelativeTime } from "@ai-matrx/kit/format";
 import { type ColumnDef } from "@tanstack/react-table";
 import {
   ArrowUpRight,
@@ -87,17 +88,6 @@ function typeBadge(type: string) {
   );
 }
 
-function timeAgo(date: string | Date) {
-  const now = Date.now();
-  const then = new Date(date).getTime();
-  const diff = now - then;
-  const mins = Math.floor(diff / 60000);
-  if (mins < 60) return `${mins}m`;
-  const hours = Math.floor(mins / 60);
-  if (hours < 24) return `${hours}h`;
-  const days = Math.floor(hours / 24);
-  return `${days}d`;
-}
 
 // ─── Column Definitions ─────────────────────────
 function getColumns(onOpenTicket: (ticket: Ticket) => void, onQuickApprove: (ticket: Ticket) => void): ColumnDef<Ticket>[] {
@@ -162,7 +152,7 @@ function getColumns(onOpenTicket: (ticket: Ticket) => void, onQuickApprove: (tic
       header: "Age",
       cell: ({ row }) => (
         <span className="text-sm text-muted-foreground">
-          {timeAgo(row.original.createdAt)}
+          {formatRelativeTime(row.original.createdAt, { suffix: false })}
         </span>
       ),
       size: 60,

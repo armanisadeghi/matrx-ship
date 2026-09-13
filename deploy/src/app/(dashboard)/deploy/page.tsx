@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { formatDurationMs } from "@ai-matrx/kit/format";
 import { toast } from "sonner";
 import { Loader2 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
@@ -51,7 +52,7 @@ export default function DeployPage() {
       await consumeOperationSseEvents(reader, ({ event, data }) => {
         if (event === "log") setBuildLogs((prev) => [...prev, String(data.message)]);
         else if (event === "phase") { setBuildPhase(String(data.phase)); setBuildLogs((prev) => [...prev, `── ${String(data.message)} ──`]); }
-        else if (event === "done") { terminal = true; toast.success(Array.isArray(data.instances_restarted) ? `Deploy complete — ${data.instances_restarted.length} instance(s) restarted in ${Math.round((Number(data.duration_ms) || 0) / 1000)}s` : String(data.message || "Operation complete")); setBuildPhase("done"); }
+        else if (event === "done") { terminal = true; toast.success(Array.isArray(data.instances_restarted) ? `Deploy complete — ${data.instances_restarted.length} instance(s) restarted in ${formatDurationMs(Number(data.duration_ms) || 0, { style: "compact" })}` : String(data.message || "Operation complete")); setBuildPhase("done"); }
         else if (event === "error") { terminal = true; streamError = String(data.error || "operation failed"); setBuildPhase("error"); }
       });
       if (streamError) throw new Error(streamError);

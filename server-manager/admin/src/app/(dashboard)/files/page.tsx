@@ -12,6 +12,7 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
+import { formatFileSize } from "@ai-matrx/kit/format";
 import { toast } from "sonner";
 import {
   Folder, FileText, Link2, RefreshCw, Loader2, Save, X, Pencil, ChevronRight, HardDrive, Cloud, ShieldAlert, FileWarning,
@@ -27,12 +28,6 @@ interface Target { id: string; label: string; kind: "local" | "ec2"; roots: stri
 interface Entry { name: string; type: "dir" | "file" | "link" | "unknown"; size: number | null; mtime: number | null }
 interface ReadResp { path: string; size: number; is_binary: boolean; content: string | null }
 
-function fmtSize(n: number | null) {
-  if (n == null) return "";
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-  return `${(n / 1024 / 1024).toFixed(1)} MB`;
-}
 
 export default function FilesPage() {
   const { isSuperadmin } = useAuth();
@@ -182,7 +177,9 @@ export default function FilesPage() {
                         className="w-full text-left px-3 py-1.5 flex items-center gap-2 hover:bg-muted">
                         {e.type === "dir" ? <Folder className="size-4 text-blue-500 shrink-0" /> : e.type === "link" ? <Link2 className="size-4 text-muted-foreground shrink-0" /> : <FileText className="size-4 text-muted-foreground shrink-0" />}
                         <span className="text-sm truncate flex-1">{e.name}</span>
-                        <span className="text-[11px] text-muted-foreground tabular-nums">{fmtSize(e.size)}</span>
+                        {e.size == null ? null : (
+                          <span className="text-[11px] text-muted-foreground tabular-nums">{formatFileSize(e.size)}</span>
+                        )}
                         {e.mtime ? <span className="text-[11px] text-muted-foreground tabular-nums hidden md:inline">{new Date(e.mtime).toLocaleString()}</span> : null}
                       </button>
                     );
@@ -204,7 +201,7 @@ export default function FilesPage() {
                       <div className="flex items-center gap-2 min-w-0">
                         <FileText className="size-4 shrink-0" />
                         <span className="text-sm font-mono truncate">{file.path}</span>
-                        <Badge variant="secondary">{fmtSize(file.size)}</Badge>
+                        <Badge variant="secondary">{formatFileSize(file.size)}</Badge>
                         {file.is_binary && <Badge variant="destructive">binary — view/edit not supported</Badge>}
                       </div>
                       <div className="flex items-center gap-2">

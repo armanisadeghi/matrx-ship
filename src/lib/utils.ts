@@ -6,25 +6,15 @@ export function cn(...inputs: ClassValue[]) {
 }
 
 /**
- * Format a date string as a relative time (e.g., "2 hours ago")
+ * THE relative stamp, owned by `@ai-matrx/kit/format` since 2026-09-12.
+ *
+ * This repo carried its own ladder — and, like every hand-rolled twin, it was
+ * wrong in the ways the package's is not: it read a zone-less Postgres
+ * timestamp as LOCAL time (off by the viewer's offset), and it had no future
+ * tense at all, so anything ahead of now came out as a negative "-3m ago".
+ * Re-exported rather than wrapped: one name, one body, no drift.
  */
-export function formatRelativeTime(dateString: string): string {
-  const date = new Date(dateString);
-  const now = new Date();
-  const diffMs = now.getTime() - date.getTime();
-  const diffSeconds = Math.floor(diffMs / 1000);
-  const diffMinutes = Math.floor(diffSeconds / 60);
-  const diffHours = Math.floor(diffMinutes / 60);
-  const diffDays = Math.floor(diffHours / 24);
-
-  if (diffSeconds < 60) return "just now";
-  if (diffMinutes < 60) return `${diffMinutes}m ago`;
-  if (diffHours < 24) return `${diffHours}h ago`;
-  if (diffDays < 7) return `${diffDays}d ago`;
-  if (diffDays < 30) return `${Math.floor(diffDays / 7)}w ago`;
-  if (diffDays < 365) return `${Math.floor(diffDays / 30)}mo ago`;
-  return `${Math.floor(diffDays / 365)}y ago`;
-}
+export { formatRelativeTime } from "@ai-matrx/kit/format";
 
 /**
  * Generate a random API key

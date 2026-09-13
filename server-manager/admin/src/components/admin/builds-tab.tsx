@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { formatDurationMs } from "@ai-matrx/kit/format";
 import {
   Rocket, Loader2, Trash2, RotateCcw, ArrowDownToLine,
   CheckCircle2, AlertTriangle, ChevronDown, ChevronRight,
@@ -82,7 +83,7 @@ export function BuildsTab({
               <div className="text-sm text-muted-foreground">Last Build</div>
               <div className="text-sm mt-1">
                 {buildInfo.last_build
-                  ? `${buildInfo.last_build.tag} — ${Math.round(buildInfo.last_build.duration_ms / 1000)}s`
+                  ? `${buildInfo.last_build.tag} — ${formatDurationMs(buildInfo.last_build.duration_ms, { style: "compact" })}`
                   : "Never"
                 }
               </div>
@@ -143,7 +144,7 @@ export function BuildsTab({
                       </TableCell>
                       <TableCell><span className="font-mono text-sm font-medium">{b.tag}</span></TableCell>
                       <TableCell className="text-muted-foreground text-sm">{new Date(b.timestamp).toLocaleDateString()}</TableCell>
-                      <TableCell className="text-muted-foreground text-sm">{Math.round(b.duration_ms / 1000)}s</TableCell>
+                      <TableCell className="text-muted-foreground text-sm">{formatDurationMs(b.duration_ms, { style: "compact" })}</TableCell>
                       <TableCell><span className="font-mono text-xs text-muted-foreground">{b.git_commit?.slice(0, 8)}</span></TableCell>
                       <TableCell className="text-right">
                         {b.success && b.tag && !b.tag.startsWith("rollback") && (

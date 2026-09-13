@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { formatDurationMs, formatFileSize } from "@ai-matrx/kit/format";
 import { execSync, spawn } from "node:child_process";
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
 import { join, dirname } from "node:path";
@@ -47,14 +48,6 @@ function exec(cmd: string, opts: { timeout?: number; cwd?: string } = {}) {
 
 function randomHex(bytes: number) {
   return randomBytes(bytes).toString("hex");
-}
-
-function formatBytes(bytes: number) {
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  let i = 0;
-  let val = bytes;
-  while (val >= 1024 && i < units.length - 1) { val /= 1024; i++; }
-  return `${val.toFixed(1)} ${units[i]}`;
 }
 
 // ── Token Verification ──────────────────────────────────────────────────────
@@ -210,8 +203,7 @@ export function getBuildInfo() {
     const id = parts[0]?.replace("sha256:", "").substring(0, 12);
     const created = parts.slice(1).join(" ");
     const ageMs = created ? Date.now() - new Date(created).getTime() : 0;
-    const ageHours = Math.floor(ageMs / 3600000);
-    currentImage = { id, created, age: ageHours < 24 ? `${ageHours}h` : `${Math.floor(ageHours / 24)}d ${ageHours % 24}h` };
+    currentImage = { id, created, age: formatDurationMs(ageMs, { style: "coarse" }) };
   }
 
   const gitCommit = exec(`git -C ${src} rev-parse --short HEAD`);
@@ -395,7 +387,7 @@ export function getSystemInfo() {
   return {
     hostname: hostname(),
     cpus: cpus().length,
-    memory: { total: formatBytes(totalmem()), free: formatBytes(freemem()), used: formatBytes(totalmem() - freemem()), percent: ((1 - freemem() / totalmem()) * 100).toFixed(1) + "%" },
+    memory: { total: formatFileSize(totalmem()), free: formatFileSize(freemem()), used: formatFileSize(totalmem() - freemem()), percent: ((1 - freemem() / totalmem()) * 100).toFixed(1) + "%" },
     disk: { total: diskParts[0] || "?", used: diskParts[1] || "?", available: diskParts[2] || "?", percent: diskParts[3] || "?" },
     uptime_hours: (osUptime() / 3600).toFixed(1),
     docker: dockerInfo.output,

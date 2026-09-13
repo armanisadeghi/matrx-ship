@@ -4,6 +4,11 @@
   "private": true,
   "description": "Universal deployment & version tracking system",
   "scripts": {
+    "check:matrx-packages": "node scripts/check-matrx-packages.mjs",
+    "check:matrx-latest": "node scripts/check-matrx-packages.mjs",
+    "sync:matrx-packages": "pnpm update -r \"@ai-matrx/*\" --latest && pnpm check:matrx-packages",
+    "check:package-twins": "node scripts/check-package-twins.mjs --strict",
+    "check:package-twins:self-test": "node scripts/check-package-twins.mjs --self-test",
     "dev": "next dev",
     "build": "next build",
     "start": "node server.js",
@@ -33,6 +38,7 @@
     "ship:help": "tsx scripts/matrx/ship.ts help"
   },
   "dependencies": {
+    "@ai-matrx/kit": "latest",
     "@codemirror/lang-sql": "^6.10.0",
     "@modelcontextprotocol/sdk": "^1.26.0",
     "@tanstack/react-table": "^8.21.3",

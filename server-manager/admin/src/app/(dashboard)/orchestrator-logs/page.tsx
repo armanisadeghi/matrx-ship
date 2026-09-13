@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef } from "react";
+import { formatRelativeTime } from "@ai-matrx/kit/format";
 import { toast } from "sonner";
 import { RefreshCw, Copy, Check, Search, AlertTriangle, Info, FileSearch } from "lucide-react";
 import { Button } from "@matrx/admin-ui/ui/button";
@@ -24,15 +25,11 @@ interface LogsResp {
 const SINCE_PRESETS = ["10m", "1h", "6h", "24h", "7d"] as const;
 const TAIL_PRESETS = [200, 500, 1000, 2000, 5000] as const;
 
+/** The package's dense voice. It also removes this ladder's two lies: a
+ *  stamp AHEAD of now used to dump the raw ISO string on screen (it now reads
+ *  "in 3m"), and an unparseable one did the same. */
 function ageLabel(iso: string | null): string {
-  if (!iso) return "?";
-  const ms = Date.now() - new Date(iso).getTime();
-  if (Number.isNaN(ms) || ms < 0) return iso;
-  const m = Math.round(ms / 60000);
-  if (m < 60) return `${m} min ago`;
-  const h = Math.round(m / 60);
-  if (h < 48) return `${h}h ago`;
-  return `${Math.round(h / 24)}d ago`;
+  return formatRelativeTime(iso, { fallback: "?", fallbackToInput: true });
 }
 
 // Best-effort: pull the JSON 'level' field out of the orchestrator's structured

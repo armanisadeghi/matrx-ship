@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { formatDurationMs } from "@ai-matrx/kit/format";
 import {
   History, CheckCircle2, AlertTriangle,
   ArrowDownToLine, Loader2, ChevronDown, ChevronRight,
@@ -89,7 +90,7 @@ export function HistoryTab({ buildHistory, rollingBack, onRollback }: HistoryTab
                         {new Date(b.timestamp).toLocaleDateString()} {new Date(b.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                       </TableCell>
                       <TableCell className="text-muted-foreground text-sm">
-                        {Math.round(b.duration_ms / 1000)}s
+                        {formatDurationMs(b.duration_ms, { style: "compact" })}
                       </TableCell>
                       <TableCell>
                         <span className="font-mono text-xs text-muted-foreground">{b.git_commit?.slice(0, 8)}</span>
@@ -154,7 +155,7 @@ export function HistoryTab({ buildHistory, rollingBack, onRollback }: HistoryTab
                 </div>
                 <div>
                   <div className="text-xs font-medium text-muted-foreground">Duration</div>
-                  <div className="text-xs mt-1">{Math.round(build.duration_ms / 1000)}s</div>
+                  <div className="text-xs mt-1">{formatDurationMs(build.duration_ms, { style: "compact" })}</div>
                 </div>
               </div>
               {build.error && (
