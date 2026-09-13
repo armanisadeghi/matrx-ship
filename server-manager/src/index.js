@@ -2627,6 +2627,20 @@ async function orchFetchForSandbox(sandboxId, path, init = {}) {
 // the host daemon over the mounted socket, so these /host-srv paths are correct.
 const SANDBOX_PROJECT = join(HOST_SRV, "projects", "matrx-sandbox");
 const ORCH_COMPOSE_DIR = join(HOST_SRV, "apps", "sandbox-orchestrator");
+const ORCH_HOST_COMPOSE_DIR = "/srv/apps/sandbox-orchestrator";
+
+// Compose reads configuration through the Manager's /host-srv bind mount, but
+// the Docker daemon resolves bind-mount sources on the HOST. Running compose
+// with cwd=/host-srv therefore turns a relative source such as
+// ./hosted-migrations into the nonexistent host path /host-srv/.... Always
+// make the host-side project directory explicit while naming the config files
+// through the Manager-visible mount.
+function orchestratorComposeCommand(args) {
+  const files = [`-f ${ORCH_COMPOSE_DIR}/docker-compose.yml`];
+  const override = join(ORCH_COMPOSE_DIR, "docker-compose.override.yml");
+  if (existsSync(override)) files.push(`-f ${override}`);
+  return `docker compose --project-directory ${ORCH_HOST_COMPOSE_DIR} ${files.join(" ")} ${args}`;
+}
 // Build recipes per variant. core/slim/local are plain `docker build`; aidream
 // runs the repo's build-aidream.sh (it stages an aidream checkout into context
 // and requires :core first).
@@ -4211,7 +4225,7 @@ app.get("/api/orchestrator/logs", authMiddleware, async (req, res) => {
   const startedAt = exec(`docker inspect matrx-orchestrator --format '{{.State.StartedAt}}'`).output?.trim() || null;
 
   // `docker compose logs --since` accepts go-style durations (e.g. "1h").
-  const cmd = `docker compose logs --no-color --since ${since} --tail ${tail} orchestrator 2>&1`;
+  const cmd = `${orchestratorComposeCommand(`logs --no-color --since ${since} --tail ${tail} orchestrator`)} 2>&1`;
   const r = exec(cmd, { cwd: ORCH_COMPOSE_DIR, timeout: 30000, maxBuffer: 30 * 1024 * 1024 });
   let text = r.output || "";
   // Strip the "matrx-orchestrator  | " prefix that compose adds to each line,
@@ -4241,7 +4255,7 @@ app.get("/api/orchestrator/logs", authMiddleware, async (req, res) => {
 // ── Restart the orchestrator (recreate container, no rebuild) ───────────────
 app.post("/api/orchestrator/restart", authMiddleware, requireRole("admin", "deployer"), async (_req, res) => {
   noteExpectedRestart("orchestrator-drift", "Hosted orchestrator");
-  const r = exec("docker compose up -d --force-recreate", { cwd: ORCH_COMPOSE_DIR, timeout: 120000 });
+  const r = exec(orchestratorComposeCommand("up -d --force-recreate"), { cwd: ORCH_COMPOSE_DIR, timeout: 120000 });
   _sbxRepoCache = { ts: 0, data: null };
   const ready = await waitForOrchestratorReady();
   res.status(r.success ? 200 : 500).json({ ...r, ready });
@@ -4255,7 +4269,7 @@ app.post("/api/orchestrator/redeploy", authMiddleware, requireSuperadmin, async 
   const context = join(SANDBOX_PROJECT, "orchestrator");
   const build = exec(`docker build -t ${ORCH_IMAGE_TAG} ${context}`, { cwd: context, timeout: 300000 });
   if (!build.success) return res.status(500).json({ success: false, step: "build", error: build.error || build.output });
-  const recreate = exec("docker compose up -d --force-recreate", { cwd: ORCH_COMPOSE_DIR, timeout: 120000 });
+  const recreate = exec(orchestratorComposeCommand("up -d --force-recreate"), { cwd: ORCH_COMPOSE_DIR, timeout: 120000 });
   _sbxRepoCache = { ts: 0, data: null };
   const ready = await waitForOrchestratorReady();
   res.status(recreate.success ? 200 : 500).json({ success: recreate.success, step: recreate.success ? "done" : "recreate", output: recreate.output || recreate.error, ready });
@@ -4270,7 +4284,7 @@ app.post("/api/orchestrator/pull-redeploy", authMiddleware, requireSuperadmin, a
   const context = join(SANDBOX_PROJECT, "orchestrator");
   const build = exec(`docker build -t ${ORCH_IMAGE_TAG} ${context}`, { cwd: context, timeout: 300000 });
   if (!build.success) return res.status(500).json({ success: false, step: "build", error: build.error || build.output });
-  const recreate = exec("docker compose up -d --force-recreate", { cwd: ORCH_COMPOSE_DIR, timeout: 120000 });
+  const recreate = exec(orchestratorComposeCommand("up -d --force-recreate"), { cwd: ORCH_COMPOSE_DIR, timeout: 120000 });
   _sbxRepoCache = { ts: 0, data: null };
   const ready = await waitForOrchestratorReady();
   try { auditLog(req.tokenEntry?.label || "manager", "orch_pull_redeploy", "hosted", {}); } catch { /* */ }
@@ -4344,7 +4358,7 @@ app.post("/api/orchestrator/build/stream", authMiddleware, requireRole("admin"),
     if (!m.success) { send("error", { success: false, message: `DB migrations failed — orchestrator NOT recreated (old container keeps serving): ${m.error || "unknown"}` }); return res.end(); }
     send("phase", { phase: "restart", message: "Recreating orchestrator container..." });
     noteExpectedRestart("orchestrator-drift", "Hosted orchestrator (rebuild)");
-    const r = exec("docker compose up -d --force-recreate", { cwd: ORCH_COMPOSE_DIR, timeout: 120000 });
+    const r = exec(orchestratorComposeCommand("up -d --force-recreate"), { cwd: ORCH_COMPOSE_DIR, timeout: 120000 });
     send(r.success ? "done" : "error", { success: r.success, message: r.success ? "Orchestrator rebuilt + migrated + recreated" : (r.error || "recreate failed") });
     res.end();
   });
@@ -5325,7 +5339,10 @@ app.post("/api/secrets/restart", authMiddleware, requireSuperadmin, async (req, 
     let output = "";
     if (s.restart.type === "compose") {
       const svc = s.restart.service ? ` ${s.restart.service}` : "";
-      const r = exec(`docker compose up -d --force-recreate${svc}`, { cwd: s.restart.cwd, timeout: 180000 });
+      const command = s.id === "infra:orchestrator"
+        ? orchestratorComposeCommand(`up -d --force-recreate${svc}`)
+        : `docker compose up -d --force-recreate${svc}`;
+      const r = exec(command, { cwd: s.restart.cwd, timeout: 180000 });
       if (!r.success) return res.status(500).json({ error: r.error || "compose recreate failed" });
       output = (r.output || "").slice(-500);
     } else if (s.restart.type === "ssm") {
