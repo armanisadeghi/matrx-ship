@@ -8,6 +8,8 @@ The canonical cross-platform ownership table is
 This file adds Ship/control-plane machine detail; if a route here appears to disagree with that table,
 the canonical inventory wins and the mismatch is an incident to repair.
 
+Sandbox-route correction, September 13, 2026 — restoration root: the EC2 control endpoint below uses verified HTTPS/WSS; public TCP8000 is closed. Current sandbox preservation and acceptance are recorded in [sandbox STATE](../common-docs/systems/infrastructure/sandboxes/STATE.md). Other dated service observations in this file have not been re-certified by this correction.
+
 ---
 
 ## 1. Machines (the real "servers")
@@ -18,7 +20,7 @@ the canonical inventory wins and the mismatch is an incident to repair.
 | **`matrx-main`** | `89.116.187.5` | The residual Coolify plane. Runs the scraper, development apps, Directus, and NocoDB. Its two preserved local Postgres resources are Docker-internal only: neither publishes a host port, and the former 5433/5434 proxy sidecars are disabled in Coolify. Its former API, stream, workflow-worker, Admin Dashboard, and Workflow Studio applications are retired and stopped. It is not a production API, worker, stream, Admin, or Studio origin. |
 | **`/srv` dev host** | `srv504398.hstgr.cloud` · `77.37.62.64` · `*.dev.codematrx.com` | The main box. Runs the control plane, all the per-project apps, the shared DB, and the hosted sandbox tier. **This is what the Server Manager manages.** |
 | **EC2 `matrx-sandbox-host-dev`** | AWS `i-084f757c1e47d4efb` · `54.144.86.132` | The **EC2 sandbox tier** — runs its own sandbox orchestrator (systemd) + the sandboxes it spawns. **Also hosts the microservices**: `matrx-files` and `matrx-seo`, both behind the one `matrx-files-tls` Caddy container on :443 (`https://files.matrxserver.com`, `https://seo.matrxserver.com` — see §EC2 services). |
-| **Retired EC2 `matrx-python-server`** | AWS `i-0241f4fee60fb02f6` · stopped 2026-08-20 | Retained hardware record only; it runs no production workload. Both sandbox tiers use the private ECS AI Dream endpoint. Release automation and Manager controls cannot revive the former replica. |
+| **Retired EC2 `matrx-python-server`** | AWS `i-0241f4fee60fb02f6` · stopped 2026-08-20 | Retained hardware record only; it runs no production workload. EC2 sandboxes use private ECS AI Dream; the hosted tier uses its public production endpoint. Release automation and Manager controls cannot revive the former replica. |
 
 > Both EC2 boxes are in AWS account `872515272894`, region `us-east-1`.
 
@@ -96,7 +98,7 @@ Each one also has a private `db-<name>` Postgres container (no public URL).
 | URL / how to reach | What it is |
 |---|---|
 | via `orchestrator.dev.codematrx.com` → `sbx-*` containers | **Hosted tier** — dynamically spawned, per-user volumes. The real flow. |
-| `http://54.144.86.132:8000` (EC2 box) | **EC2 tier** — its own orchestrator + sandboxes. Barely used. |
+| `https://sandbox-orchestrator.matrxserver.com` (EC2 box) | **EC2 tier** — active orchestrator and retained user sandboxes; authenticated public HTTPS/WSS, with a separate private ECS route. |
 | `sandbox-1.dev.codematrx.com` … `sandbox-5` | **Starter pool** (deprecated) — 5 static web-terminal sandboxes, predate the orchestrator. Being retired. |
 
 ---
