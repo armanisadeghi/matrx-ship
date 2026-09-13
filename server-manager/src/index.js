@@ -2641,6 +2641,16 @@ function orchestratorComposeCommand(args) {
   if (existsSync(override)) files.push(`-f ${override}`);
   return `docker compose --project-directory ${ORCH_HOST_COMPOSE_DIR} ${files.join(" ")} ${args}`;
 }
+
+function orchestratorSourceSha() {
+  const result = exec(`git -C ${SANDBOX_PROJECT} rev-parse HEAD`, { timeout: 10000 });
+  const sha = result.output?.trim().toLowerCase();
+  return result.success && /^[0-9a-f]{40}$/.test(sha) ? sha : null;
+}
+
+function orchestratorBuildCommand(context, sourceSha) {
+  return `docker build --build-arg MATRX_SOURCE_SHA=${sourceSha} -t ${ORCH_IMAGE_TAG} ${context}`;
+}
 // Build recipes per variant. core/slim/local are plain `docker build`; aidream
 // runs the repo's build-aidream.sh (it stages an aidream checkout into context
 // and requires :core first).
@@ -4267,7 +4277,9 @@ app.post("/api/orchestrator/restart", authMiddleware, requireRole("admin", "depl
 app.post("/api/orchestrator/redeploy", authMiddleware, requireSuperadmin, async (_req, res) => {
   noteExpectedRestart("orchestrator-drift", "Hosted orchestrator (redeploy)", 300000);
   const context = join(SANDBOX_PROJECT, "orchestrator");
-  const build = exec(`docker build -t ${ORCH_IMAGE_TAG} ${context}`, { cwd: context, timeout: 300000 });
+  const sourceSha = orchestratorSourceSha();
+  if (!sourceSha) return res.status(500).json({ success: false, step: "source-sha", error: "Hosted source SHA is unavailable" });
+  const build = exec(orchestratorBuildCommand(context, sourceSha), { cwd: context, timeout: 300000 });
   if (!build.success) return res.status(500).json({ success: false, step: "build", error: build.error || build.output });
   const recreate = exec(orchestratorComposeCommand("up -d --force-recreate"), { cwd: ORCH_COMPOSE_DIR, timeout: 120000 });
   _sbxRepoCache = { ts: 0, data: null };
@@ -4282,7 +4294,9 @@ app.post("/api/orchestrator/pull-redeploy", authMiddleware, requireSuperadmin, a
   if (!pull.success) return res.status(500).json({ success: false, step: "git-pull", error: pull.error || pull.output });
   _sbxRepoCache = { ts: 0, data: null };
   const context = join(SANDBOX_PROJECT, "orchestrator");
-  const build = exec(`docker build -t ${ORCH_IMAGE_TAG} ${context}`, { cwd: context, timeout: 300000 });
+  const sourceSha = orchestratorSourceSha();
+  if (!sourceSha) return res.status(500).json({ success: false, step: "source-sha", error: "Hosted source SHA is unavailable" });
+  const build = exec(orchestratorBuildCommand(context, sourceSha), { cwd: context, timeout: 300000 });
   if (!build.success) return res.status(500).json({ success: false, step: "build", error: build.error || build.output });
   const recreate = exec(orchestratorComposeCommand("up -d --force-recreate"), { cwd: ORCH_COMPOSE_DIR, timeout: 120000 });
   _sbxRepoCache = { ts: 0, data: null };
@@ -4340,10 +4354,12 @@ function streamSpawn(res, { cmd, args, cwd, onDoneLog }) {
 // ── Rebuild the orchestrator image + recreate (SSE) ─────────────────────────
 app.post("/api/orchestrator/build/stream", authMiddleware, requireRole("admin"), async (_req, res) => {
   const context = join(SANDBOX_PROJECT, "orchestrator");
+  const sourceSha = orchestratorSourceSha();
+  if (!sourceSha) return res.status(500).json({ success: false, step: "source-sha", error: "Hosted source SHA is unavailable" });
   res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive", "X-Accel-Buffering": "no" });
   const send = (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
-  send("phase", { phase: "build", message: `Building ${ORCH_IMAGE_TAG} from ${context}` });
-  const proc = spawn("docker", ["build", "--progress=plain", "-t", ORCH_IMAGE_TAG, context], { env: { ...process.env, DOCKER_BUILDKIT: "1" } });
+  send("phase", { phase: "build", message: `Building ${ORCH_IMAGE_TAG} from ${sourceSha}` });
+  const proc = spawn("docker", ["build", "--progress=plain", "--build-arg", `MATRX_SOURCE_SHA=${sourceSha}`, "-t", ORCH_IMAGE_TAG, context], { env: { ...process.env, DOCKER_BUILDKIT: "1" } });
   const relay = (c) => { for (const l of c.toString().split("\n").filter(Boolean)) send("log", { message: l }); };
   proc.stdout.on("data", relay);
   proc.stderr.on("data", relay);
