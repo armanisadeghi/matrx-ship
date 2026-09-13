@@ -41,6 +41,7 @@
     "bodies that ARE it and are not collapsed yet: loud every run, shrink-only, and a",
     "stale entry fails the guard."
   ],
+  "$catalogFloor": 179,
   "twins": [
     {
       "name": "isUuidShape",
