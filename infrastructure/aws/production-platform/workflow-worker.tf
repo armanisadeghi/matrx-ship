@@ -74,6 +74,18 @@ resource "aws_ecs_task_definition" "workflow_worker" {
 
     linuxParameters        = { initProcessEnabled = true }
     readonlyRootFilesystem = false
+    # THE DEPLOY WINDOW. This is how long the container gets between SIGTERM and
+    # SIGKILL, and aidream divides it into drain phases in ONE place:
+    # `aidream/aidream/deploy_window.py` (CONTAINER_STOP_TIMEOUT_SECONDS). Until
+    # 2026-09-12 that repo believed the window was 290-300s and asked uvicorn and
+    # both scheduler stops for more time than exists here, so every deploy
+    # SIGKILLed the process part-way through its own shutdown and orphaned the
+    # in-flight runs it was about to release (Expert Book Challenge W30).
+    # Change this number ONLY together with that file — a guard in aidream
+    # (tests/test_deploy_drain.py) fails when the two disagree.
+    # NOTE: `lifecycle { ignore_changes = [container_definitions] }` below means
+    # Terraform does not re-assert this on apply; the release pipeline's jq
+    # filter carries it forward verbatim, so this value IS what runs.
     stopTimeout            = 120
     ulimits = [{
       name      = "nofile"
