@@ -13,7 +13,10 @@ locals {
   # value. This tiny bootstrap expands it only inside the process environment,
   # removes the wrapper value, and execs the image's canonical entrypoint.
   # Secret values never enter Terraform state or the task definition.
-  runtime_secret_bootstrap = "python -c 'import json,os; env=os.environ.copy(); env.update(json.loads(env.pop(\"MATRX_RUNTIME_ENV_JSON\"))); os.execvpe(\"/app/entrypoint.sh\",[\"/app/entrypoint.sh\"],env)'"
+  # `exec` is load-bearing: under initProcessEnabled (tini) a plain `sh -c 'python …'`
+  # FORKS python, so ECS's SIGTERM kills the shell and the container dies before the
+  # process can drain (aidream test_deploy_drain.py::test_matrx_ship_declares_a_bootstrap_that_execs).
+  runtime_secret_bootstrap = "exec python -c 'import json,os; env=os.environ.copy(); env.update(json.loads(env.pop(\"MATRX_RUNTIME_ENV_JSON\"))); os.execvpe(\"/app/entrypoint.sh\",[\"/app/entrypoint.sh\"],env)'"
 }
 
 data "aws_iam_policy_document" "aidream_aws_services" {
