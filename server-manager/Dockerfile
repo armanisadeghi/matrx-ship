@@ -5,9 +5,10 @@
 FROM node:22-slim AS base
 
 # Install system tools + prerequisites for Docker CLI + git.
-# rsync is needed by /srv/projects/matrx-sandbox/sandbox-image/build-aidream.sh
-# (which the Manager invokes via the rebuild-missing endpoint) — without it the
-# aidream image build dies with "rsync: command not found" at the staging step.
+# rsync and the SSH client are needed by
+# /srv/projects/matrx-sandbox/sandbox-image/build-aidream.sh (which the Manager
+# invokes via the rebuild-missing endpoint). The script fetches the canonical
+# AI Dream source over SSH before staging it into the image build context.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
@@ -17,6 +18,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     dnsutils \
     net-tools \
     git \
+    openssh-client \
     rsync \
     && rm -rf /var/lib/apt/lists/*
 
