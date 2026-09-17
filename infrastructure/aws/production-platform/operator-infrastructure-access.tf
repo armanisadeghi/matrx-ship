@@ -55,6 +55,22 @@ data "aws_iam_policy_document" "operator_infrastructure_access" {
     ]
   }
 
+  # The SOCI EventBridge target and its CodeBuild project are Terraform-owned.
+  # Routine operators must be able to refresh and repair this exact pipeline.
+  statement {
+    sid = "RepairBrowserWorkerSociTrigger"
+    actions = [
+      "codebuild:BatchGetProjects",
+      "events:PutTargets",
+      "iam:PassRole",
+    ]
+    resources = [
+      "arn:aws:codebuild:${var.aws_region}:${var.aws_account_id}:project/${local.browser_worker_soci_project}",
+      "arn:aws:events:${var.aws_region}:${var.aws_account_id}:rule/${local.name_prefix}-browser-worker-image-pushed",
+      "arn:aws:iam::${var.aws_account_id}:role/matrx/platform/matrx-production-browser-worker-soci-events",
+    ]
+  }
+
   statement {
     sid = "ManageDeclaredBrowserWorkerInfrastructure"
     actions = [
