@@ -320,13 +320,15 @@ resource "aws_cloudwatch_event_target" "browser_worker_soci" {
       digest = "$.detail.image-digest"
     }
 
-    input_template = jsonencode({
+    # jsonencode escapes angle brackets as \u003c/\u003e, so EventBridge sees a
+    # literal "<digest>" instead of substituting the ECR image digest.
+    input_template = replace(replace(jsonencode({
       environmentVariablesOverride = [{
         name  = "IMAGE_DIGEST"
         value = "<digest>"
         type  = "PLAINTEXT"
       }]
-    })
+    }), "\\u003c", "<"), "\\u003e", ">")
   }
 }
 
