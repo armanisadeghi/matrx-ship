@@ -218,7 +218,11 @@ resource "aws_codebuild_project" "browser_worker_soci" {
           commands:
             - set -eux
             - . /tmp/soci.env
-            - /usr/local/bin/ctr images pull --user "AWS:$(cat /tmp/ecr-password)" "$IMAGE_REF"
+            # `ctr images pull` also UNPACKS into overlayfs, which fails inside
+            # CodeBuild ("failed to convert whiteout file … operation not
+            # permitted"). Building an index only needs the compressed blobs in
+            # the content store, so fetch them and skip the snapshot entirely.
+            - /usr/local/bin/ctr content fetch --platform linux/amd64 --user "AWS:$(cat /tmp/ecr-password)" "$IMAGE_REF"
             - soci create "$IMAGE_REF"
             - soci push --user "AWS:$(cat /tmp/ecr-password)" "$IMAGE_REF"
         post_build:
