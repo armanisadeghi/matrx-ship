@@ -137,6 +137,21 @@ resource "aws_vpc_security_group_egress_rule" "aidream_outbound" {
   ip_protocol       = "-1"
 }
 
+# Residential egress (common-docs/systems/platform/residential-egress/FEATURE.md):
+# a user's home computer holds ONE WebSocket on ONE API task, and a consumer
+# socket may land on another task. The receiving task bridges to the holding
+# task over its private IP on the API port, so the API must admit its own
+# security group. Without this rule every cross-task relay fails with
+# `bridge_unreachable` (announced, never silent) — one in two or three tries.
+resource "aws_vpc_security_group_ingress_rule" "aidream_from_self" {
+  security_group_id            = aws_security_group.aidream.id
+  referenced_security_group_id = aws_security_group.aidream.id
+  description                  = "Task-to-task bridge for the residential egress relay"
+  from_port                    = 8000
+  to_port                      = 8000
+  ip_protocol                  = "tcp"
+}
+
 resource "aws_vpc_security_group_ingress_rule" "aidream_from_internal_alb" {
   security_group_id            = aws_security_group.aidream.id
   referenced_security_group_id = aws_security_group.aidream_internal_alb.id
