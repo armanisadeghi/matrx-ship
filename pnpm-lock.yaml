@@ -10,7 +10,7 @@ importers:
     dependencies:
       '@ai-matrx/kit':
         specifier: latest
-        version: 0.14.2(react@19.2.4)
+        version: 0.15.5(react@19.2.4)
       '@codemirror/lang-sql':
         specifier: ^6.10.0
         version: 6.10.0
@@ -119,7 +119,7 @@ importers:
     dependencies:
       '@ai-matrx/kit':
         specifier: latest
-        version: 0.14.2(react@19.2.4)
+        version: 0.15.5(react@19.2.4)
       '@matrx/admin-ui':
         specifier: workspace:*
         version: link:../packages/admin-ui
@@ -277,7 +277,7 @@ importers:
     dependencies:
       '@ai-matrx/kit':
         specifier: latest
-        version: 0.14.2(react@19.2.4)
+        version: 0.15.5(react@19.2.4)
       '@aws-sdk/client-cloudtrail':
         specifier: ^3.700.0
         version: 3.1053.0
@@ -320,7 +320,7 @@ importers:
     dependencies:
       '@ai-matrx/kit':
         specifier: latest
-        version: 0.14.2(react@19.2.4)
+        version: 0.15.5(react@19.2.4)
       '@matrx/admin-ui':
         specifier: workspace:*
         version: link:../../packages/admin-ui
@@ -403,8 +403,8 @@ importers:
 
 packages:
 
-  '@ai-matrx/kit@0.14.2':
-    resolution: {integrity: sha512-7J7WQ4yKNa1jiLQnwwX392f8rjSKW8epOh5ax2M0RY1l2g1cqBsMJE8EqoeVFPIAv1AEz5kCohkwgdaMMd6d3w==}
+  '@ai-matrx/kit@0.15.5':
+    resolution: {integrity: sha512-2wHogoLPOm9pQfAOAS/zrhsCJvj2yGDJOuxJ3ALtxVPMl/08MeXO9YNtQhNtAK3oUlcJgr87znnT8N/9j+Ya2A==}
     engines: {node: '>=20'}
     peerDependencies:
       react: '>=18.0.0'
@@ -699,8 +699,8 @@ packages:
   '@codemirror/commands@6.10.2':
     resolution: {integrity: sha512-vvX1fsih9HledO1c9zdotZYUZnE4xV0m6i3m25s5DIfXofuprk6cRcLUZvSk3CASUbwjQX21tOGbkY2BH8TpnQ==}
 
-  '@codemirror/commands@6.11.0':
-    resolution: {integrity: sha512-/K4Rl5BN0OtTiPWmJCdqODu38XnDMsDxKY5rgrPnCkutPTJf2wVbkoixLfealF5Kwse/s8P8M5jAiURiwSwnFA==}
+  '@codemirror/commands@6.11.1':
+    resolution: {integrity: sha512-O/4hG3SC1YwcmQ0d2UVNDs+AsaNWd1iHVxbTeEBuqH+6bExAiPK3iS/BvpY6rZGURALv4ZD3sIgcCmRvw3ehBg==}
 
   '@codemirror/lang-sql@6.10.0':
     resolution: {integrity: sha512-6ayPkEd/yRw0XKBx5uAiToSgGECo/GY2NoJIHXIIQh1EVwLuKoU8BP/qK0qH5NLXAbtJRLuT73hx7P9X34iO4w==}
@@ -5738,7 +5738,7 @@ packages:
 
 snapshots:
 
-  '@ai-matrx/kit@0.14.2(react@19.2.4)':
+  '@ai-matrx/kit@0.15.5(react@19.2.4)':
     dependencies:
       dompurify: 3.4.15
       idb: 8.0.3
@@ -6298,7 +6298,7 @@ snapshots:
       '@codemirror/view': 6.39.13
       '@lezer/common': 1.5.1
 
-  '@codemirror/commands@6.11.0':
+  '@codemirror/commands@6.11.1':
     dependencies:
       '@codemirror/language': 6.12.1
       '@codemirror/state': 6.7.4
@@ -8492,7 +8492,7 @@ snapshots:
   codemirror@6.0.2:
     dependencies:
       '@codemirror/autocomplete': 6.20.0
-      '@codemirror/commands': 6.11.0
+      '@codemirror/commands': 6.11.1
       '@codemirror/language': 6.12.1
       '@codemirror/lint': 6.9.4
       '@codemirror/search': 6.6.0
