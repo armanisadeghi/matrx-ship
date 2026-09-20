@@ -81,3 +81,46 @@ resource "aws_s3_bucket_policy" "browser_checkpoints" {
 
   depends_on = [aws_s3_bucket_public_access_block.browser_checkpoints]
 }
+
+# Lifecycle (2026-09-20). What a bucket rule CAN decide safely, and only that:
+#   - an upload that never finished (a worker died mid-PUT) is garbage after 2 days;
+#   - a non-current version exists only because something overwrote or deleted
+#     the key — the retention sweep deletes every version explicitly, so what is
+#     left non-current after 7 days is a leftover, not a checkpoint;
+#   - a delete marker with no versions behind it is noise.
+# What it deliberately does NOT do: expire current objects by age. D-20 keeps a
+# rarely-used browser's newest verified checkpoint FOREVER, and only the
+# database knows which object that is. Age-based current-object expiry lives in
+# the "Prune old browser checkpoints" system task (DB-driven, cryptographic
+# erasure, plus an orphan pass for objects no row names), never here.
+resource "aws_s3_bucket_lifecycle_configuration" "browser_checkpoints" {
+  bucket = aws_s3_bucket.browser_checkpoints.id
+
+  depends_on = [aws_s3_bucket_versioning.browser_checkpoints]
+
+  rule {
+    id     = "abort-abandoned-multipart-uploads"
+    status = "Enabled"
+
+    filter {}
+
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 2
+    }
+  }
+
+  rule {
+    id     = "expire-noncurrent-versions-and-empty-delete-markers"
+    status = "Enabled"
+
+    filter {}
+
+    noncurrent_version_expiration {
+      noncurrent_days = 7
+    }
+
+    expiration {
+      expired_object_delete_marker = true
+    }
+  }
+}
