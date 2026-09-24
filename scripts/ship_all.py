@@ -25,7 +25,7 @@ import os
 import subprocess
 import sys
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+HERE = os.path.dirname(os.path.realpath(__file__))   # real location, even when run through code/scripts/
 CODE = os.path.dirname(os.path.dirname(HERE))          # .../code
 OUT_ROOT = os.path.expanduser("~/.matrx/ship-all")
 FIND_SESSIONS = os.path.join(HERE, "find-file-sessions.py")
