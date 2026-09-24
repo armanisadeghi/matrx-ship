@@ -108,6 +108,54 @@ release
 echo "release — no VERSION file yet"
 check "exit 0 and v0.0.1 on origin"             '[[ $(cat "$R/status") -eq 0 ]] && [[ "$(on_origin VERSION)" == "0.0.1" ]]'
 
+# ── 7. the independent review's defects (2026-09-24), one repo each ─────────
+# a. a nested "version" before the top-level one; ahead-only history; hooks that deny/hang
+new_repo seven 's/^VERSION_FILE=.*/VERSION_FILE="package.json"/'
+printf '{"name":"x","engines":{"version":"18.0.0"},"version":"1.0.0"}\n' > package.json
+mkdir -p .githooks; printf '#!/bin/sh\nexit 1\n' > .githooks/pre-push; printf '#!/bin/sh\ntouch "%s/post-merge-ran"\n' "$R" > .githooks/post-merge
+chmod +x .githooks/*; git add -A; git commit -qm nested; git push -q origin main
+git config core.hooksPath .githooks
+echo ahead > ahead.txt; git add ahead.txt; git -c core.hooksPath=/dev/null commit -qm ahead
+release
+echo "release — nested version, pre-push hook, ahead-only"
+check "exit 0 despite a denying pre-push hook"  '[[ $(cat "$R/status") -eq 0 ]] && git ls-remote --tags origin | grep -q "refs/tags/v1.0.1$"'
+check "the TOP-LEVEL version was bumped"        'on_origin package.json | grep -q "\"engines\":{\"version\":\"18.0.0\"},\"version\":\"1.0.1\""'
+check "no hook ran in the shared checkout"      '[[ ! -f "$R/post-merge-ran" ]]'
+check "ahead-only: one parent, no empty merge"  '[[ $(git --git-dir="$R/origin.git" log -1 --format=%p main | wc -w) -eq 1 ]]'
+git config --unset core.hooksPath
+
+# b. pyproject with a tool table first; an executable plain file; a non-JSON extra; CRLF [Unreleased]
+new_repo eight 's/^VERSION_FILE=.*/VERSION_FILE="VERSION"/; s/^EXTRA_VERSION_FILES=.*/EXTRA_VERSION_FILES=("pyproject.toml" "Cargo.toml")/; s/^CHANGELOG=.*/CHANGELOG="CHANGELOG.md"/'
+printf '2.3.0\r\n' > VERSION; chmod +x VERSION
+printf '[tool.commitizen]\nversion = "0.0.9"\n\n[project]\nname = "p"\nversion = "2.3.0"\n' > pyproject.toml
+printf '[package]\nname = "c"\nversion = "2.3.0"\n' > Cargo.toml
+printf '# Changelog\r\n\r\n## [Unreleased]\r\n\r\n## [2.3.0] - 2026-01-01\r\n' > CHANGELOG.md
+git add -A; git commit -qm files; git push -q origin main
+( cd "$R/other" && git pull -q origin main && git tag v2.3.1 && git push -q origin v2.3.1 )
+bash scripts/release.sh --dry-run > "$R/dry" 2>&1
+release
+echo "release — pyproject tables, file mode, non-JSON extra, CRLF changelog, dry run"
+check "dry run names the next FREE tag"         'grep -q "would release v2.3.2" "$R/dry"'
+check "exit 0 and v2.3.2 shipped"               '[[ $(cat "$R/status") -eq 0 ]] && git ls-remote --tags origin | grep -q "refs/tags/v2.3.2$"'
+check "[project] bumped, tool table untouched"  'on_origin pyproject.toml | grep -q "^version = \"2.3.2\"" && on_origin pyproject.toml | grep -q "^version = \"0.0.9\""'
+check "CRLF kept in VERSION"                    '[[ "$(on_origin VERSION | od -c | head -1)" == *"\r  \n"* ]]'
+check "executable mode kept"                    '[[ "$(git --git-dir="$R/origin.git" ls-tree main VERSION | cut -c1-6)" == 100755 ]]'
+check "a non-JSON extra is untouched + WARNING" 'on_origin Cargo.toml | grep -q "^version = \"2.3.0\"" && grep -q "Cargo.toml is neither JSON nor a pyproject.toml" "$R/out"'
+check "[Unreleased] (CRLF) got its heading"     'on_origin CHANGELOG.md | grep -q "^## 2.3.2 - " && ! grep -q "Unreleased. heading" "$R/out"'
+
+# c. a misconfigured JSON version file must stop, never ship 0.0.1
+new_repo nine 's/^VERSION_FILE=.*/VERSION_FILE="app\/package.json"/'
+release
+echo "release — misconfigured version file"
+check "stops: version unreadable, nothing tagged" '[[ $(cat "$R/status") -eq 1 ]] && grep -q "cannot read the version" "$R/out" && ! git ls-remote --tags origin | grep -q refs/tags/'
+
+# d. an origin with no main branch says so
+new_repo ten 's/^VERSION_FILE=.*/VERSION_FILE="package.json"/'
+git --git-dir="$R/origin.git" branch -m main trunk 2>/dev/null; git --git-dir="$R/origin.git" symbolic-ref HEAD refs/heads/trunk
+release
+echo "release — origin without main"
+check "the stop names the missing branch"       '[[ $(cat "$R/status") -eq 1 ]] && grep -q "has no '"'"'main'"'"' branch" "$R/out"'
+
 # ── 6. GitHub unreachable → the one honest stop ──────────────────────────────
 git remote set-url origin "$SANDBOX/nowhere.git"
 release
