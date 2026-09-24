@@ -1,15 +1,19 @@
 #!/usr/bin/env python3
 """ship_all — run ./ship.sh in every repo that needs it, skip the rest, report what is left.
 
-Run:  matrx-ship/scripts/ship-all.sh [--dry-run] [--only a,b] [--skip a,b] [--days N]
+Run:  code/scripts/ship-all.sh [--dry-run] [--only a,b] [--skip a,b] [--days N] [--jobs N]
 
 For every git repository directly under the code folder (the parent of matrx-ship):
   1. inspect it: branch, uncommitted files, commits ahead of / behind GitHub, local branches,
      extra worktrees, remote branches, open pull requests.
   2. SKIP it when there is nothing to sync: no uncommitted files and not ahead of or behind GitHub.
   3. otherwise run its ./ship.sh (sync with GitHub, then release) and keep the full output.
-  4. list what is open in its _conflicts/README.md afterwards, plus, for every held file, the
-     conversations (Claude Code / Codex) that edited that file recently.
+  4. only AFTER every ship has finished: list what is open in each _conflicts/README.md and, in
+     ONE pass over the transcripts, the conversations (Claude Code / Codex) that edited each held
+     file. Nothing slow ever runs before or between releases.
+
+Repos are checked in parallel and shipped in parallel (--jobs, default 4). Every ship prints a
+START line, streams its output live prefixed with the repo name, and an END line with its time.
 
 Output
   - one line per repo on the terminal, then a list of everything still open
@@ -24,6 +28,9 @@ import json
 import os
 import subprocess
 import sys
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 
 HERE = os.path.dirname(os.path.realpath(__file__))   # real location, even when run through code/scripts/
 CODE = os.path.dirname(os.path.dirname(HERE))          # .../code
@@ -103,15 +110,61 @@ def held_files(repo):
     return found
 
 
-def sessions_for(repo, path, days):
-    if not os.path.isfile(FIND_SESSIONS):
-        return []
-    rc, out, _ = run([sys.executable, FIND_SESSIONS, "--json", "--days", str(days),
-                      os.path.join(repo, path)], repo, timeout=300)
+def sessions_for_all(abs_paths, days):
+    """{abs_path: [rows]} for every held file in every repo, in ONE pass over the transcripts."""
+    if not abs_paths or not os.path.isfile(FIND_SESSIONS):
+        return {}
+    rc, out, err = run([sys.executable, FIND_SESSIONS, "--json", "--days", str(days)] + abs_paths,
+                       CODE, timeout=600)
     try:
-        return json.loads(out) if rc == 0 else []
+        return json.loads(out) if rc == 0 else {}
     except ValueError:
-        return []
+        return {}
+
+
+PRINT = threading.Lock()
+
+
+def say(msg):
+    with PRINT:
+        print(msg, flush=True)
+
+
+def clock():
+    return datetime.datetime.now().strftime("%H:%M:%S")
+
+
+def fmt(sec):
+    sec = int(sec)
+    return "%dm%02ds" % (sec // 60, sec % 60) if sec >= 60 else "%ds" % sec
+
+
+def ship(info, out_dir, stamp):
+    name, repo = info["repo"], info["path"]
+    log = os.path.join(out_dir, name + ".log")
+    t0 = time.time()
+    say("▶ START %-26s %s  (%d uncommitted, %d ahead, %d behind)  log: %s" % (
+        name, clock(), info["dirty"], info["ahead"], info["behind"], log))
+    with open(log, "w") as f:
+        proc = subprocess.Popen(["bash", "./ship.sh", "ship-all %s" % stamp], cwd=repo,
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                text=True, errors="replace", bufsize=1)
+        for line in proc.stdout:
+            f.write(line)
+            f.flush()
+            say("    [%s] %s" % (name, line.rstrip("\n")))
+        proc.wait()
+    info["log"] = log
+    info["ship_exit"] = proc.returncode
+    info["seconds"] = round(time.time() - t0)
+    tail = open(log, errors="replace").read().splitlines()
+    summary = [l for l in tail if l.startswith("ship.sh: sync exit")]
+    info["ship_summary"] = summary[-1] if summary else "(no summary line; see the log)"
+    info["status"] = ("shipped" if proc.returncode == 0 and "sync exit 0" in info["ship_summary"]
+                      else "shipped with problems")
+    say("■ END   %-26s %s  %-22s took %s  (%s)" % (name, clock(), info["status"], fmt(info["seconds"]),
+                                                   info["ship_summary"].replace("ship.sh: ", "")))
+    return info
 
 
 def main():
@@ -124,20 +177,24 @@ def main():
         return None
     only, skip = listarg("--only"), listarg("--skip") or set()
     days = int(args[args.index("--days") + 1]) if "--days" in args else 3
+    jobs = int(args[args.index("--jobs") + 1]) if "--jobs" in args else 4
 
+    t_all = time.time()
     stamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     out_dir = os.path.join(OUT_ROOT, stamp)
     os.makedirs(out_dir, exist_ok=True)
-    repos = sorted(os.path.join(CODE, d) for d in os.listdir(CODE)
-                   if os.path.isdir(os.path.join(CODE, d, ".git")))
-    results = []
-    print("ship-all %s  (%s)%s" % (stamp, CODE, "  DRY RUN: nothing is shipped" if dry else ""))
-    for repo in repos:
-        name = os.path.basename(repo)
-        if (only and name not in only) or name in skip:
-            continue
-        print("  %-28s checking…" % name, flush=True)
-        info = inspect(repo)
+    repos = [os.path.join(CODE, d) for d in sorted(os.listdir(CODE))
+             if os.path.isdir(os.path.join(CODE, d, ".git"))
+             and not ((only and d not in only) or d in skip)]
+    say("ship-all %s  (%s)%s" % (stamp, CODE, "  DRY RUN: nothing is shipped" if dry else ""))
+
+    # ── 1. check every repo at once (fetch + read-only git) ──────────────────────────────
+    t0 = time.time()
+    say("▶ checking %d repos in parallel…" % len(repos))
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        infos = list(pool.map(inspect, repos))
+    to_ship = []
+    for info in infos:
         needs = info["dirty"] > 0 or info["ahead"] > 0 or info["behind"] > 0
         if not info["has_ship"]:
             info["status"] = "no ship.sh"
@@ -150,33 +207,35 @@ def main():
         elif dry:
             info["status"] = "would ship"
         else:
-            log = os.path.join(out_dir, name + ".log")
-            print("  %-28s SHIPPING (%d uncommitted, %d ahead, %d behind) — full log: %s" % (
-                name, info["dirty"], info["ahead"], info["behind"], log), flush=True)
-            # Everything ./ship.sh prints streams to this terminal live AND goes to the log.
-            with open(log, "w") as f:
-                proc = subprocess.Popen(["bash", "./ship.sh", "ship-all %s" % stamp], cwd=repo,
-                                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                        text=True, errors="replace", bufsize=1)
-                for line in proc.stdout:
-                    f.write(line)
-                    f.flush()
-                    print("    [%s] %s" % (name, line.rstrip("\n")), flush=True)
-                proc.wait()
-            info["log"] = log
-            info["ship_exit"] = proc.returncode
-            r = proc
-            tail = open(log, errors="replace").read().splitlines()
-            summary = [l for l in tail if l.startswith("ship.sh: sync exit")]
-            info["ship_summary"] = summary[-1] if summary else "(no summary line; see the log)"
-            info["status"] = "shipped" if r.returncode == 0 and "sync exit 0" in info["ship_summary"] else "shipped with problems"
-        info["open_items"] = open_items(repo)
-        info["held"] = held_files(repo)
-        for h in info["held"]:
-            print("  %-28s finding the conversations that edited %s (can take a minute)…" % (name, h["file"]),
-                  flush=True)
-            h["sessions"] = sessions_for(repo, h["file"], days)
-        results.append(info)
+            info["status"] = "to ship"
+            to_ship.append(info)
+    say("■ checked in %s: %d to ship, %d skipped" % (fmt(time.time() - t0), len(to_ship),
+                                                    len(infos) - len(to_ship)))
+
+    # ── 2. ship, several at once ──────────────────────────────────────────────────────────
+    if to_ship:
+        t0 = time.time()
+        say("▶ shipping %d repo(s), up to %d at a time…" % (len(to_ship), jobs))
+        with ThreadPoolExecutor(max_workers=jobs) as pool:
+            list(pool.map(lambda i: ship(i, out_dir, stamp), to_ship))
+        say("■ all shipping finished in %s" % fmt(time.time() - t0))
+
+    # ── 3. only now: what is open, and who edited each held file (one pass) ──────────────
+    for info in infos:
+        info["open_items"] = open_items(info["path"])
+        info["held"] = held_files(info["path"])
+    held_paths = [os.path.join(i["path"], h["file"]) for i in infos for h in i["held"]]
+    if held_paths:
+        t0 = time.time()
+        say("▶ finding the conversations that edited %d held file(s)…" % len(held_paths))
+        who = sessions_for_all(held_paths, days)
+        for info in infos:
+            for h in info["held"]:
+                h["sessions"] = who.get(os.path.join(info["path"], h["file"]), [])
+        say("■ found in %s" % fmt(time.time() - t0))
+
+    say("")
+    for info in infos:
         extras = []
         if info["open_items"]:
             extras.append("%d open item(s)" % len(info["open_items"]))
@@ -186,31 +245,33 @@ def main():
                 extras.append("%d %s(es)" % (len(info[key]), label))
         if info["open_prs"]:
             extras.append("%d open PR(s)" % len(info["open_prs"]))
-        print("  %-28s %-24s dirty=%-4d ahead=%-3d behind=%-3d %s" % (
-            name, info["status"], info["dirty"], info["ahead"], info["behind"], "  ".join(extras)))
+        took = fmt(info["seconds"]) if "seconds" in info else ""
+        say("  %-28s %-24s %-7s dirty=%-4d ahead=%-3d behind=%-3d %s" % (
+            info["repo"], info["status"], took, info["dirty"], info["ahead"], info["behind"], "  ".join(extras)))
 
-    summary = {"stamp": stamp, "code_dir": CODE, "dry_run": dry, "repos": results}
+    summary = {"stamp": stamp, "code_dir": CODE, "dry_run": dry, "seconds": round(time.time() - t_all),
+               "repos": infos}
     for path in (os.path.join(out_dir, "summary.json"), os.path.join(OUT_ROOT, "latest.json")):
         with open(path, "w") as f:
             json.dump(summary, f, indent=2)
 
-    open_repos = [r for r in results if r["open_items"] or r["held"]]
-    problems = [r for r in results if r["status"] in ("shipped with problems", "could not reach GitHub")]
-    print("")
+    open_repos = [r for r in infos if r["open_items"] or r["held"]]
+    problems = [r for r in infos if r["status"] in ("shipped with problems", "could not reach GitHub")]
+    say("")
     if open_repos:
-        print("OPEN CONFLICT ITEMS")
+        say("OPEN CONFLICT ITEMS")
         for r in open_repos:
             for item in r["open_items"]:
-                print("  %s: %s" % (r["repo"], item))
+                say("  %s: %s" % (r["repo"], item))
             for h in r["held"]:
-                who = ["%s %s (%s) %s" % (s["tool"], s["session"], s["last"], s.get("title", "")[:60])
-                       for s in h["sessions"][:3]]
-                print("    %s  edited by: %s" % (h["file"], "; ".join(who) or "no recent conversation found"))
+                edited = [s for s in h.get("sessions", []) if s["kind"] == "edited"][:3]
+                who = ["%s %s %s (%s)" % (s["tool"], s["session"], s["last"], s.get("title", "")[:50]) for s in edited]
+                say("    %s  edited by: %s" % (h["file"], "; ".join(who) or "no recent conversation found"))
     if problems:
-        print("PROBLEMS")
+        say("PROBLEMS")
         for r in problems:
-            print("  %s: %s  %s" % (r["repo"], r["status"], r.get("log", r.get("fetch_error", ""))))
-    print("summary: %s" % os.path.join(out_dir, "summary.json"))
+            say("  %s: %s  %s" % (r["repo"], r["status"], r.get("log", r.get("fetch_error", ""))))
+    say("done in %s. summary: %s" % (fmt(time.time() - t_all), os.path.join(out_dir, "summary.json")))
     sys.exit(1 if (open_repos or problems) else 0)
 
 

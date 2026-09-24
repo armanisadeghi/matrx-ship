@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """find-file-sessions — which Claude Code and Codex conversations edited a file recently.
 
-Run:  python3 matrx-ship/scripts/find-file-sessions.py [--days N] [--json] <file path>
+Run:  python3 matrx-ship/scripts/find-file-sessions.py [--days N] [--json] <file path> [<file path> ...]
+      (any number of files, one pass over the transcripts; --json prints {file: [rows]})
 
 Reads the local transcripts (Claude Code: ~/.claude/projects/**/*.jsonl, Codex:
 ~/.codex/sessions/**/*.jsonl) changed in the last N days (default 3) and lists every
@@ -44,14 +45,53 @@ def recent_files(root, days):
     return out
 
 
-def grep_files(files, needle):
-    """The subset of files containing needle (fast prefilter with grep)."""
-    hits = []
+CODEX_RG = ("/opt/homebrew/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/"
+            "vendor/aarch64-apple-darwin/codex-path/rg")
+
+
+def ripgrep():
+    """ripgrep scans the transcripts ~30x faster than macOS grep (6 s vs 180 s for 11 GB)."""
+    import shutil
+    found = shutil.which("rg") or (CODEX_RG if os.access(CODEX_RG, os.X_OK) else None)
+    if not found and not getattr(ripgrep, "warned", False):
+        ripgrep.warned = True
+        print("find-file-sessions: ripgrep not found, using the slow macOS grep "
+              "(install it with: brew install ripgrep)", file=sys.stderr)
+    return found
+
+
+def _search(files, needles, list_only):
+    rg = ripgrep()
+    pats = []
+    for n in needles:
+        pats += ["-e", n]
+    if rg:
+        base = [rg, "-F", "--no-messages"] + (["-l"] if list_only else ["--with-filename", "--no-heading", "--null", "--no-line-number"])
+    else:
+        base = ["grep", "-F", "-s"] + (["-l"] if list_only else ["-H", "--null"])
     for i in range(0, len(files), 200):
-        r = subprocess.run(["grep", "-lF", "-e", needle, "--"] + files[i:i + 200],
-                           capture_output=True, text=True)
-        hits += [l for l in r.stdout.splitlines() if l]
+        r = subprocess.run(base + pats + ["--"] + files[i:i + 200], capture_output=True)
+        yield r.stdout
+
+
+def grep_files(files, needles):
+    """The subset of files containing any of the needles."""
+    hits = []
+    for out in _search(files, needles, True):
+        hits += [l for l in out.decode("utf-8", "replace").splitlines() if l]
     return hits
+
+
+def matching_lines(files, needles):
+    """{file: [lines]} for every line containing any needle; the search tool does the reading."""
+    out = {}
+    for chunk in _search(files, needles, False):
+        for rec in chunk.split(b"\n"):
+            if b"\0" not in rec:
+                continue
+            name, line = rec.split(b"\0", 1)
+            out.setdefault(name.decode("utf-8", "replace"), []).append(line.decode("utf-8", "replace"))
+    return out
 
 
 def short_time(ts):
@@ -90,12 +130,17 @@ def first_prompt(path):
     return ""
 
 
-def claude_sessions(abs_path, rel_path, days):
-    found = {}
-    for p in grep_files(recent_files(CLAUDE_DIR, days), rel_path):
-        sid, title, cwd, edits, last_edit, mentioned = None, "", "", 0, "", False
-        for line in open(p, errors="replace"):
-            if rel_path not in line and '"custom-title"' not in line:
+def claude_sessions(targets, days):
+    """targets: {rel_path: abs_path}. Returns {rel_path: [rows]} from ONE pass over the transcripts."""
+    found = {rel: {} for rel in targets}
+    per_file = matching_lines(grep_files(recent_files(CLAUDE_DIR, days), list(targets)),
+                              list(targets) + ['"custom-title"'])
+    for p, file_lines in per_file.items():
+        state = {rel: {"edits": 0, "last": "", "mentioned": False, "cwd": ""} for rel in targets}
+        sid, title = None, ""
+        for line in file_lines:
+            hits = [rel for rel in targets if rel in line]
+            if not hits and '"custom-title"' not in line:
                 continue
             try:
                 e = json.loads(line)
@@ -113,19 +158,32 @@ def claude_sessions(abs_path, rel_path, days):
                     continue
                 inp = c.get("input") or {}
                 target = inp.get("file_path") or inp.get("notebook_path") or ""
-                if c.get("name") in CLAUDE_EDIT_TOOLS and (target == abs_path or target.endswith("/" + rel_path)):
-                    edits += 1
-                    last_edit = max(last_edit, e.get("timestamp", ""))
-                    cwd = e.get("cwd") or cwd
-                elif rel_path in json.dumps(inp):
-                    mentioned = True
-                    cwd = e.get("cwd") or cwd
+                blob = json.dumps(inp)
+                for rel in hits:
+                    st = state[rel]
+                    if c.get("name") in CLAUDE_EDIT_TOOLS and (target == targets[rel] or target.endswith("/" + rel)):
+                        st["edits"] += 1
+                        st["last"] = max(st["last"], e.get("timestamp", ""))
+                        st["cwd"] = e.get("cwd") or st["cwd"]
+                    elif rel in blob:
+                        st["mentioned"] = True
+                        st["cwd"] = e.get("cwd") or st["cwd"]
         sid = sid or os.path.basename(p)[:-6]
-        if edits or mentioned:
-            found[sid] = {"tool": "claude", "session": sid, "title": title or first_prompt(p), "edits": edits,
-                          "last": short_time(last_edit) if last_edit else "", "cwd": cwd,
-                          "kind": "edited" if edits else "mentioned", "_sort": last_edit}
-    return list(found.values())
+        for rel, st in state.items():
+            if not (st["edits"] or st["mentioned"]):
+                continue
+            # a session's sub-agents write separate files under the SAME session id: merge, never overwrite
+            row = found[rel].setdefault(sid, {"tool": "claude", "session": sid, "title": "", "edits": 0,
+                                              "cwd": "", "_sort": ""})
+            row["edits"] += st["edits"]
+            row["_sort"] = max(row["_sort"], st["last"])
+            row["title"] = row["title"] or title or first_prompt(p)
+            row["cwd"] = row["cwd"] or st["cwd"]
+    for rows in found.values():
+        for row in rows.values():
+            row["kind"] = "edited" if row["edits"] else "mentioned"
+            row["last"] = short_time(row["_sort"]) if row["_sort"] else ""
+    return {rel: list(v.values()) for rel, v in found.items()}
 
 
 def codex_titles():
@@ -151,15 +209,18 @@ def codex_meta(path):
         return "", ""
 
 
-def codex_sessions(abs_path, rel_path, days):
+def codex_sessions(targets, days):
+    """targets: {rel_path: abs_path}. Returns {rel_path: [rows]} from ONE pass over the transcripts."""
     titles = codex_titles()
-    found = []
-    markers = ["File: " + abs_path, "File: " + rel_path]
-    for p in grep_files(recent_files(CODEX_DIR, days), rel_path):
+    found = {rel: [] for rel in targets}
+    per_file = matching_lines(grep_files(recent_files(CODEX_DIR, days), list(targets)), list(targets))
+    for p, file_lines in per_file.items():
         sid = os.path.basename(p)[:-6][-36:]
-        edits, last_edit, mentioned, cwd = 0, "", False, ""
-        for line in open(p, errors="replace"):
-            if rel_path not in line:
+        state = {rel: {"edits": 0, "last": "", "mentioned": False} for rel in targets}
+        cwd = ""
+        for line in file_lines:
+            hits = [rel for rel in targets if rel in line]
+            if not hits:
                 continue
             try:
                 e = json.loads(line)
@@ -171,21 +232,48 @@ def codex_sessions(abs_path, rel_path, days):
                     cwd = pl.get("cwd") or cwd
                 continue
             args = str(pl.get("arguments") or pl.get("input") or pl.get("action") or "")
-            if any(m in args for m in markers):
-                edits += 1
-                last_edit = max(last_edit, e.get("timestamp", ""))
-            elif rel_path in args:
-                mentioned = True
-        if edits or mentioned:
-            parent, nick = codex_meta(p)
-            title = titles.get(sid) or first_prompt(p)
-            if parent:
-                # a sub-agent: the conversation to reach is the one that spawned it
-                title = "sub-agent %s of %s (%s)" % (nick or "?", parent, titles.get(parent) or "untitled")
-            found.append({"tool": "codex", "session": sid, "title": title, "edits": edits,
-                          "last": short_time(last_edit) if last_edit else "", "cwd": cwd,
-                          "parent": parent, "kind": "edited" if edits else "mentioned", "_sort": last_edit})
+            for rel in hits:
+                st = state[rel]
+                if ("File: " + targets[rel]) in args or ("File: " + rel) in args:
+                    st["edits"] += 1
+                    st["last"] = max(st["last"], e.get("timestamp", ""))
+                elif rel in args:
+                    st["mentioned"] = True
+        touched = [rel for rel, st in state.items() if st["edits"] or st["mentioned"]]
+        if not touched:
+            continue
+        parent, nick = codex_meta(p)
+        title = titles.get(sid) or first_prompt(p)
+        if parent:
+            title = "sub-agent %s of %s (%s)" % (nick or "?", parent, titles.get(parent) or "untitled")
+        for rel in touched:
+            st = state[rel]
+            found[rel].append({"tool": "codex", "session": sid, "title": title, "edits": st["edits"],
+                               "last": short_time(st["last"]) if st["last"] else "", "cwd": cwd,
+                               "parent": parent, "kind": "edited" if st["edits"] else "mentioned",
+                               "_sort": st["last"]})
     return found
+
+
+def find(abs_paths, days=3):
+    """{abs_path: [rows]} for any number of files, in one pass over each transcript store."""
+    targets = {}
+    for ap in abs_paths:
+        ap = os.path.abspath(ap)
+        top = subprocess.run(["git", "-C", os.path.dirname(ap), "rev-parse", "--show-toplevel"],
+                             capture_output=True, text=True).stdout.strip()
+        rel = os.path.relpath(ap, top) if top else os.path.basename(ap)
+        targets[rel] = ap
+    cl, cx = claude_sessions(targets, days), codex_sessions(targets, days)
+    out = {}
+    for rel, ap in targets.items():
+        rows = cl.get(rel, []) + cx.get(rel, [])
+        rows.sort(key=lambda r: r["_sort"], reverse=True)       # newest edit first (ISO timestamps)
+        rows.sort(key=lambda r: r["kind"] != "edited")         # edited before mentioned; stable
+        for r in rows:
+            r.pop("_sort", None)
+        out[ap] = rows
+    return out
 
 
 def main():
@@ -195,26 +283,18 @@ def main():
     paths = [a for i, a in enumerate(args) if not a.startswith("--") and (i == 0 or args[i - 1] != "--days")]
     if not paths:
         sys.exit(__doc__)
-    abs_path = os.path.abspath(paths[0])
-    top = subprocess.run(["git", "-C", os.path.dirname(abs_path), "rev-parse", "--show-toplevel"],
-                         capture_output=True, text=True).stdout.strip()
-    rel_path = os.path.relpath(abs_path, top) if top else os.path.basename(abs_path)
-
-    rows = claude_sessions(abs_path, rel_path, days) + codex_sessions(abs_path, rel_path, days)
-    rows.sort(key=lambda r: r["_sort"], reverse=True)       # newest edit first (ISO timestamps)
-    rows.sort(key=lambda r: r["kind"] != "edited")         # edited before mentioned; stable
-    for r in rows:
-        r.pop("_sort", None)
+    result = find(paths, days)
     if as_json:
-        print(json.dumps(rows, indent=2))
+        print(json.dumps(result, indent=2))
         return
-    if not rows:
-        print("No Claude Code or Codex conversation touched %s in the last %d day(s)." % (rel_path, days))
-        return
-    print("Conversations that touched %s (last %d day(s)), newest edit first:" % (rel_path, days))
-    for r in rows:
-        print("  %-9s %-6s %-38s %-17s edits=%-3d %s" % (
-            r["kind"], r["tool"], r["session"], r["last"] or "-", r["edits"], r["title"][:60]))
+    for ap, rows in result.items():
+        if not rows:
+            print("No Claude Code or Codex conversation touched %s in the last %d day(s)." % (ap, days))
+            continue
+        print("Conversations that touched %s (last %d day(s)), newest edit first:" % (ap, days))
+        for r in rows:
+            print("  %-9s %-6s %-38s %-17s edits=%-3d %s" % (
+                r["kind"], r["tool"], r["session"], r["last"] or "-", r["edits"], r["title"][:70]))
 
 
 if __name__ == "__main__":
