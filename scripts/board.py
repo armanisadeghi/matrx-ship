@@ -54,7 +54,10 @@ def write(text):
 def set_marker(on):
     for path in MARKER_FILES:
         text = open(path).read() if os.path.exists(path) else ""
-        lines = [l for l in text.splitlines() if l.strip() != MARKER]
+        lines = text.splitlines()
+        while MARKER in [l.strip() for l in lines]:            # remove the marker AND the blank line it added
+            i = [l.strip() for l in lines].index(MARKER)
+            del lines[i:i + (2 if i + 1 < len(lines) and not lines[i + 1].strip() else 1)]
         if on:
             lines = [MARKER, ""] + lines if lines else [MARKER]
         new = "\n".join(lines).rstrip("\n") + "\n" if lines else ""
