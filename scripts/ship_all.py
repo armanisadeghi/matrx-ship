@@ -37,7 +37,7 @@ CODE = os.path.dirname(os.path.dirname(HERE))          # .../code
 OUT_ROOT = os.path.expanduser("~/.matrx/ship-all")
 FIND_SESSIONS = os.path.join(HERE, "find-file-sessions.py")
 # Never part of ship-all (Arman, 2026-09-24).
-EXCLUDED = {"wordpress-infrastructure", "titanium-marketing-wordpress", "real-singles", "matrx-mobile"}
+EXCLUDED = {"wordpress-infrastructure", "titanium-marketing-wordpress", "real-singles", "matrx-mobile", "ai-matrx-biz"}
 
 
 def run(cmd, cwd, timeout=120):
