@@ -136,6 +136,7 @@ def main():
         name = os.path.basename(repo)
         if (only and name not in only) or name in skip:
             continue
+        print("  %-28s checking…" % name, flush=True)
         info = inspect(repo)
         needs = info["dirty"] > 0 or info["ahead"] > 0 or info["behind"] > 0
         if not info["has_ship"]:
@@ -150,11 +151,21 @@ def main():
             info["status"] = "would ship"
         else:
             log = os.path.join(out_dir, name + ".log")
+            print("  %-28s SHIPPING (%d uncommitted, %d ahead, %d behind) — full log: %s" % (
+                name, info["dirty"], info["ahead"], info["behind"], log), flush=True)
+            # Everything ./ship.sh prints streams to this terminal live AND goes to the log.
             with open(log, "w") as f:
-                r = subprocess.run(["bash", "./ship.sh", "ship-all %s" % stamp], cwd=repo,
-                                   stdout=f, stderr=subprocess.STDOUT)
+                proc = subprocess.Popen(["bash", "./ship.sh", "ship-all %s" % stamp], cwd=repo,
+                                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                        text=True, errors="replace", bufsize=1)
+                for line in proc.stdout:
+                    f.write(line)
+                    f.flush()
+                    print("    [%s] %s" % (name, line.rstrip("\n")), flush=True)
+                proc.wait()
             info["log"] = log
-            info["ship_exit"] = r.returncode
+            info["ship_exit"] = proc.returncode
+            r = proc
             tail = open(log, errors="replace").read().splitlines()
             summary = [l for l in tail if l.startswith("ship.sh: sync exit")]
             info["ship_summary"] = summary[-1] if summary else "(no summary line; see the log)"
@@ -162,6 +173,8 @@ def main():
         info["open_items"] = open_items(repo)
         info["held"] = held_files(repo)
         for h in info["held"]:
+            print("  %-28s finding the conversations that edited %s (can take a minute)…" % (name, h["file"]),
+                  flush=True)
             h["sessions"] = sessions_for(repo, h["file"], days)
         results.append(info)
         extras = []
