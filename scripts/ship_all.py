@@ -36,6 +36,8 @@ HERE = os.path.dirname(os.path.realpath(__file__))   # real location, even when 
 CODE = os.path.dirname(os.path.dirname(HERE))          # .../code
 OUT_ROOT = os.path.expanduser("~/.matrx/ship-all")
 FIND_SESSIONS = os.path.join(HERE, "find-file-sessions.py")
+# Never part of ship-all (Arman, 2026-09-24).
+EXCLUDED = {"wordpress-infrastructure", "titanium-marketing-wordpress", "real-singles", "matrx-mobile"}
 
 
 def run(cmd, cwd, timeout=120):
@@ -140,11 +142,14 @@ def fmt(sec):
 
 
 def ship(info, out_dir, stamp):
+    """Run one repo's ./ship.sh. While it runs, one progress line; when it ends, its whole output
+    is printed as ONE block (START, everything it printed, END) so nothing from another repo is
+    mixed in. The full output is also in the log file."""
     name, repo = info["repo"], info["path"]
     log = os.path.join(out_dir, name + ".log")
-    t0 = time.time()
-    say("▶ START %-26s %s  (%d uncommitted, %d ahead, %d behind)  log: %s" % (
-        name, clock(), info["dirty"], info["ahead"], info["behind"], log))
+    t0, started = time.time(), clock()
+    say("… %-26s running (started %s)" % (name, started))
+    lines = []
     with open(log, "w") as f:
         proc = subprocess.Popen(["bash", "./ship.sh", "ship-all %s" % stamp], cwd=repo,
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -152,18 +157,22 @@ def ship(info, out_dir, stamp):
         for line in proc.stdout:
             f.write(line)
             f.flush()
-            say("    [%s] %s" % (name, line.rstrip("\n")))
+            lines.append(line.rstrip("\n"))
         proc.wait()
     info["log"] = log
     info["ship_exit"] = proc.returncode
     info["seconds"] = round(time.time() - t0)
-    tail = open(log, errors="replace").read().splitlines()
-    summary = [l for l in tail if l.startswith("ship.sh: sync exit")]
+    summary = [l for l in lines if l.startswith("ship.sh: sync exit")]
     info["ship_summary"] = summary[-1] if summary else "(no summary line; see the log)"
     info["status"] = ("shipped" if proc.returncode == 0 and "sync exit 0" in info["ship_summary"]
                       else "shipped with problems")
-    say("■ END   %-26s %s  %-22s took %s  (%s)" % (name, clock(), info["status"], fmt(info["seconds"]),
-                                                   info["ship_summary"].replace("ship.sh: ", "")))
+    block = ["", "▶ START %s  %s  (%d uncommitted, %d ahead, %d behind)" % (
+        name, started, info["dirty"], info["ahead"], info["behind"])]
+    block += ["  " + l for l in lines]
+    block.append("■ END   %s  %s  %s  took %s  (%s)  log: %s" % (
+        name, clock(), info["status"], fmt(info["seconds"]),
+        info["ship_summary"].replace("ship.sh: ", ""), log))
+    say("\n".join(block))
     return info
 
 
@@ -184,7 +193,7 @@ def main():
     out_dir = os.path.join(OUT_ROOT, stamp)
     os.makedirs(out_dir, exist_ok=True)
     repos = [os.path.join(CODE, d) for d in sorted(os.listdir(CODE))
-             if os.path.isdir(os.path.join(CODE, d, ".git"))
+             if os.path.isdir(os.path.join(CODE, d, ".git")) and d not in EXCLUDED
              and not ((only and d not in only) or d in skip)]
     say("ship-all %s  (%s)%s" % (stamp, CODE, "  DRY RUN: nothing is shipped" if dry else ""))
 
@@ -206,14 +215,15 @@ def main():
             info["status"] = "skipped (in sync)"
         elif dry:
             info["status"] = "would ship"
+            to_ship.append(info)
         else:
             info["status"] = "to ship"
             to_ship.append(info)
-    say("■ checked in %s: %d to ship, %d skipped" % (fmt(time.time() - t0), len(to_ship),
+    say("■ checked in %s: %d %s, %d skipped" % (fmt(time.time() - t0), len(to_ship), "would ship" if dry else "to ship",
                                                     len(infos) - len(to_ship)))
 
     # ── 2. ship, several at once ──────────────────────────────────────────────────────────
-    if to_ship:
+    if to_ship and not dry:
         t0 = time.time()
         say("▶ shipping %d repo(s), up to %d at a time…" % (len(to_ship), jobs))
         with ThreadPoolExecutor(max_workers=jobs) as pool:
