@@ -256,7 +256,7 @@ def main():
         if info["open_prs"]:
             extras.append("%d open PR(s)" % len(info["open_prs"]))
         took = fmt(info["seconds"]) if "seconds" in info else ""
-        say("  %-28s %-24s %-7s dirty=%-4d ahead=%-3d behind=%-3d %s" % (
+        say("  %-28s %-24s %-7s before: uncommitted=%-4d ahead=%-3d behind=%-3d %s" % (
             info["repo"], info["status"], took, info["dirty"], info["ahead"], info["behind"], "  ".join(extras)))
 
     summary = {"stamp": stamp, "code_dir": CODE, "dry_run": dry, "seconds": round(time.time() - t_all),
