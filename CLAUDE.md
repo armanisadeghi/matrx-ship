@@ -120,7 +120,7 @@ used by both admin UIs) and [packages/ticket-widget/](packages/ticket-widget/)
   branch/worktree/PR. [shared-checkout](../common-docs/policies/shared-checkout.md)
 - **No hardcoded agents** — a job point in code is a Mandate (stable name + I/O
   contract); what fulfils it is chosen live from a UI, never welded into code.
-  [Mandates](../common-docs/systems/mandates/FEATURE.md)
+  [Mandates](../common-docs/systems/mandates/STATE.md)
 - **No unapproved schedules** — every scheduled task exists only with Arman's
   approval by name and interval, registered and claim-deduped via `schedule_claim`.
   [Master schedule registry](../common-docs/operations/scheduled-tasks.md)
