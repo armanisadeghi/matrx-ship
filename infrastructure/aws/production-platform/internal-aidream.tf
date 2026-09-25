@@ -58,13 +58,21 @@ resource "aws_lb_target_group" "aidream_internal" {
 
   deregistration_delay = 120
 
+  # /health/serving, never /health/ready: /ready re-pings the shared database,
+  # so a database outage fails it on every target at once and ECS replaces the
+  # whole fleet (2026-09-25 07:34 PT — server 502 until 07:45:50, seven minutes
+  # after the database was back). /serving = "booted and not draining".
+  # APPLY ORDER: apply this only once the live aidream image serves
+  # /health/serving (curl https://server.app.matrxserver.com/health/serving → 200);
+  # an older image answers it 404 and the target group would fail every task.
+  # Guard: aidream/services/runtime/tests/test_deploy_drain.py
   health_check {
     enabled             = true
     healthy_threshold   = 2
     unhealthy_threshold = 3
     interval            = 30
     timeout             = 10
-    path                = "/health/ready"
+    path                = "/health/serving"
     protocol            = "HTTP"
     matcher             = "200-399"
   }
