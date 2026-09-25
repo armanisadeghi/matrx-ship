@@ -4093,6 +4093,20 @@ async function checkMicroservice(svc) {
     if (!observed.running) return { id, label, status: "critical", detail: `Observed container ${svc.container} on ${svc.host}, but it is stopped (image ${observed.image || "unknown"}). ${svc.impact}`, observed, actions: [] };
     if (observed.local_health !== 200) return { id, label, status: "critical", detail: `Observed ${svc.container} running ${observed.image || "an unknown image"}, but host-local health returned ${observed.local_health || "no response"}. ${svc.impact}`, observed, actions: [] };
     if (!r.ok) return { id, label, status: "critical", detail: `Observed ${svc.container} running ${observed.image || "an unknown image"} with local health 200, but ${svc.publicBase}${svc.healthPath} -> HTTP ${r.status}. ${svc.impact}`, observed, actions: [] };
+    // Liveness is not readiness. On 2026-09-25 matrx-files answered
+    // /files-service/health 200 for 4.5 hours while every request that touched
+    // the database hung behind a wedged pool — the declared readyPath was never
+    // probed, so this check said "ok" through the whole outage.
+    if (svc.readyPath) {
+      let ready = null;
+      let readyBody = "";
+      try {
+        const rr = await fetch(`${svc.publicBase}${svc.readyPath}`, { signal: AbortSignal.timeout(10000) });
+        ready = rr.status;
+        readyBody = (await rr.text()).slice(0, 200);
+      } catch (e) { readyBody = e.name === "TimeoutError" ? "no answer within 10s" : e.message; }
+      if (ready !== 200) return { id, label, status: "critical", detail: `Observed ${svc.container} alive (health 200), but readiness ${svc.publicBase}${svc.readyPath} -> ${ready ?? "no response"} (${readyBody}). The service cannot reach its database: every signed-in request that needs it fails or hangs. ${svc.impact} First fix: read the container log for matrx_orm pool errors; restarting the container rebuilds the pool.`, observed, actions: [] };
+    }
     const deployed = observed.version;
     // A full host disk leaves the service perfectly healthy while every future
     // deploy dies inside the image build. It has to be its own visible state,
