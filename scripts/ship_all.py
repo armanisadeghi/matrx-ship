@@ -39,6 +39,67 @@ FIND_SESSIONS = os.path.join(HERE, "find-file-sessions.py")
 # Never part of ship-all (Arman, 2026-09-24).
 EXCLUDED = {"wordpress-infrastructure", "titanium-marketing-wordpress", "real-singles", "matrx-mobile", "ai-matrx-biz"}
 
+USAGE = """Usage: ship-all.sh [--dry-run] [--only REPOS] [--skip REPOS] [--days DAYS] [--jobs JOBS]
+
+Run ./ship.sh in every eligible repository under the code directory.
+
+Options:
+  --dry-run          Report repositories that would ship without shipping them.
+  --only REPOS       Comma-separated repository names to include.
+  --skip REPOS       Comma-separated repository names to exclude.
+  --days DAYS        Search this many days of conversation history (default: 3).
+  --jobs JOBS        Ship at most this many repositories concurrently (default: 4).
+  -h, --help         Show this help without inspecting, fetching, or shipping repositories.
+"""
+
+
+def parse_args(args):
+    """Validate all CLI input before this process creates state or touches a repository."""
+    if "--help" in args or "-h" in args:
+        return None
+
+    options = {"dry": False, "only": None, "skip": set(), "days": 3, "jobs": 4}
+    seen = set()
+    index = 0
+    while index < len(args):
+        arg = args[index]
+        if arg == "--dry-run":
+            if arg in seen:
+                raise ValueError("--dry-run may only be passed once")
+            seen.add(arg)
+            options["dry"] = True
+            index += 1
+            continue
+        if arg in ("--only", "--skip", "--days", "--jobs"):
+            if arg in seen:
+                raise ValueError("%s may only be passed once" % arg)
+            seen.add(arg)
+            if index + 1 >= len(args) or args[index + 1].startswith("-"):
+                raise ValueError("%s requires a value" % arg)
+            value = args[index + 1]
+            if arg == "--only":
+                names = [name.strip() for name in value.split(",")]
+                if not all(names):
+                    raise ValueError("--only must name at least one non-empty repository")
+                options["only"] = set(names)
+            elif arg == "--skip":
+                names = [name.strip() for name in value.split(",")]
+                if not all(names):
+                    raise ValueError("--skip must name at least one non-empty repository")
+                options["skip"] = set(names)
+            else:
+                try:
+                    parsed = int(value)
+                except ValueError:
+                    raise ValueError("%s must be a positive integer" % arg)
+                if parsed < 1:
+                    raise ValueError("%s must be a positive integer" % arg)
+                options["days" if arg == "--days" else "jobs"] = parsed
+            index += 2
+            continue
+        raise ValueError("unknown argument: %s" % arg)
+    return options
+
 
 def run(cmd, cwd, timeout=120):
     try:
@@ -176,17 +237,21 @@ def ship(info, out_dir, stamp):
     return info
 
 
-def main():
-    args = sys.argv[1:]
-    dry = "--dry-run" in args
-    def listarg(name):
-        if name in args:
-            i = args.index(name)
-            return set(x for x in args[i + 1].split(",") if x)
-        return None
-    only, skip = listarg("--only"), listarg("--skip") or set()
-    days = int(args[args.index("--days") + 1]) if "--days" in args else 3
-    jobs = int(args[args.index("--jobs") + 1]) if "--jobs" in args else 4
+def main(args=None):
+    args = sys.argv[1:] if args is None else args
+    try:
+        options = parse_args(args)
+    except ValueError as error:
+        say("error: %s" % error)
+        say(USAGE.rstrip())
+        return 2
+    if options is None:
+        say(USAGE.rstrip())
+        return 0
+
+    dry = options["dry"]
+    only, skip = options["only"], options["skip"]
+    days, jobs = options["days"], options["jobs"]
 
     t_all = time.time()
     stamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
@@ -282,8 +347,8 @@ def main():
         for r in problems:
             say("  %s: %s  %s" % (r["repo"], r["status"], r.get("log", r.get("fetch_error", ""))))
     say("done in %s. summary: %s" % (fmt(time.time() - t_all), os.path.join(out_dir, "summary.json")))
-    sys.exit(1 if (open_repos or problems) else 0)
+    return 1 if (open_repos or problems) else 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
