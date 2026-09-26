@@ -7,7 +7,8 @@ For every git repository directly under the code folder (the parent of matrx-shi
   1. inspect it: branch, uncommitted files, commits ahead of / behind GitHub, local branches,
      extra worktrees, remote branches, open pull requests.
   2. SKIP it when there is nothing to sync: no uncommitted files and not ahead of or behind GitHub.
-  3. otherwise run its ./ship.sh (sync with GitHub, then release) and keep the full output.
+  3. otherwise run its ./ship.sh (sync with GitHub, then release) and keep the full output,
+     then check the checkout now holds the origin/main seen in step 1: status NOT PULLED if not.
   4. only AFTER every ship has finished: list what is open in each _conflicts/README.md and, in
      ONE pass over the transcripts, the conversations (Claude Code / Codex) that edited each held
      file. Nothing slow ever runs before or between releases.
@@ -131,6 +132,8 @@ def inspect(repo):
     rc, ab, _ = git(repo, "rev-list", "--left-right", "--count", "HEAD...origin/%s" % (info["branch"] or "main"))
     a, b = (ab.split() + ["0", "0"])[:2] if rc == 0 else ("0", "0")
     info["ahead"], info["behind"] = int(a), int(b)
+    _, ob, _ = git(repo, "rev-parse", "-q", "--verify", "origin/%s" % (info["branch"] or "main"))
+    info["origin_before"] = ob.strip()
     _, heads, _ = git(repo, "for-each-ref", "refs/heads", "--format=%(refname:short)")
     info["local_branches"] = [h for h in lines(heads) if h != info["branch"]]
     _, wts, _ = git(repo, "worktree", "list", "--porcelain")
@@ -227,9 +230,18 @@ def ship(info, out_dir, stamp):
     info["ship_summary"] = summary[-1] if summary else "(no summary line; see the log)"
     info["status"] = ("shipped" if proc.returncode == 0 and "sync exit 0" in info["ship_summary"]
                       else "shipped with problems")
+    # Whatever ship.sh says, the checkout must now hold everything GitHub had when we checked.
+    # matrx-extend's ship.sh once pulled only after a successful release and sat 21 commits behind.
+    if info["origin_before"] and git(repo, "merge-base", "--is-ancestor", info["origin_before"], "HEAD")[0] != 0:
+        _, n, _ = git(repo, "rev-list", "--count", "HEAD..%s" % info["origin_before"])
+        info["not_pulled"] = int(n.strip() or 0)
+        info["status"] = "NOT PULLED"
     block = ["", "▶ START %s  %s  (%d uncommitted, %d ahead, %d behind)" % (
         name, started, info["dirty"], info["ahead"], info["behind"])]
     block += ["  " + l for l in lines]
+    if info.get("not_pulled"):
+        block.append("  ✗ ship-all: this checkout is still missing %d commit(s) GitHub's main had "
+                     "before the ship; its ship.sh did not pull them." % info["not_pulled"])
     block.append("■ END   %s  %s  %s  took %s  (%s)  log: %s" % (
         name, clock(), info["status"], fmt(info["seconds"]),
         info["ship_summary"].replace("ship.sh: ", ""), log))
@@ -331,7 +343,7 @@ def main(args=None):
             json.dump(summary, f, indent=2)
 
     open_repos = [r for r in infos if r["open_items"] or r["held"]]
-    problems = [r for r in infos if r["status"] in ("shipped with problems", "could not reach GitHub")]
+    problems = [r for r in infos if r["status"] in ("shipped with problems", "could not reach GitHub", "NOT PULLED")]
     say("")
     if open_repos:
         say("OPEN CONFLICT ITEMS")
