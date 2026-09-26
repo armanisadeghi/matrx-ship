@@ -1,4 +1,4 @@
-import * as react_jsx_runtime from 'react/jsx-runtime';
+import * as react from 'react';
 import { ReactNode } from 'react';
 
 interface TicketWidgetConfig {
@@ -59,7 +59,7 @@ declare function useTicketConfig(): TicketWidgetConfig;
 declare function TicketProvider({ config, children, }: {
     config: TicketWidgetConfig;
     children: ReactNode;
-}): react_jsx_runtime.JSX.Element;
+}): react.JSX.Element;
 
 interface TicketButtonProps {
     /** Position of the floating button */
@@ -69,7 +69,7 @@ interface TicketButtonProps {
     /** CSS class name for the button */
     className?: string;
 }
-declare function TicketButton({ position, label, className, }: TicketButtonProps): react_jsx_runtime.JSX.Element;
+declare function TicketButton({ position, label, className, }: TicketButtonProps): react.JSX.Element;
 
 interface TicketFormProps {
     /** Called after successful submission */
@@ -81,7 +81,7 @@ interface TicketFormProps {
     /** CSS class name */
     className?: string;
 }
-declare function TicketForm({ onSubmitted, onClose, defaultType, className, }: TicketFormProps): react_jsx_runtime.JSX.Element;
+declare function TicketForm({ onSubmitted, onClose, defaultType, className, }: TicketFormProps): react.JSX.Element;
 
 interface TicketTrackerProps {
     /** Ticket number (the T-XXX number) to track */
@@ -89,7 +89,7 @@ interface TicketTrackerProps {
     /** CSS class name */
     className?: string;
 }
-declare function TicketTracker({ ticketNumber, className }: TicketTrackerProps): react_jsx_runtime.JSX.Element | null;
+declare function TicketTracker({ ticketNumber, className }: TicketTrackerProps): react.JSX.Element | null;
 
 /**
  * Auto-capture environment information from the browser.
