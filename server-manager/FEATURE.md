@@ -132,7 +132,7 @@ The fleet ops bridge uses only `MATRX_OPS_SUPABASE_URL`,
 `MATRX_OPS_SUPABASE_KEY`, and the registered operation owner
 `MATRX_FLEET_OPS_ORGANIZATION_ID`. **Generic `SUPABASE_*` credentials and
 inferred organization identities are never fallbacks:** another project is not
-an equivalent ops database, and a recent/personal/system organization is not
+an equivalent ops database, and a recent, signup, or system organization is not
 the initiating operation. Configure all three dedicated values, or set
 `MATRX_FLEET_OPS_SYNC_SECONDS=0` to disable the bridge honestly. Missing or
 invalid organization configuration fails before any ops database request.

@@ -133,8 +133,9 @@ used by both admin UIs) and [packages/ticket-widget/](packages/ticket-widget/)
 - **We don't do legacy** — a replaced system is migrated, repointed, and deleted;
   never frozen, never run beside its replacement, never a keep-or-kill question.
   [no-legacy](../common-docs/policies/no-legacy.md)
+- **The access ladder decides who can open a record.** Every table starts at Organization; only Arman approves Confidential or Private; sharing sits outside the ladder; children inherit their parent; organizations are unlimited and equal, with no personal type. → `/Users/armanisadeghi/code/common-docs/policies/access-ladder.md`
 - **Every org-scoped write carries an explicit `organization_id`.** Never borrow a recent,
-  personal, active, or system org when context is missing. Emergency work order:
+  signup, active, or system org when context is missing. Emergency work order:
   `/Users/armanisadeghi/code/common-docs/projects/no-db-assigned-org/PLAN.md`.
 
 - **Logging into any Matrx UI**: sign in as `admin@admin.com` — the password is `AI_ADMIN_PASSWORD` in the `.env` of `aidream` or `matrx-frontend` (`AI_ADMIN_USERNAME` holds the email).
