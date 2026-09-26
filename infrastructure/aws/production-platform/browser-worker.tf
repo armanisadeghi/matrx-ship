@@ -285,10 +285,16 @@ resource "aws_ecs_task_definition" "browser_worker" {
 }
 
 resource "aws_ecs_service" "browser_worker" {
-  name                   = "browser-worker"
-  cluster                = aws_ecs_cluster.production.id
-  task_definition        = aws_ecs_task_definition.browser_worker.arn
-  desired_count          = 1
+  name            = "browser-worker"
+  cluster         = aws_ecs_cluster.production.id
+  task_definition = aws_ecs_task_definition.browser_worker.arn
+  # 2026-09-26 (CB-015/G8, CAPACITY.md Phase E step 1): the legacy singleton
+  # browser is retired. Every browser is a per-session task launched by the
+  # fleet allocator; no browser.run has carried the legacy worker key since
+  # 2026-09-17. The SERVICE stays (desired 0) because the allocator reads its
+  # PRIMARY deployment's network configuration and the IAM scopes name it;
+  # deleting it is Phase E's last step, after the code stops reading it.
+  desired_count          = 0
   enable_execute_command = true
   launch_type            = "FARGATE"
   platform_version       = "LATEST"
