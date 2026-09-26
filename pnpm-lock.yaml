@@ -406,8 +406,8 @@ importers:
 
 packages:
 
-  '@ai-matrx/content-ir@0.19.7':
-    resolution: {integrity: sha512-gzNIwtFTmat7oCr80zURdvBFDhTq50RucwuKVBunAzYwFnnJXrWGKb8dGrLHYSh3YSdqnZCIcvS/ZlXkEYJKPw==}
+  '@ai-matrx/content-ir@0.19.8':
+    resolution: {integrity: sha512-JV1D4SgVLTyX6r+yeBPJnQEr8IhQTa4TcDEJbvjyjOW5pyadjyKz8ALWjZc+YTk32t/m/ryz+CcHvVkqaDqnYg==}
     engines: {node: '>=20'}
 
   '@ai-matrx/kit@0.16.7':
@@ -5516,13 +5516,13 @@ packages:
 
 snapshots:
 
-  '@ai-matrx/content-ir@0.19.7':
+  '@ai-matrx/content-ir@0.19.8':
     dependencies:
       ajv: 8.20.0
 
   '@ai-matrx/kit@0.16.7(react@19.3.0)':
     dependencies:
-      '@ai-matrx/content-ir': 0.19.7
+      '@ai-matrx/content-ir': 0.19.8
       dompurify: 3.4.15
       idb: 8.0.3
       json5: 2.2.3
