@@ -1,8 +1,9 @@
 # Matrx production platform on AWS
 
 This Terraform root owns the production application platform in AWS account `872515272894`,
-region `us-east-1`. AI Dream, the workflow worker, the Admin Dashboard, Workflow Studio, and the
-persistent browser worker run here. Coolify retains only the explicitly declared residual plane.
+region `us-east-1`. AI Dream, the workflow worker, the Admin Dashboard, Workflow Studio, and
+dedicated per-session browser allocations run here. Coolify retains only the explicitly declared
+residual plane.
 
 The foundation provides two-AZ private Fargate networking, redundant NAT gateways, private
 connectivity to the existing sandbox VPC, ECS Container Insights, application and ECS Exec logs,
@@ -177,10 +178,24 @@ and cron watcher are safe across replicas through atomic `FOR UPDATE SKIP LOCKED
 leases; the operator-owned desired count is currently one. It has the same IAM-based S3/KMS access
 and protected runtime-secret injection as AI Dream, so no static AWS key or SSH setup is needed.
 
-Persistent Cloud Browser lease maintenance runs here. The browser-worker security group admits its
+Dedicated Cloud Browser allocation lease maintenance runs here. The browser-worker security group admits its
 signed control port (`8002`) from exactly the AI Dream API and workflow-worker security groups; the
 interactive stream port (`8080`) remains API-only. This distinction is load-bearing: browser actions
 originate in AI Dream, while idle lease renewal originates in the workflow worker.
+
+## Dedicated Cloud Browser allocations
+
+`browser-worker` is a zero-desired-count ECS service template, not a singleton workload. The fleet
+allocator reads its primary deployment's network and IAM configuration, then launches one standalone
+Fargate task per browser session. An idle fleet therefore correctly has no service tasks and emits no
+service-scoped ECS metrics. Do not restore a service running-count alarm or treat missing service
+metrics as a browser incident.
+
+The production alarm is `matrx-production-browser-fleet-task-memory-high`. It uses Container
+Insights task dimensions to alarm on the hottest dedicated task exceeding 85% of its 4 GiB allocation;
+missing data is deliberately non-breaching because an idle fleet is healthy. Task-launch and session
+health failures are detected at the allocator/session layer, where a requested allocation and its
+outcome are known; a service task count cannot express that contract.
 
 ## Production LiveKit room worker
 
