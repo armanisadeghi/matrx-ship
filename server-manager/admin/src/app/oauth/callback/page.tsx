@@ -1,67 +1,46 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Loader2, CheckCircle2, XCircle } from "lucide-react";
+import { runOAuthCallback } from "@/lib/oauth-handoff";
 
 // Receives the OAuth redirect from aidream's broker:
-//   success -> /admin/oauth/callback?access_token=<Supabase JWT>
+//   success -> /admin/oauth/callback?handoff=<one-time code>
 //   failure -> /admin/oauth/callback?error=<message>
-// Verifies the token with the Manager before storing it, then bounces to the
-// dashboard. (Non-admins are redirected by aidream to /access-denied instead.)
+// The handoff is exchanged with AI Dream and its response token is verified with
+// the Manager before storage. Tokens in URL parameters are always rejected.
 export default function OAuthCallbackPage() {
   const [status, setStatus] = useState<"working" | "ok" | "error">("working");
   const [message, setMessage] = useState("");
+  const callbackLocation = useRef<{ search: string; pathname: string } | null>(null);
 
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const token = params.get("access_token");
-    const err = params.get("error");
-
-    if (err) {
-      setMessage(decodeURIComponent(err));
-      setStatus("error");
-      return;
-    }
-    if (!token) {
-      setMessage("No access token received.");
-      setStatus("error");
-      return;
-    }
-
-    // Scrub the token from the URL/history immediately.
-    window.history.replaceState({}, "", window.location.pathname);
-
-    let cancelled = false;
     let redirectTimer: ReturnType<typeof setTimeout> | undefined;
-    (async () => {
-      try {
-        const res = await fetch("/api/me", {
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        const body = await res.json().catch(() => ({})) as { authenticated?: boolean; error?: string };
-        if (!res.ok || !body.authenticated) {
-          localStorage.removeItem("manager_token");
-          if (!cancelled) {
-            setMessage(body.error || "The server rejected the OAuth session.");
-            setStatus("error");
-          }
-          return;
-        }
-        localStorage.setItem("manager_token", token);
-        if (!cancelled) {
-          setStatus("ok");
-          redirectTimer = setTimeout(() => { window.location.href = "/admin/instances"; }, 600);
-        }
-      } catch {
-        localStorage.removeItem("manager_token");
-        if (!cancelled) {
-          setMessage("Network error completing sign in.");
-          setStatus("error");
-        }
-      }
-    })();
+    callbackLocation.current ??= { search: window.location.search, pathname: window.location.pathname };
+    let active = true;
+    let cleanup: (() => void) | undefined;
+
+    // Strict Mode immediately tears down and replays effects in development.
+    // Deferring one microtask means that replay starts a single exchange rather
+    // than consuming the one-time handoff in the discarded setup.
+    queueMicrotask(() => {
+      if (!active || !callbackLocation.current) return;
+      cleanup = runOAuthCallback({
+        search: callbackLocation.current.search,
+        pathname: callbackLocation.current.pathname,
+        scrubUrl: (pathname) => window.history.replaceState({}, "", pathname),
+        removeStoredToken: () => localStorage.removeItem("manager_token"),
+        storeToken: (token) => localStorage.setItem("manager_token", token),
+        setStatus: (nextStatus, nextMessage) => {
+          if (nextMessage) setMessage(nextMessage);
+          setStatus(nextStatus);
+          if (nextStatus === "ok") redirectTimer = setTimeout(() => { window.location.href = "/admin/instances"; }, 600);
+        },
+      });
+    });
     return () => {
-      cancelled = true;
+      active = false;
+      cleanup?.();
       if (redirectTimer) clearTimeout(redirectTimer);
     };
   }, []);
