@@ -26,6 +26,7 @@ Exit 0 when every shipped repo finished and nothing is open; 1 otherwise.
 Branches, worktrees and pull requests are reported, never touched: ./ship.sh syncs main only.
 """
 import datetime
+import fcntl
 import json
 import os
 import subprocess
@@ -180,6 +181,63 @@ def open_prs(repo):
         return None
 
 
+def active_release_slot(info):
+    """Fail closed before dispatching a second release for a busy provider lane."""
+    name, repo = info["repo"], info["path"]
+    if name == "aidream":
+        for status in ("queued", "pending", "waiting", "in_progress", "requested", "action_required"):
+            rc, out, err = run(["gh", "run", "list", "--workflow", "deploy.yml", "--status", status,
+                                "--limit", "1000", "--json", "status"], repo, timeout=45)
+            if rc != 0:
+                return "AI Dream release status could not be verified: %s" % err.strip()[:200]
+            try:
+                runs = json.loads(out)
+            except ValueError:
+                return "AI Dream release status was not valid JSON"
+            if not isinstance(runs, list) or any(not isinstance(item, dict) for item in runs):
+                return "AI Dream release status had an unexpected shape"
+            if runs:
+                return "AI Dream has an active or queued deployment workflow"
+    elif name == "matrx-frontend":
+        for project in ("ai-matrx", "ai-matrx-manage", "ai-matrx-demos"):
+            cursor, seen = None, set()
+            for _ in range(100):
+                cmd = ["vercel", "list", project, "--status", "BUILDING,QUEUED,INITIALIZING",
+                       "--format=json"]
+                if cursor is not None:
+                    cmd += ["--next", str(cursor)]
+                rc, out, err = run(cmd, repo, timeout=45)
+                if rc != 0:
+                    return "%s release status could not be verified: %s" % (project, err.strip()[:200])
+                try:
+                    listing = json.loads(out)
+                except ValueError:
+                    return "%s release status was not valid JSON" % project
+                if not isinstance(listing, dict) or not isinstance(listing.get("deployments"), list):
+                    return "%s release status had an unexpected shape" % project
+                for deployment in listing["deployments"]:
+                    if not isinstance(deployment, dict) or not isinstance(deployment.get("meta"), (dict, type(None))):
+                        return "%s release status had an unexpected shape" % project
+                    message = (deployment.get("meta") or {}).get("githubCommitMessage") or ""
+                    if not isinstance(message, str):
+                        return "%s release status had an unexpected shape" % project
+                    if (deployment.get("state") in ("BUILDING", "QUEUED", "INITIALIZING")
+                            and message.startswith(("release:", "release-all:", "release-admin:", "release-demos:"))):
+                        return "%s has an active or queued release build" % project
+                pagination = listing.get("pagination")
+                if not isinstance(pagination, dict):
+                    return "%s release status had an unexpected shape" % project
+                cursor = pagination.get("next")
+                if cursor is None:
+                    break
+                if not isinstance(cursor, int) or cursor in seen:
+                    return "%s release status pagination could not be verified" % project
+                seen.add(cursor)
+            else:
+                return "%s release status exceeded the safe page limit" % project
+    return None
+
+
 def open_items(repo):
     checker = os.path.join(repo, "scripts", "check-conflict-markers.py")
     if not os.path.isfile(checker):
@@ -231,10 +289,26 @@ def fmt(sec):
 
 
 def ship(info, out_dir, stamp):
+    """Serialize check-and-dispatch across concurrent ship-all processes per repo."""
+    lock_dir = os.path.join(OUT_ROOT, "locks")
+    os.makedirs(lock_dir, exist_ok=True)
+    with open(os.path.join(lock_dir, info["repo"] + ".lock"), "a+") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        return _ship_locked(info, out_dir, stamp)
+
+
+def _ship_locked(info, out_dir, stamp):
     """Run one repo's ./ship.sh. While it runs, one progress line; when it ends, its whole output
     is printed as ONE block (START, everything it printed, END) so nothing from another repo is
     mixed in. The full output is also in the log file."""
     name, repo = info["repo"], info["path"]
+    slot_blocker = active_release_slot(info)
+    if slot_blocker:
+        info["status"] = "RELEASE SLOT BUSY"
+        info["release_slot_blocker"] = slot_blocker
+        info["seconds"] = 0
+        say("■ HOLD  %s  %s — no second release dispatched" % (name, slot_blocker))
+        return info
     log = os.path.join(out_dir, name + ".log")
     t0, started = time.time(), clock()
     say("… %-26s running (started %s)" % (name, started))
@@ -370,7 +444,7 @@ def main(args=None):
             json.dump(summary, f, indent=2)
 
     open_repos = [r for r in infos if r["open_items"] or r["held"]]
-    problems = [r for r in infos if r["status"] in ("shipped with problems", "could not reach GitHub", "NOT PULLED")]
+    problems = [r for r in infos if r["status"] in ("shipped with problems", "could not reach GitHub", "NOT PULLED", "RELEASE SLOT BUSY")]
     say("")
     if open_repos:
         say("OPEN CONFLICT ITEMS")
@@ -384,7 +458,7 @@ def main(args=None):
     if problems:
         say("PROBLEMS")
         for r in problems:
-            say("  %s: %s  %s" % (r["repo"], r["status"], r.get("log", r.get("fetch_error", ""))))
+            say("  %s: %s  %s" % (r["repo"], r["status"], r.get("release_slot_blocker", r.get("log", r.get("fetch_error", "")))))
     say("done in %s. summary: %s" % (fmt(time.time() - t_all), os.path.join(out_dir, "summary.json")))
     return 1 if (open_repos or problems) else 0
 
