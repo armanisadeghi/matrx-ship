@@ -184,20 +184,22 @@ def open_prs(repo):
 def active_release_slot(info):
     """Fail closed before dispatching a second release for a busy provider lane."""
     name, repo = info["repo"], info["path"]
-    if name == "aidream":
+    if name in ("aidream", "matrx-local"):
+        workflow = "deploy.yml" if name == "aidream" else "release.yml"
+        label = "AI Dream" if name == "aidream" else "Matrx Local"
         for status in ("queued", "pending", "waiting", "in_progress", "requested", "action_required"):
-            rc, out, err = run(["gh", "run", "list", "--workflow", "deploy.yml", "--status", status,
+            rc, out, err = run(["gh", "run", "list", "--workflow", workflow, "--status", status,
                                 "--limit", "1000", "--json", "status"], repo, timeout=45)
             if rc != 0:
-                return "AI Dream release status could not be verified: %s" % err.strip()[:200]
+                return "%s release status could not be verified: %s" % (label, err.strip()[:200])
             try:
                 runs = json.loads(out)
             except ValueError:
-                return "AI Dream release status was not valid JSON"
+                return "%s release status was not valid JSON" % label
             if not isinstance(runs, list) or any(not isinstance(item, dict) for item in runs):
-                return "AI Dream release status had an unexpected shape"
+                return "%s release status had an unexpected shape" % label
             if runs:
-                return "AI Dream has an active or queued deployment workflow"
+                return "%s has an active or queued release workflow" % label
     elif name == "matrx-frontend":
         for project in ("ai-matrx", "ai-matrx-manage", "ai-matrx-demos"):
             cursor, seen = None, set()

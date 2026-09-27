@@ -44,6 +44,17 @@ class ShipAllCliTests(unittest.TestCase):
                 {"status": "in_progress", "displayTitle": "AI Dream release v1"}]), "")):
             self.assertIn("active or queued", ship_all.active_release_slot(info))
 
+    def test_matrx_local_active_release_blocks_another_release(self):
+        info = {"repo": "matrx-local", "path": "/unused/matrx-local"}
+        with patch.object(ship_all, "run", return_value=(0, '[{"status":"pending"}]', "")) as run:
+            self.assertIn("Matrx Local has an active or queued", ship_all.active_release_slot(info))
+            self.assertIn("release.yml", run.call_args.args[0])
+
+    def test_matrx_local_unverified_slot_fails_closed(self):
+        info = {"repo": "matrx-local", "path": "/unused/matrx-local"}
+        with patch.object(ship_all, "run", return_value=(1, "", "provider unavailable")):
+            self.assertIn("could not be verified", ship_all.active_release_slot(info))
+
     def test_frontend_active_release_blocks_but_ordinary_build_does_not(self):
         info = {"repo": "matrx-frontend", "path": "/unused/matrx-frontend"}
         ordinary = {"state": "BUILDING", "meta": {"githubCommitMessage": "feat: ordinary edit"}}
