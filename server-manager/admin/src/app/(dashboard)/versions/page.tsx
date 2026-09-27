@@ -61,10 +61,7 @@ export default function VersionsPage() {
     if (!confirmed) return;
     setBusy(sys.id);
     try {
-      if (u.action === "migrate-all") {
-        const r = await api<{ migrated?: string[]; deferred?: string[]; failed?: string[] }>(API.ORCH_SANDBOXES_MIGRATE_ALL, { method: "POST" });
-        toast.success(`Migrated ${r.migrated?.length ?? 0}, deferred ${r.deferred?.length ?? 0}, failed ${r.failed?.length ?? 0}.`);
-      } else if (u.action === "orch-redeploy") {
+      if (u.action === "orch-redeploy") {
         toast.info("Rebuilding + restarting the orchestrator — a minute or so…");
         await api(API.ORCH_REDEPLOY, { method: "POST" });
         toast.success("Orchestrator rebuilt and restarted.");
@@ -104,7 +101,7 @@ export default function VersionsPage() {
       description: `${sys.name} — ${sys.detail}`,
       variant,
       confirmLabel: u.label,
-      children: u.note ? <div className="bg-muted/40 rounded px-3 py-2">{u.note}{u.data_safe && <div className="text-xs text-success mt-1">✓ no data loss</div>}</div> : undefined,
+      children: u.note ? <div className="bg-muted/40 rounded px-3 py-2">{u.note}</div> : undefined,
     });
   }
 
@@ -134,7 +131,7 @@ export default function VersionsPage() {
   return (
     <PageShell
       title="Versions & Updates"
-      description="What's running vs the latest, for every system. Anything BEHIND is red — click Update to bring it current. Updates that touch user data (sandboxes) are zero-loss by design."
+      description="What's running vs the latest, for every system. Anything BEHIND is red — click Update to bring it current. Sandbox image drift is visible for review; fleet-wide migration is disabled."
       actions={
         <>
           {data && <CopyControls size={16} ai={{ view: "Versions & Updates", description: "Which systems are on the latest build vs behind.", guidance: "Each entry has status ok|behind|error, what's running vs latest, and the update action available. Use it to decide what to rebuild/redeploy.", data: data.systems }} />}
@@ -183,7 +180,6 @@ export default function VersionsPage() {
                     <Button size="sm" variant="destructive" disabled={!isSuperadmin || !!busy} onClick={() => runUpdate(sys)} title={!isSuperadmin ? "Requires super-admin" : sys.update.note}>
                       {busy === sys.id ? <Loader2 className="size-4 animate-spin" /> : <ArrowUpCircle className="size-4" />} {sys.update.label}
                     </Button>
-                    {sys.update.data_safe && <div className="text-[10px] text-muted-foreground mt-1 text-right">✓ no data loss</div>}
                   </div>
                 )}
               </div>

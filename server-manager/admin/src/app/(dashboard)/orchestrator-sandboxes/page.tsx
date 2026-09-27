@@ -121,9 +121,8 @@ export default function OrchestratorSandboxesPage() {
   const [cTemplate, setCTemplate] = useState("slim");
   const [cTtlMin, setCTtlMin] = useState("120");
   const [creating, setCreating] = useState(false);
-  // Zero-drift state
+  // Drift remains visible. Fleet-wide migration is deliberately disabled.
   const [drift, setDrift] = useState<DriftResponse | null>(null);
-  const [migrateBusy, setMigrateBusy] = useState(false);
   // ── Sandbox table: quick-filter chips + row selection for bulk actions ──
   // status filter: live (any LIVE_STATUSES), stopped, failed, expired, all
   const [statusFilter, setStatusFilter] = useState<"all" | "live" | "stopped" | "failed" | "expired">("all");
@@ -152,26 +151,6 @@ export default function OrchestratorSandboxesPage() {
       setLoading(false);
     }
   }, []);
-
-  const handleMigrateAll = useCallback(async () => {
-    if (!drift || drift.drifted === 0) return;
-    const ok = await ask({
-      title: `Migrate ${drift.drifted} drifted sandbox(es)?`,
-      description: "Swaps each container onto the current image. The per-user volume is preserved — no data loss. Busy boxes defer to the next sweep; calls during a swap transparently retry.",
-      confirmLabel: `Migrate ${drift.drifted}`,
-    });
-    if (!ok) return;
-    setMigrateBusy(true);
-    try {
-      await api(API.ORCH_SANDBOXES_MIGRATE_ALL, { method: "POST" });
-      toast.success("Migration started.");
-      setTimeout(load, 2500);
-    } catch (e) {
-      toast.error(`Migrate-all failed: ${e instanceof Error ? e.message : String(e)}`);
-    } finally {
-      setMigrateBusy(false);
-    }
-  }, [drift, load, ask]);
 
   const handleCreate = useCallback(async () => {
     const ttl = Math.round(Number(cTtlMin) * 60);
@@ -616,8 +595,8 @@ export default function OrchestratorSandboxesPage() {
             </CardTitle>
             <CardDescription>
               These boxes are running an older image than the current one for their template.
-              Migrating swaps the container while preserving the per-user volume — no data loss;
-              busy boxes defer; calls during a swap transparently retry.
+              Fleet-wide migration is disabled while preservation-safe migration is under review.
+              Inspect the drift here; use the individual sandbox workflow only when its operation can be reviewed.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
@@ -631,10 +610,6 @@ export default function OrchestratorSandboxesPage() {
                 </div>
               ))}
             </div>
-            <Button variant="default" size="sm" onClick={handleMigrateAll} disabled={migrateBusy || building !== null}>
-              {migrateBusy ? <Loader2 className="size-4 animate-spin" /> : <Hammer className="size-4" />}
-              {migrateBusy ? "Migrating…" : `Migrate all (${drift.drifted})`}
-            </Button>
           </CardContent>
         </Card>
       )}

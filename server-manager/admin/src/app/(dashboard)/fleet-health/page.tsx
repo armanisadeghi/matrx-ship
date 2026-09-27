@@ -99,7 +99,7 @@ export default function FleetHealthPage() {
       description: `${check.label} — ${check.detail}`,
       confirmLabel: action.label,
       variant: action.data_safe ? "default" : "warning",
-      children: action.note ? <div className="bg-muted/40 rounded px-3 py-2">{action.note}{action.data_safe && <div className="text-xs text-success mt-1">✓ no data loss</div>}</div> : undefined,
+      children: action.note ? <div className="bg-muted/40 rounded px-3 py-2">{action.note}</div> : undefined,
     });
     if (!ok) return;
     const key = `${check.id}:${idx}`;
@@ -199,7 +199,6 @@ export default function FleetHealthPage() {
                             >
                               {isBusy ? <Loader2 className="size-4 animate-spin" /> : isExternal ? <ExternalLink className="size-4" /> : <ArrowUpCircle className="size-4" />}
                               {a.label}
-                              {a.data_safe && !isExternal && <span className="ml-1 text-[10px] opacity-80">· no data loss</span>}
                             </Button>
                           );
                         })}

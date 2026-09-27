@@ -2868,7 +2868,7 @@ app.post("/api/orchestrator-sandboxes/:id/resume", authMiddleware, requireRole("
   } catch (e) { res.status(502).json({ error: `Orchestrator unreachable: ${e.message}` }); }
 });
 
-// ── Zero-drift migration (see matrx-sandbox/docs/ZERO_DRIFT.md) ─────────────
+// ── Sandbox drift visibility and explicit migration ─────────────────────────
 // Drift report for the hosted tier. Hyphenated path (not /:id) so it doesn't
 // collide with GET /api/orchestrator-sandboxes/:id.
 app.get("/api/orchestrator-sandboxes-drift", authMiddleware, async (_req, res) => {
@@ -2879,14 +2879,14 @@ app.get("/api/orchestrator-sandboxes-drift", authMiddleware, async (_req, res) =
   } catch (e) { res.status(502).json({ error: `Orchestrator unreachable: ${e.message}` }); }
 });
 
-// Roll every drifted box to the current image (busy boxes defer; S3-backed boxes
-// are safely refused — see ZERO_DRIFT.md). Role-gated.
+// Fleet-wide migration is intentionally disabled after the preservation
+// incident (SBX-013). Keep this compatibility endpoint fail-closed so an old
+// Manager UI or caller cannot proxy a destructive bulk request upstream.
 app.post("/api/orchestrator-sandboxes-migrate-all", authMiddleware, requireRole("admin", "deployer"), async (_req, res) => {
-  if (!ORCH_KEY) return res.status(503).json({ error: "Orchestrator API key not configured" });
-  try {
-    const r = await orchFetch("/migrate-all", { method: "POST" });
-    res.status(r.status).type(r.headers.get("content-type") || "application/json").send(await r.text());
-  } catch (e) { res.status(502).json({ error: `Orchestrator unreachable: ${e.message}` }); }
+  res.status(409).json({
+    error: "fleet_migration_disabled",
+    message: "Fleet-wide sandbox migration is disabled pending preservation-safe migration acceptance. Review drift and migrate one sandbox at a time.",
+  });
 });
 
 // Truthful freshness for the matrx-sandbox repo, by GIT COMMIT — NOT the version
@@ -3121,12 +3121,10 @@ async function buildVersionsReport() {
       status: drifted > 0 ? "behind" : "ok",
       detail: drifted > 0 ? `${drifted} of ${total} sandbox(es) are on an outdated image.`
         : (total > 0 ? `All ${total} sandbox(es) on the current image.` : "No running sandboxes."),
-      update: drifted > 0
-        ? {
-          action: "migrate-all", label: `Migrate ${drifted} sandbox(es) — no data loss`, data_safe: true,
-          note: "Zero-drift swap: same volume + same id, ~40s each; busy boxes are retried. No user data is lost."
-        }
-        : null,
+      // Drift is deliberately visible, but SBX-013 disables fleet-wide
+      // migration after the preservation incident. Individual migration stays
+      // available through the explicit per-sandbox endpoint.
+      update: null,
     });
   } catch (e) { systems.push({ id: "sandboxes", name: "Sandboxes — running boxes", kind: "sandboxes", status: "error", detail: `Orchestrator unreachable: ${e.message}`, update: null }); }
 
@@ -3166,7 +3164,8 @@ app.get("/api/versions", authMiddleware, async (_req, res) => {
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// Migrate ONE box onto the current image (same id + volume, no data loss). Role-gated.
+// Migrate ONE box onto the current image. Role-gated. The orchestrator owns
+// the operation outcome; do not make an unconditional data-preservation claim.
 app.post("/api/orchestrator-sandboxes/:id/migrate", authMiddleware, requireRole("admin", "deployer"), async (req, res) => {
   if (!ORCH_KEY) return res.status(503).json({ error: "Orchestrator API key not configured" });
   const q = req.query.target_image ? `?target_image=${encodeURIComponent(String(req.query.target_image))}` : "";
