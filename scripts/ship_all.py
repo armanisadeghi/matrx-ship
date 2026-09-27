@@ -6,7 +6,8 @@ Run:  code/scripts/ship-all.sh [--dry-run] [--only a,b] [--skip a,b] [--days N] 
 For every git repository directly under the code folder (the parent of matrx-ship):
   1. inspect it: branch, uncommitted files, commits ahead of / behind GitHub, local branches,
      extra worktrees, remote branches, open pull requests.
-  2. SKIP it when there is nothing to sync: no uncommitted files and not ahead of or behind GitHub.
+  2. SKIP it when there is nothing to sync: no uncommitted files, not ahead of or behind GitHub,
+     and every @ai-matrx package at npm latest (its check:matrx-packages passes).
   3. otherwise run its ./ship.sh (sync with GitHub, then release) and keep the full output,
      then check the checkout now holds the origin/main seen in step 1: status NOT PULLED if not.
   4. only AFTER every ship has finished: list what is open in each _conflicts/README.md and, in
@@ -141,7 +142,31 @@ def inspect(repo):
     _, rbs, _ = git(repo, "for-each-ref", "refs/remotes/origin", "--format=%(refname:short)")
     info["remote_branches"] = [r for r in lines(rbs) if r not in ("origin/HEAD", "origin/main", "origin")]
     info["open_prs"] = open_prs(repo)
+    info["stale_packages"] = stale_packages(repo)
     return info
+
+
+def stale_packages(repo):
+    """Folders (root, one level down) whose check:matrx-packages fails: @ai-matrx behind npm latest.
+    Such a repo ships even when git is in sync, so sync-main brings its packages to latest."""
+    stale = []
+    for manifest in [os.path.join(repo, "package.json")] + sorted(
+            os.path.join(repo, d, "package.json") for d in os.listdir(repo)):
+        if not os.path.isfile(manifest) or "node_modules" in manifest:
+            continue
+        try:
+            with open(manifest) as f:
+                scripts = json.load(f).get("scripts") or {}
+        except (OSError, ValueError):
+            continue
+        if "sync:matrx-packages" not in scripts or "check:matrx-packages" not in scripts:
+            continue
+        folder = os.path.dirname(manifest)
+        tool = "npm" if os.path.isfile(os.path.join(folder, "package-lock.json")) else "pnpm"
+        rc, _, _ = run([tool, "run", "-s", "check:matrx-packages"], folder, timeout=120)
+        if rc != 0:
+            stale.append(os.path.relpath(folder, repo))
+    return stale
 
 
 def open_prs(repo):
@@ -281,7 +306,7 @@ def main(args=None):
         infos = list(pool.map(inspect, repos))
     to_ship = []
     for info in infos:
-        needs = info["dirty"] > 0 or info["ahead"] > 0 or info["behind"] > 0
+        needs = info["dirty"] > 0 or info["ahead"] > 0 or info["behind"] > 0 or bool(info["stale_packages"])
         if not info["has_ship"]:
             info["status"] = "no ship.sh"
         elif info["branch"] != "main":
@@ -332,6 +357,8 @@ def main(args=None):
                 extras.append("%d %s(es)" % (len(info[key]), label))
         if info["open_prs"]:
             extras.append("%d open PR(s)" % len(info["open_prs"]))
+        if info["stale_packages"]:
+            extras.append("@ai-matrx packages behind npm in %s" % ", ".join(info["stale_packages"]))
         took = fmt(info["seconds"]) if "seconds" in info else ""
         say("  %-28s %-24s %-7s before: uncommitted=%-4d ahead=%-3d behind=%-3d %s" % (
             info["repo"], info["status"], took, info["dirty"], info["ahead"], info["behind"], "  ".join(extras)))
