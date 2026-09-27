@@ -223,7 +223,7 @@ export default function VersionsPage() {
         <CardContent className="pt-4 text-xs text-muted-foreground space-y-1.5">
           <div className="flex items-center gap-1.5">
             <Undo2 className="size-3.5 shrink-0" />
-            <span><strong>Recover / revert:</strong> every Ship build is tagged and kept. To roll the apps back to a known-good version, go to <button className="underline" onClick={() => router.push("/builds")}>Builds</button> → pick a previous successful build → <strong>Rollback</strong> (re-tags that image and recreates the apps; databases are untouched). Sandbox migrations are zero-data-loss by design, and the orchestrator holds no data, so those are safe to redo.</span>
+            <span><strong>Recover / revert:</strong> every Ship build is tagged and kept. To roll the apps back to a known-good version, go to <button className="underline" onClick={() => router.push("/builds")}>Builds</button> → pick a previous successful build → <strong>Rollback</strong> (re-tags that image and recreates the apps; databases are untouched). Fleet-wide sandbox migration remains disabled until preservation and rollback are verified; do not assume an individual migration is safe without its own checks.</span>
           </div>
           <div className="flex items-center gap-1.5">
             <ScrollText className="size-3.5 shrink-0" />
