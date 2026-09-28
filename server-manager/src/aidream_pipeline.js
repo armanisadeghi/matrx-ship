@@ -1,8 +1,8 @@
 const AIDREAM_GITHUB_API = "https://api.github.com/repos/AI-Matrix-Engine/aidream";
 
-// A cancelled workflow never reached its release work. Fleet health must report
-// the newest executed success/failure, rather than presenting an aborted SHA as
-// though it represented production.
+// A cancelled workflow has no success/failure outcome that can verify a release.
+// Fleet health must report the newest verified outcome, rather than presenting
+// an aborted SHA as though it represented production.
 export function latestExecutedWorkflowRun(workflowRuns = []) {
   return workflowRuns.find((run) => (
     run?.status === "completed" &&
