@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { fetchAidreamWorkflowRuns, latestExecutedWorkflowRun, unverifiedWorkflowHistory } from "./aidream_pipeline.js";
+import {
+  fetchAidreamWorkflowRuns,
+  latestExecutedWorkflowRun,
+  unverifiedWorkflowHistory,
+} from "./aidream_pipeline.js";
 
 test("aidream workflow fetch evicts a URL-keyed cached completed-run response", async () => {
   const cachedByUrl = new Map();
@@ -26,7 +30,7 @@ test("aidream workflow fetch evicts a URL-keyed cached completed-run response", 
   const urls = [...cachedByUrl.keys()];
   assert.match(urls[0], /branch=main/);
   assert.match(urls[0], /status=completed/);
-  assert.match(urls[0], /per_page=5/);
+  assert.match(urls[0], /per_page=100/);
   assert.match(urls[0], /_fresh=1790000000000-test-0/);
   assert.match(urls[1], /_fresh=1790000000000-test-1/);
   assert.notEqual(urls[0], urls[1]);
@@ -41,6 +45,31 @@ test("aidream pipeline selects the latest executed result after a cancelled run"
   // decision must instead use the actual preceding release outcome.
   assert.equal(latestExecutedWorkflowRun([cancelled, succeeded, failed]), succeeded);
   assert.notEqual(latestExecutedWorkflowRun([cancelled, succeeded, failed]), cancelled);
+});
+
+test("aidream pipeline ignores a stale failed test from another commit", () => {
+  const workflowRuns = [
+    { id: 108, status: "completed", conclusion: "failure", head_sha: "sep22-stale" },
+    { id: 107, status: "completed", conclusion: "cancelled", head_sha: "current-sha" },
+    { id: 106, status: "completed", conclusion: "success", head_sha: "current-sha" },
+  ];
+
+  assert.equal(latestExecutedWorkflowRun(workflowRuns), workflowRuns[0]);
+  assert.equal(latestExecutedWorkflowRun(workflowRuns, "current-sha"), workflowRuns[2]);
+});
+
+test("aidream pipeline finds the executed result behind more than five cancelled runs", () => {
+  const workflowRuns = [
+    ...Array.from({ length: 6 }, (_, index) => ({
+      id: 200 - index,
+      status: "completed",
+      conclusion: "cancelled",
+      head_sha: "current-sha",
+    })),
+    { id: 193, status: "completed", conclusion: "success", head_sha: "current-sha" },
+  ];
+
+  assert.equal(latestExecutedWorkflowRun(workflowRuns, "current-sha"), workflowRuns[6]);
 });
 
 test("aidream pipeline reports all-cancelled deploy history as unverified", () => {

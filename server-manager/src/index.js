@@ -3539,10 +3539,14 @@ async function checkAidreamPipeline() {
       fetchAidreamWorkflowRuns({ token, workflow: "deploy.yml" }),
       fetchAidreamWorkflowRuns({ token, workflow: "test.yml" }),
     ]);
-    const d = latestExecutedWorkflowRun(dep), t = latestExecutedWorkflowRun(tst);
+    const d = latestExecutedWorkflowRun(dep);
     if (!d) {
       return { id, label, ...unverifiedWorkflowHistory(dep, "deploy"), actions: [] };
     }
+    // A test failure for another commit must never degrade the currently
+    // deployed runtime. The aidream deploy workflow is not test-gated, so a
+    // missing matching result remains a warning rather than a false green.
+    const t = latestExecutedWorkflowRun(tst, d.head_sha);
     const actions = d.html_url ? [{ label: "View deploy run", action: "open-url", url: d.html_url }] : [];
     if (d.conclusion === "failure") {
       try {
@@ -3564,10 +3568,9 @@ async function checkAidreamPipeline() {
       };
     }
     if (!t) {
-      const testHistory = unverifiedWorkflowHistory(tst, "test", "warning");
       return {
-        id, label, ...testHistory,
-        detail: `Latest deploy ${d.conclusion} (${(d.head_sha || "").slice(0, 7)}), but ${testHistory.detail}`,
+        id, label, status: "warning",
+        detail: `Latest deploy ${d.conclusion} (${(d.head_sha || "").slice(0, 7)}), but no executed Tests workflow result was found for that commit. Deploys are not test-gated, so current test health is unverified.`,
         actions,
       };
     }

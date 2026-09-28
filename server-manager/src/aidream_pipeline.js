@@ -3,8 +3,9 @@ const AIDREAM_GITHUB_API = "https://api.github.com/repos/AI-Matrix-Engine/aidrea
 // A cancelled workflow has no success/failure outcome that can verify a release.
 // Fleet health must report the newest verified outcome, rather than presenting
 // an aborted SHA as though it represented production.
-export function latestExecutedWorkflowRun(workflowRuns = []) {
+export function latestExecutedWorkflowRun(workflowRuns = [], headSha) {
   return workflowRuns.find((run) => (
+    (!headSha || run?.head_sha === headSha) &&
     run?.status === "completed" &&
     (run.conclusion === "success" || run.conclusion === "failure")
   ));
@@ -27,7 +28,10 @@ export async function fetchAidreamWorkflowRuns({
   token,
   workflow,
   fetchImpl = fetch,
-  perPage = 5,
+  // Cancellation storms routinely push the most recent executed result beyond
+  // GitHub's default five rows. Fetch the full first page (GitHub's maximum)
+  // so a health verdict is based on the current commit's last real outcome.
+  perPage = 100,
   clock = () => Date.now(),
   nonce = () => crypto.randomUUID(),
 }) {
