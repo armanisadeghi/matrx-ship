@@ -23,9 +23,24 @@ export function unverifiedWorkflowHistory(workflowRuns = [], workflowLabel, stat
   };
 }
 
-export async function fetchAidreamWorkflowRuns({ token, workflow, fetchImpl = fetch, perPage = 5 }) {
+export async function fetchAidreamWorkflowRuns({
+  token,
+  workflow,
+  fetchImpl = fetch,
+  perPage = 5,
+  clock = () => Date.now(),
+  nonce = () => crypto.randomUUID(),
+}) {
+  // Some intermediaries serve a stale GitHub response even when asked not to
+  // cache it. Make every operational-truth request a distinct URL so a cache
+  // that keys by URL cannot reuse an earlier completed-run response.
+  const url = new URL(`${AIDREAM_GITHUB_API}/actions/workflows/${workflow}/runs`);
+  url.searchParams.set("branch", "main");
+  url.searchParams.set("status", "completed");
+  url.searchParams.set("per_page", String(perPage));
+  url.searchParams.set("_fresh", `${clock()}-${nonce()}`);
   const response = await fetchImpl(
-    `${AIDREAM_GITHUB_API}/actions/workflows/${workflow}/runs?branch=main&status=completed&per_page=${perPage}`,
+    url,
     {
       headers: {
         Authorization: `Bearer ${token}`,

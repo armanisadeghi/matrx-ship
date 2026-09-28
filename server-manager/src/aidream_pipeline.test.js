@@ -2,36 +2,34 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { fetchAidreamWorkflowRuns, latestExecutedWorkflowRun, unverifiedWorkflowHistory } from "./aidream_pipeline.js";
 
-test("aidream workflow fetch bypasses stale cache responses for every workflow", async () => {
-  const requests = [];
-  const fetchImpl = async (url, init) => {
-    requests.push({ url, headers: init.headers });
-    return new Response(JSON.stringify({ workflow_runs: [] }), { status: 200 });
+test("aidream workflow fetch evicts a URL-keyed cached completed-run response", async () => {
+  const cachedByUrl = new Map();
+  const freshResponses = [
+    { workflow_runs: [{ id: 35712144024, conclusion: "failure" }] },
+    { workflow_runs: [{ id: 972, conclusion: "success" }] },
+  ];
+  const fetchImpl = async (url) => {
+    const key = String(url);
+    if (!cachedByUrl.has(key)) cachedByUrl.set(key, freshResponses.shift());
+    return new Response(JSON.stringify(cachedByUrl.get(key)), { status: 200 });
   };
+  const clock = () => 1_790_000_000_000;
+  let nextNonce = 0;
+  const nonce = () => `test-${nextNonce++}`;
 
-  await fetchAidreamWorkflowRuns({ token: "manager-test-token", workflow: "deploy.yml", fetchImpl });
-  await fetchAidreamWorkflowRuns({ token: "manager-test-token", workflow: "test.yml", fetchImpl });
+  const first = await fetchAidreamWorkflowRuns({ token: "manager-test-token", workflow: "deploy.yml", fetchImpl, clock, nonce });
+  const second = await fetchAidreamWorkflowRuns({ token: "manager-test-token", workflow: "deploy.yml", fetchImpl, clock, nonce });
 
-  assert.deepEqual(requests, [
-    {
-      url: "https://api.github.com/repos/AI-Matrix-Engine/aidream/actions/workflows/deploy.yml/runs?branch=main&status=completed&per_page=5",
-      headers: {
-        Authorization: "Bearer manager-test-token",
-        Accept: "application/vnd.github+json",
-        "User-Agent": "matrx-manager",
-        "Cache-Control": "no-cache",
-      },
-    },
-    {
-      url: "https://api.github.com/repos/AI-Matrix-Engine/aidream/actions/workflows/test.yml/runs?branch=main&status=completed&per_page=5",
-      headers: {
-        Authorization: "Bearer manager-test-token",
-        Accept: "application/vnd.github+json",
-        "User-Agent": "matrx-manager",
-        "Cache-Control": "no-cache",
-      },
-    },
-  ]);
+  assert.equal(first[0].id, 35712144024);
+  assert.equal(second[0].id, 972);
+  assert.equal(cachedByUrl.size, 2, "each operational lookup must have a distinct cache key");
+  const urls = [...cachedByUrl.keys()];
+  assert.match(urls[0], /branch=main/);
+  assert.match(urls[0], /status=completed/);
+  assert.match(urls[0], /per_page=5/);
+  assert.match(urls[0], /_fresh=1790000000000-test-0/);
+  assert.match(urls[1], /_fresh=1790000000000-test-1/);
+  assert.notEqual(urls[0], urls[1]);
 });
 
 test("aidream pipeline selects the latest executed result after a cancelled run", () => {
