@@ -55,6 +55,7 @@ import http from "node:http";
 import { attachTerminalWs } from "./terminal_ws.js";
 import { oauthEnabled, authenticateOAuthAdmin } from "./oauth_auth.js";
 import { waitForOrchestratorReady } from "./orchestrator_readiness.js";
+import { fetchAidreamWorkflowRuns, latestExecutedWorkflowRun } from "./aidream_pipeline.js";
 
 const PORT = process.env.PORT || 3000;
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -3533,21 +3534,18 @@ async function checkAidreamPipeline() {
   const id = "aidream-pipeline", label = "aidream deploys vs tests";
   const token = process.env.GITHUB_PAT || process.env.GH_TOKEN || "";
   if (!token) return { id, label, status: "unknown", detail: "GITHUB_PAT not set.", actions: [] };
-  const gh = async (path) => {
-    const r = await fetch(`https://api.github.com/repos/AI-Matrix-Engine/aidream/${path}`, {
-      headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", "User-Agent": "matrx-manager" },
-      signal: AbortSignal.timeout(8000),
-    });
-    if (!r.ok) throw new Error(`GitHub API ${r.status}`);
-    return r.json();
-  };
   try {
     const [dep, tst] = await Promise.all([
-      gh("actions/workflows/deploy.yml/runs?branch=main&status=completed&per_page=1"),
-      gh("actions/workflows/test.yml/runs?branch=main&status=completed&per_page=1"),
+      fetchAidreamWorkflowRuns({ token, workflow: "deploy.yml" }),
+      fetchAidreamWorkflowRuns({ token, workflow: "test.yml" }),
     ]);
-    const d = (dep.workflow_runs || [])[0], t = (tst.workflow_runs || [])[0];
-    if (!d) return { id, label, status: "ok", detail: "No completed aidream deploy runs found.", actions: [] };
+    const d = latestExecutedWorkflowRun(dep), t = latestExecutedWorkflowRun(tst);
+    if (!d) {
+      const detail = dep.length
+        ? "Recent completed aidream deploy runs were cancelled before execution; no executed deploy outcome is available."
+        : "No completed aidream deploy runs found.";
+      return { id, label, status: "ok", detail, actions: [] };
+    }
     const actions = d.html_url ? [{ label: "View deploy run", action: "open-url", url: d.html_url }] : [];
     if (d.conclusion === "failure") {
       try {
