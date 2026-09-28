@@ -55,7 +55,7 @@ import http from "node:http";
 import { attachTerminalWs } from "./terminal_ws.js";
 import { oauthEnabled, authenticateOAuthAdmin } from "./oauth_auth.js";
 import { waitForOrchestratorReady } from "./orchestrator_readiness.js";
-import { fetchAidreamWorkflowRuns, latestExecutedWorkflowRun } from "./aidream_pipeline.js";
+import { fetchAidreamWorkflowRuns, latestExecutedWorkflowRun, unverifiedWorkflowHistory } from "./aidream_pipeline.js";
 
 const PORT = process.env.PORT || 3000;
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -3541,10 +3541,7 @@ async function checkAidreamPipeline() {
     ]);
     const d = latestExecutedWorkflowRun(dep), t = latestExecutedWorkflowRun(tst);
     if (!d) {
-      const detail = dep.length
-        ? "Recent completed aidream deploy runs were cancelled before execution; no executed deploy outcome is available."
-        : "No completed aidream deploy runs found.";
-      return { id, label, status: "ok", detail, actions: [] };
+      return { id, label, ...unverifiedWorkflowHistory(dep, "deploy"), actions: [] };
     }
     const actions = d.html_url ? [{ label: "View deploy run", action: "open-url", url: d.html_url }] : [];
     if (d.conclusion === "failure") {
@@ -3564,6 +3561,14 @@ async function checkAidreamPipeline() {
         id, label, status: "warning",
         detail: `aidream production is running ${(d.head_sha || "").slice(0, 7)} but the Tests workflow is RED (${(t.head_sha || "").slice(0, 7)}, ${t.created_at?.slice(0, 16)}) — deploys are not gated on tests, so a broken commit ships silently.`,
         actions: t.html_url ? [...actions, { label: "View failing tests", action: "open-url", url: t.html_url }] : actions,
+      };
+    }
+    if (!t) {
+      const testHistory = unverifiedWorkflowHistory(tst, "test", "warning");
+      return {
+        id, label, ...testHistory,
+        detail: `Latest deploy ${d.conclusion} (${(d.head_sha || "").slice(0, 7)}), but ${testHistory.detail}`,
+        actions,
       };
     }
     return { id, label, status: "ok", detail: `Latest deploy ${d.conclusion} (${(d.head_sha || "").slice(0, 7)}); tests ${t ? t.conclusion : "n/a"}.`, actions: [] };

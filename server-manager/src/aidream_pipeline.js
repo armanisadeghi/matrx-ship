@@ -10,6 +10,19 @@ export function latestExecutedWorkflowRun(workflowRuns = []) {
   ));
 }
 
+export function unverifiedWorkflowHistory(workflowRuns = [], workflowLabel, status = "unknown") {
+  if (workflowRuns.length === 0) {
+    return {
+      status,
+      detail: `No completed aidream ${workflowLabel} runs found; no executed success or failure is available to verify.`,
+    };
+  }
+  return {
+    status,
+    detail: `Recent completed aidream ${workflowLabel} runs do not include a verified executed success or failure.`,
+  };
+}
+
 export async function fetchAidreamWorkflowRuns({ token, workflow, fetchImpl = fetch, perPage = 5 }) {
   const response = await fetchImpl(
     `${AIDREAM_GITHUB_API}/actions/workflows/${workflow}/runs?branch=main&status=completed&per_page=${perPage}`,

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { fetchAidreamWorkflowRuns, latestExecutedWorkflowRun } from "./aidream_pipeline.js";
+import { fetchAidreamWorkflowRuns, latestExecutedWorkflowRun, unverifiedWorkflowHistory } from "./aidream_pipeline.js";
 
 test("aidream workflow fetch bypasses stale cache responses for every workflow", async () => {
   const requests = [];
@@ -43,4 +43,25 @@ test("aidream pipeline selects the latest executed result after a cancelled run"
   // decision must instead use the actual preceding release outcome.
   assert.equal(latestExecutedWorkflowRun([cancelled, succeeded, failed]), succeeded);
   assert.notEqual(latestExecutedWorkflowRun([cancelled, succeeded, failed]), cancelled);
+});
+
+test("aidream pipeline reports all-cancelled deploy history as unverified", () => {
+  const cancelledRuns = [
+    { id: 973, status: "completed", conclusion: "cancelled" },
+    { id: 972, status: "completed", conclusion: "cancelled" },
+  ];
+
+  assert.equal(latestExecutedWorkflowRun(cancelledRuns), undefined);
+  assert.deepEqual(unverifiedWorkflowHistory(cancelledRuns, "deploy"), {
+    status: "unknown",
+    detail: "Recent completed aidream deploy runs do not include a verified executed success or failure.",
+  });
+});
+
+test("aidream pipeline reports empty test history as unverified", () => {
+  assert.equal(latestExecutedWorkflowRun([]), undefined);
+  assert.deepEqual(unverifiedWorkflowHistory([], "test", "warning"), {
+    status: "warning",
+    detail: "No completed aidream test runs found; no executed success or failure is available to verify.",
+  });
 });
