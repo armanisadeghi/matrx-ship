@@ -58,6 +58,29 @@ test("aidream pipeline ignores a stale failed test from another commit", () => {
   assert.equal(latestExecutedWorkflowRun(workflowRuns, "current-sha"), workflowRuns[2]);
 });
 
+test("aidream pipeline finds a tag-dispatched test for the deployed SHA without accepting another ref", async () => {
+  const deployedSha = "4f362dcae19a8c5f9d5b7e13b0e2b1ac9ff10014";
+  const fetchImpl = async (url) => {
+    assert.doesNotMatch(String(url), /branch=/, "cross-ref test lookup must not exclude release tags");
+    return new Response(JSON.stringify({
+      workflow_runs: [
+        { id: 999, status: "completed", conclusion: "success", head_sha: "main-only-success" },
+        { id: 36764554359, status: "completed", conclusion: "success", head_sha: deployedSha, head_branch: "v0.2.1014" },
+      ],
+    }), { status: 200 });
+  };
+
+  const runs = await fetchAidreamWorkflowRuns({
+    token: "manager-test-token",
+    workflow: "test.yml",
+    branch: null,
+    fetchImpl,
+  });
+
+  assert.equal(latestExecutedWorkflowRun(runs, deployedSha), runs[1]);
+  assert.equal(latestExecutedWorkflowRun(runs, "different-deployed-sha"), undefined);
+});
+
 test("aidream pipeline finds the executed result behind more than five cancelled runs", () => {
   const workflowRuns = [
     ...Array.from({ length: 6 }, (_, index) => ({

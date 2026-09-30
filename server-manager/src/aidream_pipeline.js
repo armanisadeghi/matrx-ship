@@ -27,6 +27,10 @@ export function unverifiedWorkflowHistory(workflowRuns = [], workflowLabel, stat
 export async function fetchAidreamWorkflowRuns({
   token,
   workflow,
+  // Deploys are released from main, while Tests may be manually dispatched
+  // against an immutable release tag. Callers that must find a test result for
+  // an exact deployed SHA can omit this filter and still match by head_sha.
+  branch = "main",
   fetchImpl = fetch,
   // Cancellation storms routinely push the most recent executed result beyond
   // GitHub's default five rows. Fetch the full first page (GitHub's maximum)
@@ -39,7 +43,7 @@ export async function fetchAidreamWorkflowRuns({
   // cache it. Make every operational-truth request a distinct URL so a cache
   // that keys by URL cannot reuse an earlier completed-run response.
   const url = new URL(`${AIDREAM_GITHUB_API}/actions/workflows/${workflow}/runs`);
-  url.searchParams.set("branch", "main");
+  if (branch) url.searchParams.set("branch", branch);
   url.searchParams.set("status", "completed");
   url.searchParams.set("per_page", String(perPage));
   url.searchParams.set("_fresh", `${clock()}-${nonce()}`);

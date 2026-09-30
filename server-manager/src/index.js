@@ -3537,7 +3537,10 @@ async function checkAidreamPipeline() {
   try {
     const [dep, tst] = await Promise.all([
       fetchAidreamWorkflowRuns({ token, workflow: "deploy.yml" }),
-      fetchAidreamWorkflowRuns({ token, workflow: "test.yml" }),
+      // Tests can be manually dispatched on a release tag. Search every ref,
+      // then require the exact deployed SHA below so another ref cannot make
+      // the current runtime look verified.
+      fetchAidreamWorkflowRuns({ token, workflow: "test.yml", branch: null }),
     ]);
     const d = latestExecutedWorkflowRun(dep);
     if (!d) {
