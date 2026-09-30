@@ -44,11 +44,24 @@ class ShipAllCliTests(unittest.TestCase):
                 {"status": "in_progress", "displayTitle": "AI Dream release v1"}]), "")):
             self.assertIn("active or queued", ship_all.active_release_slot(info))
 
-    def test_matrx_local_active_release_blocks_another_release(self):
+    def test_matrx_local_active_off_host_release_blocks_another_release(self):
         info = {"repo": "matrx-local", "path": "/unused/matrx-local"}
         with patch.object(ship_all, "run", return_value=(0, '[{"status":"pending"}]', "")) as run:
             self.assertIn("Matrx Local has an active or queued", ship_all.active_release_slot(info))
-            self.assertIn("release.yml", run.call_args.args[0])
+            self.assertIn("off-host-release.yml", run.call_args.args[0])
+
+    def test_matrx_local_active_legacy_release_blocks_after_off_host_scan(self):
+        info = {"repo": "matrx-local", "path": "/unused/matrx-local"}
+
+        def release_status(cmd, cwd, timeout):
+            workflow = cmd[4]
+            return (0, '[{"status":"pending"}]' if workflow == "release.yml" else "[]", "")
+
+        with patch.object(ship_all, "run", side_effect=release_status) as run:
+            self.assertIn("Matrx Local has an active or queued", ship_all.active_release_slot(info))
+            workflows = [call.args[0][4] for call in run.call_args_list]
+            self.assertEqual(workflows[:6], ["off-host-release.yml"] * 6)
+            self.assertEqual(workflows[6], "release.yml")
 
     def test_matrx_local_unverified_slot_fails_closed(self):
         info = {"repo": "matrx-local", "path": "/unused/matrx-local"}
