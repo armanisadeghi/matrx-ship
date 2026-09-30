@@ -19,4 +19,5 @@ packages/
 
 # CLI and scripts not needed in the app image
 cli/
-scripts/
+scripts/*
+!scripts/check-matrx-packages.mjs
