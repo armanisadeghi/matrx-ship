@@ -185,21 +185,22 @@ def active_release_slot(info):
     """Fail closed before dispatching a second release for a busy provider lane."""
     name, repo = info["repo"], info["path"]
     if name in ("aidream", "matrx-local"):
-        workflow = "deploy.yml" if name == "aidream" else "release.yml"
+        workflows = ("deploy.yml",) if name == "aidream" else ("off-host-release.yml", "release.yml")
         label = "AI Dream" if name == "aidream" else "Matrx Local"
-        for status in ("queued", "pending", "waiting", "in_progress", "requested", "action_required"):
-            rc, out, err = run(["gh", "run", "list", "--workflow", workflow, "--status", status,
-                                "--limit", "1000", "--json", "status"], repo, timeout=45)
-            if rc != 0:
-                return "%s release status could not be verified: %s" % (label, err.strip()[:200])
-            try:
-                runs = json.loads(out)
-            except ValueError:
-                return "%s release status was not valid JSON" % label
-            if not isinstance(runs, list) or any(not isinstance(item, dict) for item in runs):
-                return "%s release status had an unexpected shape" % label
-            if runs:
-                return "%s has an active or queued release workflow" % label
+        for workflow in workflows:
+            for status in ("queued", "pending", "waiting", "in_progress", "requested", "action_required"):
+                rc, out, err = run(["gh", "run", "list", "--workflow", workflow, "--status", status,
+                                    "--limit", "1000", "--json", "status"], repo, timeout=45)
+                if rc != 0:
+                    return "%s release status could not be verified: %s" % (label, err.strip()[:200])
+                try:
+                    runs = json.loads(out)
+                except ValueError:
+                    return "%s release status was not valid JSON" % label
+                if not isinstance(runs, list) or any(not isinstance(item, dict) for item in runs):
+                    return "%s release status had an unexpected shape" % label
+                if runs:
+                    return "%s has an active or queued release workflow" % label
     elif name == "matrx-frontend":
         for project in ("ai-matrx", "ai-matrx-manage", "ai-matrx-demos"):
             cursor, seen = None, set()
@@ -329,7 +330,13 @@ def _ship_locked(info, out_dir, stamp):
     info["seconds"] = round(time.time() - t0)
     summary = [l for l in lines if l.startswith("ship.sh: sync exit")]
     info["ship_summary"] = summary[-1] if summary else "(no summary line; see the log)"
-    info["status"] = ("shipped" if proc.returncode == 0 and "sync exit 0" in info["ship_summary"]
+    release_slot_busy = proc.returncode == 75 or any("RELEASE SLOT BUSY" in line for line in lines)
+    hosted_release_dispatched = (proc.returncode == 0 and "sync exit 0" in info["ship_summary"]
+                                 and any("dispatch-off-host-release: hosted release requested" in line
+                                         for line in lines))
+    info["status"] = ("RELEASE SLOT BUSY" if release_slot_busy
+                      else "release dispatched" if hosted_release_dispatched
+                      else "shipped" if proc.returncode == 0 and "sync exit 0" in info["ship_summary"]
                       else "shipped with problems")
     # Whatever ship.sh says, the checkout must now hold everything GitHub had when we checked.
     # matrx-extend's ship.sh once pulled only after a successful release and sat 21 commits behind.
