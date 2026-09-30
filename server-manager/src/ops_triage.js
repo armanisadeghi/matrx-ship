@@ -22,10 +22,10 @@
  * credential aliases and inferred organization identities are forbidden.
  */
 
+import { isUuidShape } from "@ai-matrx/kit/uuid";
+
 export class OpsSupabaseUnconfiguredError extends Error {}
 export class FleetOpsOrganizationUnconfiguredError extends Error {}
-
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export function resolveOpsSupabaseOrRaise() {
   /** The old resolver substituted generic SUPABASE_* credentials. A different
@@ -47,7 +47,7 @@ export function resolveOpsSupabaseOrRaise() {
 
 export function resolveFleetOpsOrganizationIdOrRaise() {
   const organizationId = process.env.MATRX_FLEET_OPS_ORGANIZATION_ID?.trim();
-  if (!organizationId || !UUID_PATTERN.test(organizationId)) {
+  if (!organizationId || !isUuidShape(organizationId)) {
     throw new FleetOpsOrganizationUnconfiguredError(
       "Fleet ops-triage sync requires MATRX_FLEET_OPS_ORGANIZATION_ID to be an explicit " +
       "organization UUID owned by this registered fleet operation. The Manager refuses to " +
@@ -65,7 +65,7 @@ export function opsConfigured() {
     process.env.MATRX_OPS_SUPABASE_URL?.trim() &&
     process.env.MATRX_OPS_SUPABASE_KEY?.trim() &&
     organizationId &&
-    UUID_PATTERN.test(organizationId)
+    isUuidShape(organizationId)
   );
 }
 
