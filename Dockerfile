@@ -8,6 +8,7 @@ FROM base AS deps
 WORKDIR /app
 
 COPY package.json pnpm-lock.yaml* .npmrc* ./
+COPY scripts/check-matrx-packages.mjs ./scripts/check-matrx-packages.mjs
 ENV COREPACK_ENABLE_AUTO_PIN=0
 ENV PNPM_HOME=/root/.local/share/pnpm
 RUN pnpm config set update-notifier false 2>/dev/null; \
