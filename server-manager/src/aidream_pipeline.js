@@ -11,6 +11,13 @@ export function latestExecutedWorkflowRun(workflowRuns = [], headSha) {
   ));
 }
 
+// A workflow_dispatch run's head_sha identifies the workflow checkout, which
+// can differ from the immutable candidate the release actually deploys. Tests
+// must therefore follow the SHA observed from the production runtime.
+export function latestExecutedTestsForRuntime(testRuns = [], runtimeSha) {
+  return runtimeSha ? latestExecutedWorkflowRun(testRuns, runtimeSha) : undefined;
+}
+
 export function unverifiedWorkflowHistory(workflowRuns = [], workflowLabel, status = "unknown") {
   if (workflowRuns.length === 0) {
     return {

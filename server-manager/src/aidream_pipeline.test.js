@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   fetchAidreamWorkflowRuns,
   latestExecutedWorkflowRun,
+  latestExecutedTestsForRuntime,
   unverifiedWorkflowHistory,
 } from "./aidream_pipeline.js";
 
@@ -56,6 +57,18 @@ test("aidream pipeline ignores a stale failed test from another commit", () => {
 
   assert.equal(latestExecutedWorkflowRun(workflowRuns), workflowRuns[0]);
   assert.equal(latestExecutedWorkflowRun(workflowRuns, "current-sha"), workflowRuns[2]);
+});
+
+test("aidream pipeline matches tests to the observed production SHA, not dispatch metadata", () => {
+  const dispatchedSha = "fa58932362b4a4ca0904dec6e438695cf23a2ac9";
+  const runtimeSha = "498349dc0bbda840c077b105b356852f47a5853a";
+  const deployRun = { id: 1027, status: "completed", conclusion: "success", head_sha: dispatchedSha };
+  const testRun = { id: 1026, status: "completed", conclusion: "success", head_sha: runtimeSha };
+
+  const selected = latestExecutedTestsForRuntime([testRun], runtimeSha);
+
+  assert.equal(latestExecutedWorkflowRun([testRun], deployRun.head_sha), undefined);
+  assert.equal(selected, testRun);
 });
 
 test("aidream pipeline finds a tag-dispatched test for the deployed SHA without accepting another ref", async () => {
