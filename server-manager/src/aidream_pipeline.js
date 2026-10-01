@@ -74,6 +74,43 @@ export async function fetchAidreamReleaseCandidateSha(
   throw new Error(`release tag ${identifier} did not resolve to a commit`);
 }
 
+export async function fetchAidreamWorkflowRunJobs({
+  runId,
+  token,
+  fetchImpl = fetch,
+  clock = () => Date.now(),
+  nonce = () => crypto.randomUUID(),
+} = {}) {
+  const url = new URL(`${AIDREAM_GITHUB_API}/actions/runs/${encodeURIComponent(runId)}/jobs`);
+  url.searchParams.set("filter", "latest");
+  url.searchParams.set("per_page", "100");
+  url.searchParams.set("_fresh", `${clock()}-${nonce()}`);
+  const response = await fetchImpl(url, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: "application/vnd.github+json",
+      "User-Agent": "matrx-manager",
+      "Cache-Control": "no-cache",
+    },
+    signal: AbortSignal.timeout(8000),
+  });
+  if (!response.ok) throw new Error(`GitHub API ${response.status} fetching deployment jobs for run ${runId}`);
+  const body = await response.json();
+  return body.jobs || [];
+}
+
+export async function latestRuntimeDeployRun(workflowRuns = [], fetchJobs) {
+  for (const run of workflowRuns) {
+    if (run?.status !== "completed") continue;
+    const jobs = await fetchJobs(run);
+    const deployStep = jobs.flatMap((job) => job.steps || []).find(
+      (step) => step.name === "Deploy production ECS services" && step.conclusion !== "skipped",
+    );
+    if (deployStep) return { run, deployConclusion: deployStep.conclusion || "unknown", deployStep };
+  }
+  return undefined;
+}
+
 export function unverifiedWorkflowHistory(workflowRuns = [], workflowLabel, status = "unknown") {
   if (workflowRuns.length === 0) {
     return {

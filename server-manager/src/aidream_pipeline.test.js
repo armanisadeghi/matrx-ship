@@ -3,8 +3,10 @@ import test from "node:test";
 import {
   fetchAidreamWorkflowRuns,
   fetchAidreamReleaseCandidateSha,
+  fetchAidreamWorkflowRunJobs,
   assessAidreamPipeline,
   latestExecutedWorkflowRun,
+  latestRuntimeDeployRun,
   latestExecutedTestsForRuntime,
   unverifiedWorkflowHistory,
 } from "./aidream_pipeline.js";
@@ -139,6 +141,34 @@ test("aidream release candidate resolves from the immutable version tag, not wor
     "/repos/AI-Matrix-Engine/aidream/git/ref/tags/v0.2.1027",
     `/repos/AI-Matrix-Engine/aidream/git/tags/${tagObjectSha}`,
   ]);
+});
+
+test("aidream pipeline skips a newer successful workflow that did not run the ECS deploy step", async () => {
+  const validationRun = { id: 1028, status: "completed", conclusion: "success", head_sha: "dispatch-head", display_title: "AI Dream release v0.2.1028" };
+  const productionRun = { id: 1027, status: "completed", conclusion: "success", head_sha: "dispatch-head", display_title: "AI Dream release v0.2.1027" };
+  const jobsByRun = new Map([
+    [validationRun.id, [{ steps: [{ name: "Deploy production ECS services", conclusion: "skipped" }] }]],
+    [productionRun.id, [{ steps: [{ name: "Deploy production ECS services", conclusion: "success" }] }]],
+  ]);
+
+  const selected = await latestRuntimeDeployRun([validationRun, productionRun], async (run) => jobsByRun.get(run.id));
+
+  assert.equal(selected.run, productionRun);
+  assert.equal(selected.deployConclusion, "success");
+});
+
+test("aidream workflow jobs are fetched from the matching run id", async () => {
+  let requestedUrl;
+  const fetchImpl = async (url) => {
+    requestedUrl = new URL(url);
+    return new Response(JSON.stringify({ jobs: [{ id: 123, steps: [] }] }), { status: 200 });
+  };
+
+  const jobs = await fetchAidreamWorkflowRunJobs({ runId: 36827851780, token: "manager-test-token", fetchImpl });
+
+  assert.equal(jobs[0].id, 123);
+  assert.equal(requestedUrl.pathname, "/repos/AI-Matrix-Engine/aidream/actions/runs/36827851780/jobs");
+  assert.equal(requestedUrl.searchParams.get("per_page"), "100");
 });
 
 test("aidream pipeline finds a tag-dispatched test for the deployed SHA without accepting another ref", async () => {

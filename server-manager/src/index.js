@@ -55,7 +55,7 @@ import http from "node:http";
 import { attachTerminalWs } from "./terminal_ws.js";
 import { oauthEnabled, authenticateOAuthAdmin } from "./oauth_auth.js";
 import { waitForOrchestratorReady } from "./orchestrator_readiness.js";
-import { assessAidreamPipeline, fetchAidreamReleaseCandidateSha, fetchAidreamWorkflowRuns, latestExecutedWorkflowRun, unverifiedWorkflowHistory } from "./aidream_pipeline.js";
+import { assessAidreamPipeline, fetchAidreamReleaseCandidateSha, fetchAidreamWorkflowRunJobs, fetchAidreamWorkflowRuns, latestRuntimeDeployRun } from "./aidream_pipeline.js";
 
 const PORT = process.env.PORT || 3000;
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -3542,38 +3542,43 @@ async function checkAidreamPipeline() {
       // the current runtime look verified.
       fetchAidreamWorkflowRuns({ token, workflow: "test.yml", branch: null }),
     ]);
-    const d = latestExecutedWorkflowRun(dep);
+    const d = await latestRuntimeDeployRun(dep, (run) => fetchAidreamWorkflowRunJobs({ runId: run.id, token }));
     if (!d) {
-      return { id, label, ...unverifiedWorkflowHistory(dep, "deploy"), actions: [] };
+      return {
+        id, label, status: "unknown",
+        detail: "Recent aidream workflow runs do not include a completed production ECS deployment step.",
+        actions: [],
+      };
     }
-    const actions = d.html_url ? [{ label: "View deploy run", action: "open-url", url: d.html_url }] : [];
+    const run = d.run;
+    const actions = run.html_url ? [{ label: "View deploy run", action: "open-url", url: run.html_url }] : [];
     let primarySha;
     try {
       primarySha = await readAidreamRuntimeVersion(AIDREAM_PRIMARY_HEALTH_URL);
     } catch (runtimeError) {
-      if (d.conclusion === "failure") {
-        return { id, label, status: "critical", detail: `Latest aidream deploy FAILED (${(d.head_sha || "").slice(0, 7)}, ${d.created_at?.slice(0, 16)}), and runtime freshness could not be verified (${runtimeError.message}).`, actions };
+      if (d.deployConclusion !== "success") {
+        return { id, label, status: "critical", detail: `Latest aidream ECS deploy step ${d.deployConclusion} (${(run.display_title || run.head_sha || "").replace(/^AI Dream release /, "")}, ${run.created_at?.slice(0, 16)}), and runtime freshness could not be verified (${runtimeError.message}).`, actions };
       }
       return {
         id, label, status: "warning",
-        detail: `Latest aidream deploy ${d.conclusion} (${(d.head_sha || "").slice(0, 7)}), but the canonical ECS runtime SHA could not be verified (${runtimeError.message}); matching Tests status is unknown.`,
+        detail: `Latest aidream ECS deploy step succeeded (${(run.display_title || run.head_sha || "").replace(/^AI Dream release /, "")}), but the canonical ECS runtime SHA could not be verified (${runtimeError.message}); matching Tests status is unknown.`,
         actions,
       };
     }
     let candidateSha = null;
     let candidateError = null;
-    if (d.conclusion === "success") {
+    if (d.deployConclusion === "success") {
       try {
-        candidateSha = await fetchAidreamReleaseCandidateSha(d, { token });
+        candidateSha = await fetchAidreamReleaseCandidateSha(run, { token });
       } catch (error) {
         candidateError = error;
       }
     }
-    const assessment = assessAidreamPipeline({ deployConclusion: d.conclusion, candidateSha, runtimeSha: primarySha, testRuns: tst });
+    const assessment = assessAidreamPipeline({ deployConclusion: d.deployConclusion, candidateSha, runtimeSha: primarySha, testRuns: tst });
     if (assessment.kind === "deploy-failed") {
       return {
         id, label, status: "warning",
-        detail: `Latest aidream deploy FAILED (${(d.display_title || d.head_sha || "").replace(/^AI Dream release /, "")}, ${d.created_at?.slice(0, 16)}); canonical ECS currently reports ${primarySha.slice(0, 7)}. The failed run does not confirm the intended release is live.`,
+        detail: `Latest aidream ECS deploy step ${d.deployConclusion} (${(run.display_title || run.head_sha || "").replace(/^AI Dream release /, "")}, ${run.created_at?.slice(0, 16)}); canonical ECS currently reports ${primarySha.slice(0, 7)}. The failed run does not confirm the intended release is live.`,
         actions,
       };
     }
