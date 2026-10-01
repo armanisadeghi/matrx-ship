@@ -12,10 +12,66 @@ export function latestExecutedWorkflowRun(workflowRuns = [], headSha) {
 }
 
 // A workflow_dispatch run's head_sha identifies the workflow checkout, which
-// can differ from the immutable candidate the release actually deploys. Tests
-// must therefore follow the SHA observed from the production runtime.
+// can differ from the immutable candidate the release actually deploys. First
+// prove the candidate matches production, then require tests for that SHA.
 export function latestExecutedTestsForRuntime(testRuns = [], runtimeSha) {
   return runtimeSha ? latestExecutedWorkflowRun(testRuns, runtimeSha) : undefined;
+}
+
+export function assessAidreamPipeline({ deployConclusion, candidateSha, runtimeSha, testRuns = [] } = {}) {
+  if (deployConclusion !== "success") return { kind: "deploy-failed" };
+  if (!candidateSha) return { kind: "candidate-unverified" };
+  if (!runtimeSha) return { kind: "runtime-unverified", candidateSha };
+  if (candidateSha !== runtimeSha) return { kind: "runtime-mismatch", candidateSha, runtimeSha };
+  const tests = latestExecutedTestsForRuntime(testRuns, candidateSha);
+  if (!tests) return { kind: "tests-unverified", candidateSha, runtimeSha };
+  return { kind: tests.conclusion === "failure" ? "tests-failed" : "ok", candidateSha, runtimeSha, tests };
+}
+
+// Release workflow_dispatch runs execute from main, so head_sha is not the
+// release candidate. The run title carries its immutable version tag (or full
+// candidate SHA); resolve version tags through GitHub's ref/tag objects.
+export async function fetchAidreamReleaseCandidateSha(
+  run,
+  {
+    token,
+    fetchImpl = fetch,
+    clock = () => Date.now(),
+    nonce = () => crypto.randomUUID(),
+  } = {},
+) {
+  const title = run?.display_title || "";
+  const match = title.match(/^AI Dream release (v\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?|[0-9a-f]{40})$/i);
+  if (!match) throw new Error("deploy run has no recognized immutable release identifier");
+  const identifier = match[1];
+  if (/^[0-9a-f]{40}$/i.test(identifier)) return identifier.toLowerCase();
+
+  const fetchJson = async (path) => {
+    const url = new URL(`${AIDREAM_GITHUB_API}${path}`);
+    url.searchParams.set("_fresh", `${clock()}-${nonce()}`);
+    const response = await fetchImpl(url, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/vnd.github+json",
+        "User-Agent": "matrx-manager",
+        "Cache-Control": "no-cache",
+      },
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!response.ok) throw new Error(`GitHub API ${response.status} resolving ${identifier}`);
+    return response.json();
+  };
+
+  const ref = await fetchJson(`/git/ref/tags/${encodeURIComponent(identifier)}`);
+  let object = ref.object;
+  const visited = new Set();
+  for (let depth = 0; depth < 5; depth += 1) {
+    if (object?.type === "commit" && /^[0-9a-f]{40}$/i.test(object.sha || "")) return object.sha.toLowerCase();
+    if (object?.type !== "tag" || !/^[0-9a-f]{40}$/i.test(object.sha || "") || visited.has(object.sha)) break;
+    visited.add(object.sha);
+    object = (await fetchJson(`/git/tags/${object.sha}`)).object;
+  }
+  throw new Error(`release tag ${identifier} did not resolve to a commit`);
 }
 
 export function unverifiedWorkflowHistory(workflowRuns = [], workflowLabel, status = "unknown") {

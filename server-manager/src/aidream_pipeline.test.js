@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   fetchAidreamWorkflowRuns,
+  fetchAidreamReleaseCandidateSha,
+  assessAidreamPipeline,
   latestExecutedWorkflowRun,
   latestExecutedTestsForRuntime,
   unverifiedWorkflowHistory,
@@ -69,6 +71,74 @@ test("aidream pipeline matches tests to the observed production SHA, not dispatc
 
   assert.equal(latestExecutedWorkflowRun([testRun], deployRun.head_sha), undefined);
   assert.equal(selected, testRun);
+});
+
+test("aidream pipeline warns when a successful deploy candidate is not running, even if old runtime tests passed", () => {
+  const candidateSha = "498349dc0bbda840c077b105b356852f47a5853a";
+  const oldRuntimeSha = "9e51492bfdacff178b91d2d7336a07ef07a81938";
+  const oldPassingTest = { id: 1026, status: "completed", conclusion: "success", head_sha: oldRuntimeSha };
+
+  const assessment = assessAidreamPipeline({
+    deployConclusion: "success",
+    candidateSha,
+    runtimeSha: oldRuntimeSha,
+    testRuns: [oldPassingTest],
+  });
+
+  assert.equal(assessment.kind, "runtime-mismatch");
+  assert.equal(assessment.candidateSha, candidateSha);
+  assert.equal(assessment.runtimeSha, oldRuntimeSha);
+});
+
+test("aidream pipeline never accepts a failed deploy as proof of current release freshness", () => {
+  const assessment = assessAidreamPipeline({
+    deployConclusion: "failure",
+    candidateSha: "498349dc0bbda840c077b105b356852f47a5853a",
+    runtimeSha: "498349dc0bbda840c077b105b356852f47a5853a",
+    testRuns: [{ status: "completed", conclusion: "success", head_sha: "498349dc0bbda840c077b105b356852f47a5853a" }],
+  });
+
+  assert.equal(assessment.kind, "deploy-failed");
+});
+
+test("aidream pipeline warns when the release candidate cannot be established", () => {
+  const runtimeSha = "498349dc0bbda840c077b105b356852f47a5853a";
+  const assessment = assessAidreamPipeline({
+    deployConclusion: "success",
+    candidateSha: null,
+    runtimeSha,
+    testRuns: [{ status: "completed", conclusion: "success", head_sha: runtimeSha }],
+  });
+
+  assert.equal(assessment.kind, "candidate-unverified");
+});
+
+test("aidream release candidate resolves from the immutable version tag, not workflow head_sha", async () => {
+  const candidateSha = "498349dc0bbda840c077b105b356852f47a5853a";
+  const tagObjectSha = "2361b252d14db18f889f79f524e473d0c1b067c9";
+  const seen = [];
+  const fetchImpl = async (url) => {
+    const parsed = new URL(url);
+    seen.push(parsed.pathname);
+    if (parsed.pathname.endsWith("/git/ref/tags/v0.2.1027")) {
+      return new Response(JSON.stringify({ object: { type: "tag", sha: tagObjectSha } }), { status: 200 });
+    }
+    if (parsed.pathname.endsWith(`/git/tags/${tagObjectSha}`)) {
+      return new Response(JSON.stringify({ object: { type: "commit", sha: candidateSha } }), { status: 200 });
+    }
+    throw new Error(`unexpected GitHub API path: ${parsed.pathname}`);
+  };
+
+  const resolved = await fetchAidreamReleaseCandidateSha({
+    display_title: "AI Dream release v0.2.1027",
+    head_sha: "fa58932362b4a4ca0904dec6e438695cf23a2ac9",
+  }, { token: "manager-test-token", fetchImpl });
+
+  assert.equal(resolved, candidateSha);
+  assert.deepEqual(seen, [
+    "/repos/AI-Matrix-Engine/aidream/git/ref/tags/v0.2.1027",
+    `/repos/AI-Matrix-Engine/aidream/git/tags/${tagObjectSha}`,
+  ]);
 });
 
 test("aidream pipeline finds a tag-dispatched test for the deployed SHA without accepting another ref", async () => {

@@ -55,7 +55,7 @@ import http from "node:http";
 import { attachTerminalWs } from "./terminal_ws.js";
 import { oauthEnabled, authenticateOAuthAdmin } from "./oauth_auth.js";
 import { waitForOrchestratorReady } from "./orchestrator_readiness.js";
-import { fetchAidreamWorkflowRuns, latestExecutedTestsForRuntime, latestExecutedWorkflowRun, unverifiedWorkflowHistory } from "./aidream_pipeline.js";
+import { assessAidreamPipeline, fetchAidreamReleaseCandidateSha, fetchAidreamWorkflowRuns, latestExecutedWorkflowRun, unverifiedWorkflowHistory } from "./aidream_pipeline.js";
 
 const PORT = process.env.PORT || 3000;
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -3560,31 +3560,56 @@ async function checkAidreamPipeline() {
         actions,
       };
     }
-    if (d.conclusion === "failure") {
+    let candidateSha = null;
+    let candidateError = null;
+    if (d.conclusion === "success") {
+      try {
+        candidateSha = await fetchAidreamReleaseCandidateSha(d, { token });
+      } catch (error) {
+        candidateError = error;
+      }
+    }
+    const assessment = assessAidreamPipeline({ deployConclusion: d.conclusion, candidateSha, runtimeSha: primarySha, testRuns: tst });
+    if (assessment.kind === "deploy-failed") {
       return {
         id, label, status: "warning",
-        detail: `Latest aidream deploy automation FAILED (${(d.head_sha || "").slice(0, 7)}, ${d.created_at?.slice(0, 16)}), but the canonical ECS runtime is ready and reports ${primarySha.slice(0, 7)}. Repair the release owner; runtime is not stale or split.`,
+        detail: `Latest aidream deploy FAILED (${(d.display_title || d.head_sha || "").replace(/^AI Dream release /, "")}, ${d.created_at?.slice(0, 16)}); canonical ECS currently reports ${primarySha.slice(0, 7)}. The failed run does not confirm the intended release is live.`,
         actions,
       };
     }
-    // workflow_dispatch head_sha can be the release workflow checkout rather
-    // than the candidate deployed from its receipt. Match tests to ECS truth.
-    const t = latestExecutedTestsForRuntime(tst, primarySha);
-    if (t && t.conclusion === "failure") {
+    if (assessment.kind === "candidate-unverified") {
       return {
         id, label, status: "warning",
-        detail: `aidream production is running ${primarySha.slice(0, 7)} but the Tests workflow is RED (${(t.head_sha || "").slice(0, 7)}, ${t.created_at?.slice(0, 16)}) — deploys are not gated on tests, so a broken commit ships silently.`,
+        detail: `Aidream deploy succeeded, but its immutable release candidate could not be resolved (${candidateError?.message || "release metadata unavailable"}); ECS reports ${primarySha.slice(0, 7)} and freshness is unverified.`,
+        actions,
+      };
+    }
+    if (assessment.kind === "runtime-mismatch") {
+      return {
+        id, label, status: "warning",
+        detail: `Deploy candidate ${candidateSha.slice(0, 7)} does not match canonical ECS runtime ${primarySha.slice(0, 7)}. Release freshness is unverified.`,
+        actions,
+      };
+    }
+    if (assessment.kind === "tests-failed") {
+      const t = assessment.tests;
+      return {
+        id, label, status: "warning",
+        detail: `Aidream runtime ${candidateSha.slice(0, 7)} matches the deploy candidate, but Tests is RED (${t.created_at?.slice(0, 16)}).`,
         actions: t.html_url ? [...actions, { label: "View failing tests", action: "open-url", url: t.html_url }] : actions,
       };
     }
-    if (!t) {
+    if (assessment.kind === "tests-unverified") {
       return {
         id, label, status: "warning",
-        detail: `Canonical ECS runtime ${primarySha.slice(0, 7)} is ready, but no executed Tests result was found for that SHA. Deploys are not test-gated, so current test health is unverified.`,
+        detail: `Aidream runtime ${candidateSha.slice(0, 7)} matches the deploy candidate, but no executed Tests result exists for that SHA.`,
         actions,
       };
     }
-    return { id, label, status: "ok", detail: `Latest deploy ${d.conclusion} (${(d.head_sha || "").slice(0, 7)}); ECS runtime ${primarySha.slice(0, 7)}, tests ${t.conclusion}.`, actions: [] };
+    if (assessment.kind !== "ok") {
+      return { id, label, status: "warning", detail: `Aidream release freshness is unverified (${assessment.kind}).`, actions };
+    }
+    return { id, label, status: "ok", detail: `Aidream deploy candidate ${candidateSha.slice(0, 7)} matches ECS; tests ${assessment.tests.conclusion}.`, actions: [] };
   } catch (e) {
     // Most likely: the PAT is scoped to armanisadeghi/matrx-sandbox only and
     // can't see the AI-Matrix-Engine org. Say so — this is fixable in Secrets.
