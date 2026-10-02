@@ -17,10 +17,10 @@
 Also binding: the Data Doctrine (`common-docs/systems/architecture/database/DECISIONS.md`), the access ladder (`common-docs/policies/access-ladder.md`), canonical-first triage (`common-docs/policies/canonical-first-triage.md`), agents never author agents (`common-docs/policies/agents-never-author-agents.md`), and the domain tree (`common-docs/policies/domain-tree.md`).
 <!-- nine-laws:end -->
 
-**Cloud task autonomy:** A task request authorizes routine in-scope edits, verification, exact-path commits, and pushes. Continue without a conversational confirmation pause; honor explicit hold points and human-only gates. [Completion policy](../common-docs/policies/defect-ownership.md).
+**Cloud task autonomy:** A task request authorizes routine in-scope edits, verification, exact-path commits, and pushes. Continue without a conversational confirmation pause; honor explicit hold points and human-only gates. [Completion policy](../common-docs/policies/reality-is-the-referee.md).
 
 
-**Purpose of this file** (per the [CLAUDE.md charter](../common-docs/policies/claude-md-charter.md)):
+**Purpose of this file** (per the [CLAUDE.md charter](../common-docs/policies/document-types.md)):
 you are here because you're working on the **deployment / version-tracking / infra
 control plane**. This file holds ship-specific rules and conventions, plus pointers to
 the docs and shared systems that carry everything else. It does NOT hold feature
