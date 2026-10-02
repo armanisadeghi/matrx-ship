@@ -6,7 +6,7 @@ description: "Runbook for AI Matrx production on AWS ECS/Fargate (us-east-1). Us
 # AWS production operations
 
 The source of truth is `infrastructure/aws/production-platform`. The canonical topology and migration
-gates are `../common-docs/systems/infrastructure/production-infrastructure/FEATURE.md` from the workspace root.
+gates are `../common-docs/systems/architecture/production-infra/FEATURE.md` from the workspace root.
 
 ## Identity and safety preflight
 

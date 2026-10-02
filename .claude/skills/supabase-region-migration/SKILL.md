@@ -16,7 +16,7 @@ description: "Post-mortem and rollback reference for the finished Supabase regio
 > post-mortem and a rollback reference, not a runbook to execute.
 
 Treat this as a production-data migration even during rehearsal. Read
-`../common-docs/systems/infrastructure/production-infrastructure/FEATURE.md` from the workspace root and use the
+`../common-docs/systems/architecture/production-infra/FEATURE.md` from the workspace root and use the
 Supabase skill before acting.
 
 ## Fixed identity

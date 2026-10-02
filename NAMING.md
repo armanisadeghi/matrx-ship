@@ -2,7 +2,7 @@
 
 **Last updated:** 2026-09-08 · **Status:** LOCAL glossary. The platform lexicon (`common-docs/systems/platform/vocabulary/FEATURE.md`) and Feature Registry (`common-docs/policies/feature-registry.md`) outrank it.
 
-Cross-repo system-of-record: /Users/armanisadeghi/code/common-docs/systems/infrastructure/production-infrastructure/FEATURE.md — read it before touching this feature in ANY repo.
+Cross-repo system-of-record: /Users/armanisadeghi/code/common-docs/systems/architecture/production-infra/FEATURE.md — read it before touching this feature in ANY repo.
 
 Sandbox contracts: /Users/armanisadeghi/code/common-docs/systems/infrastructure/sandboxes/STATE.md.
 

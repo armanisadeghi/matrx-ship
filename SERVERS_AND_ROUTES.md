@@ -4,11 +4,11 @@ A plain map of every machine, every public URL, and what each one is. Last
 verified 2026-08-25 from live health, Cloudflare DNS, AWS, Hostinger, Coolify, and repository configuration.
 
 The canonical cross-platform ownership table is
-[`common-docs/systems/infrastructure/production-infrastructure/FEATURE.md`](../common-docs/systems/infrastructure/production-infrastructure/FEATURE.md#live-production-inventory).
+[`common-docs/systems/architecture/production-infra/FEATURE.md`](../common-docs/systems/architecture/production-infra/FEATURE.md#live-production-inventory).
 This file adds Ship/control-plane machine detail; if a route here appears to disagree with that table,
 the canonical inventory wins and the mismatch is an incident to repair.
 
-Sandbox-route correction, September 13, 2026 — restoration root: the EC2 control endpoint below uses verified HTTPS/WSS; public TCP8000 is closed. Current sandbox preservation and acceptance are recorded in [sandbox STATE](../common-docs/systems/infrastructure/sandboxes/STATE.md). Other dated service observations in this file have not been re-certified by this correction.
+Sandbox-route correction, September 13, 2026 — restoration root: the EC2 control endpoint below uses verified HTTPS/WSS; public TCP8000 is closed. Current sandbox preservation and acceptance are recorded in [sandbox STATE](../common-docs/systems/architecture/sandboxes/STATE.md). Other dated service observations in this file have not been re-certified by this correction.
 
 ---
 

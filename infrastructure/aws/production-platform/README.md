@@ -10,12 +10,12 @@ connectivity to the existing sandbox VPC, ECS Container Insights, application an
 VPC flow logs, a seven-year multi-region CloudTrail archive, private service discovery, ECR
 repositories, service-specific task roles, runtime-secret containers, and a routine operator role.
 
-Cross-repo system-of-record: /Users/armanisadeghi/code/common-docs/systems/infrastructure/production-infrastructure/FEATURE.md — read it before touching this feature in ANY repo.
+Cross-repo system-of-record: /Users/armanisadeghi/code/common-docs/systems/architecture/production-infra/FEATURE.md — read it before touching this feature in ANY repo.
 
 Browser-free operations use the `aws-production-operations` skill in this repository.
 
 Sandbox restoration and its independent acceptance gates are tracked in
-[/systems/infrastructure/sandboxes/REGISTER.md](../../../../common-docs/systems/infrastructure/sandboxes/REGISTER.md).
+[/systems/infrastructure/sandboxes/REGISTER.md](../../../../common-docs/systems/architecture/sandboxes/REGISTER.md).
 `sandbox-orchestrator.tf` declares the private orchestrator record and ECS ingress;
 the existing shared Caddy configuration declares its separate public HTTPS hostname.
 Apply the private saved plan before updating ECS consumers. Create and verify the
