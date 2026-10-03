@@ -40,5 +40,5 @@ and apply a separately reviewed teardown. Delete the IAM identity only after pro
 absence is verified. Never empty either bucket as an incidental Terraform step.
 
 Cross-repo system-of-record:
-`/Users/armanisadeghi/code/common-docs/projects/communications-platform/P6-ai-voice-proof.md` — read
+`/Users/armanisadeghi/code/common-docs/projects/communications-platform/README.md` — read
 it before touching recording storage, credentials, or capture in any repository.
