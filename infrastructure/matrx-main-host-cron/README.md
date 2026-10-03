@@ -32,7 +32,7 @@ deploy finish and probe the `/api/dev/login-as` endpoint.
 - `ops.app_log` and `public.infra_status` — written by `lib/infra-report.sh`, sourced
   by both `matrx-infra-watchdog.sh` and `matrx-janitor.sh`. As of 2026-09-28 the
   `app_log` insert targets `ops.app_log` (fixed from a stale `public.app_log`
-  reference — see `common-docs/projects/database-estate-reduction/CHANGE-LOG.md`,
+  reference — see `common-docs/systems/architecture/database/projects/database-estate-reduction/PLAN.md`,
   2026-09-28 00:04 row, and the on-server backup
   `/root/scripts/lib/infra-report.sh.bak-20260928-app_log`).
 - Coolify's own internal Postgres (`coolify` DB, container `coolify-db`) — read/written
