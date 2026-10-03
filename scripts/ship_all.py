@@ -23,7 +23,14 @@ Output
   - ~/.matrx/ship-all/<stamp>/<repo>.log     the full ./ship.sh output for every repo that ran
 Exit 0 when every shipped repo finished and nothing is open; 1 otherwise.
 
-Branches, worktrees and pull requests are reported, never touched: ./ship.sh syncs main only.
+After every ship (step 3b), GitHub-side work is LANDED, not just reported (Arman, 2026-10-03:
+"Why do we have any remote branches period?"): every open, non-draft pull request is merged
+(merge commit, branch deleted); every remote branch with zero commits missing from origin/main is
+deleted; a branch under deploy/ is a deploy pointer CI moves and is never touched. What could not
+be landed (a PR GitHub cannot merge cleanly, a branch holding unmerged commits, a draft) is listed
+under NEEDS LANDING for the running agent to merge by hand. @ai-matrx packages are measured again
+after shipping; a folder still behind npm is a PROBLEM, not a footnote.
+Local branches and worktrees are reported, never touched.
 """
 import datetime
 import fcntl
@@ -168,6 +175,53 @@ def stale_packages(repo):
         if rc != 0:
             stale.append(os.path.relpath(folder, repo))
     return stale
+
+
+PROTECTED_BRANCH_PREFIXES = ("deploy/",)   # pointers CI moves (matrx-sandbox deploy/hosted)
+
+
+def land_github_work(info):
+    """Merge open PRs and delete fully merged remote branches; record what still needs a hand."""
+    repo = info["path"]
+    info["landed"], info["needs_landing"] = [], []
+    git(repo, "fetch", "-q", "--prune", "origin", timeout=90)
+    for pr in info.get("open_prs") or []:
+        rc, out, _ = run(["gh", "pr", "view", str(pr["number"]), "--json", "isDraft,state"], repo, timeout=60)
+        try:
+            view = json.loads(out) if rc == 0 else {}
+        except ValueError:
+            view = {}
+        if view.get("state") != "OPEN":
+            continue
+        if view.get("isDraft"):
+            info["needs_landing"].append("PR #%s is a draft: %s" % (pr["number"], pr["url"]))
+            continue
+        rc, out, err = run(["gh", "pr", "merge", str(pr["number"]), "--merge", "--delete-branch"], repo, timeout=120)
+        if rc == 0:
+            info["landed"].append("merged PR #%s (%s)" % (pr["number"], pr["title"][:60]))
+        else:
+            info["needs_landing"].append("PR #%s cannot merge cleanly (%s): %s" % (
+                pr["number"], (err or out).strip().splitlines()[0][:120] if (err or out).strip() else "no reason", pr["url"]))
+    git(repo, "fetch", "-q", "--prune", "origin", timeout=90)
+    _, rbs, _ = git(repo, "for-each-ref", "refs/remotes/origin", "--format=%(refname:short)")
+    for ref in lines(rbs):
+        if ref in ("origin/HEAD", "origin/main", "origin"):
+            continue
+        name = ref[len("origin/"):]
+        if name.startswith(PROTECTED_BRANCH_PREFIXES):
+            continue
+        rc, cnt, _ = git(repo, "rev-list", "--count", "origin/main..%s" % ref)
+        missing = int(cnt.strip() or 0) if rc == 0 else -1
+        if missing == 0:
+            rc, _, err = git(repo, "push", "-q", "origin", "--delete", name, timeout=60)
+            if rc == 0:
+                info["landed"].append("deleted merged branch %s" % name)
+            else:
+                info["needs_landing"].append("branch %s is merged but could not be deleted: %s" % (name, err.strip()[:120]))
+        else:
+            info["needs_landing"].append("branch %s holds %s commit(s) not on main" % (name, missing))
+    _, rbs, _ = git(repo, "for-each-ref", "refs/remotes/origin", "--format=%(refname:short)")
+    info["remote_branches_after"] = [r for r in lines(rbs) if r not in ("origin/HEAD", "origin/main", "origin")]
 
 
 def open_prs(repo):
@@ -415,6 +469,18 @@ def main(args=None):
             list(pool.map(lambda i: ship(i, out_dir, stamp), to_ship))
         say("■ all shipping finished in %s" % fmt(time.time() - t0))
 
+    # ── 3b. land GitHub-side work and re-measure packages (the "after" truth) ─────────────
+    if not dry:
+        t0 = time.time()
+        say("▶ landing open PRs / merged branches and re-checking packages…")
+        def after(info):
+            if info["fetch_ok"] and info["branch"] == "main":
+                land_github_work(info)
+            info["stale_packages_after"] = stale_packages(info["path"]) if info["stale_packages"] else []
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            list(pool.map(after, infos))
+        say("■ landed in %s" % fmt(time.time() - t0))
+
     # ── 3. only now: what is open, and who edited each held file (one pass) ──────────────
     for info in infos:
         info["open_items"] = open_items(info["path"])
@@ -434,13 +500,21 @@ def main(args=None):
         extras = []
         if info["open_items"]:
             extras.append("%d open item(s)" % len(info["open_items"]))
+        if "remote_branches_after" in info:
+            info["remote_branches_before"], info["remote_branches"] = info["remote_branches"], info["remote_branches_after"]
         for key, label in (("local_branches", "local branch"), ("extra_worktrees", "worktree"),
                            ("remote_branches", "remote branch")):
             if info[key]:
                 extras.append("%d %s(es)" % (len(info[key]), label))
         if info["open_prs"]:
             extras.append("%d open PR(s)" % len(info["open_prs"]))
-        if info["stale_packages"]:
+        if info.get("landed"):
+            extras.append("landed: %d" % len(info["landed"]))
+        if info.get("stale_packages_after"):
+            extras.append("@ai-matrx packages STILL behind npm in %s" % ", ".join(info["stale_packages_after"]))
+        elif info["stale_packages"] and not dry:
+            extras.append("@ai-matrx packages caught up")
+        elif info["stale_packages"]:
             extras.append("@ai-matrx packages behind npm in %s" % ", ".join(info["stale_packages"]))
         took = fmt(info["seconds"]) if "seconds" in info else ""
         say("  %-28s %-24s %-7s before: uncommitted=%-4d ahead=%-3d behind=%-3d %s" % (
@@ -454,7 +528,21 @@ def main(args=None):
 
     open_repos = [r for r in infos if r["open_items"] or r["held"]]
     problems = [r for r in infos if r["status"] in ("shipped with problems", "could not reach GitHub", "NOT PULLED", "RELEASE SLOT BUSY")]
+    stale_after = [r for r in infos if r.get("stale_packages_after")]
+    landing = [r for r in infos if r.get("needs_landing")]
     say("")
+    for r in infos:
+        for line in r.get("landed", []):
+            say("  LANDED  %s: %s" % (r["repo"], line))
+    if landing:
+        say("NEEDS LANDING (merge by hand into main, then delete the branch)")
+        for r in landing:
+            for line in r["needs_landing"]:
+                say("  %s: %s" % (r["repo"], line))
+    if stale_after:
+        say("PACKAGES STILL BEHIND NPM (pnpm update -r \"@ai-matrx/*\" --latest in that folder, adopt Consumer actions, ship)")
+        for r in stale_after:
+            say("  %s: %s" % (r["repo"], ", ".join(r["stale_packages_after"])))
     if open_repos:
         say("OPEN CONFLICT ITEMS")
         for r in open_repos:
@@ -469,7 +557,7 @@ def main(args=None):
         for r in problems:
             say("  %s: %s  %s" % (r["repo"], r["status"], r.get("release_slot_blocker", r.get("log", r.get("fetch_error", "")))))
     say("done in %s. summary: %s" % (fmt(time.time() - t_all), os.path.join(out_dir, "summary.json")))
-    return 1 if (open_repos or problems) else 0
+    return 1 if (open_repos or problems or landing or stale_after) else 0
 
 
 if __name__ == "__main__":
