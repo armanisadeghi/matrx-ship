@@ -44,7 +44,7 @@ proof. The August alarm was late discovery of the July rebuild, not an active in
 
 ### EC2-hosted services (not on `/srv`)
 
-> Cross-repo system-of-record: `/Users/armanisadeghi/code/common-docs/systems/media/file-service/STATE.md` — full contract, deploy state, and cutover status for matrx-files. Read it before touching this feature in ANY repo.
+> Cross-repo system-of-record: `/Users/armanisadeghi/code/common-docs/systems/files/file-service/STATE.md` — full contract, deploy state, and cutover status for matrx-files. Read it before touching this feature in ANY repo.
 
 | Host | Service | Runs as | Endpoint | What it is |
 |---|---|---|---|---|
