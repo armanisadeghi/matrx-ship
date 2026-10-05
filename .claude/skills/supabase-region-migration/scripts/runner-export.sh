@@ -31,6 +31,14 @@ SUPABASE_DB_PASSWORD=$(read_env_value SUPABASE_MATRIX_PASSWORD)
 export PGHOST PGPORT=5432 PGDATABASE=postgres PGUSER PGPASSWORD="$SUPABASE_DB_PASSWORD"
 PGHOST=$(read_env_value SUPABASE_MATRIX_HOST)
 PGUSER=$(read_env_value SUPABASE_MATRIX_USER)
+# Guard: never dump through the transaction pooler. pg_dump opens with a session-level
+# SET restrict_nonsystem_relation_kind; through port 6543 that SET is left on SHARED server
+# connections and every app view read on them fails with 55000 "access to non-system view …
+# is restricted" (live, 2026-10-05). Refuse rather than poison the platform's pool.
+if [ "$PGPORT" = "6543" ]; then
+  echo "REFUSED: pg_dump through the transaction pooler (port 6543) poisons shared connections; use 5432 or the direct host." >&2
+  exit 78
+fi
 export PGCONNECT_TIMEOUT=30 PGKEEPALIVES=1 PGKEEPALIVES_IDLE=30 PGKEEPALIVES_INTERVAL=10 PGKEEPALIVES_COUNT=6
 
 pg_container() {
