@@ -102,6 +102,17 @@ check "a missing extra file is a WARNING"       'grep -q "^WARNING  Version     
 check "failing checks are an ERROR, after push" 'grep -q "^ERROR    Checks       After-push checks failed" "$R/out" && grep -qx "==================== Checks ====================" "$R/out"'
 check "checks output stays in the log"          '! grep -q "^checking$" "$R/out"'
 
+# ── 5. package-lock root metadata stays in step with package.json ────────────
+new_repo lock 's/^VERSION_FILE=.*/VERSION_FILE="package.json"/; s/^EXTRA_VERSION_FILES=.*/EXTRA_VERSION_FILES=("package-lock.json")/'
+printf '{\n  "name": "x",\n  "version": "1.2.0",\n  "lockfileVersion": 3,\n  "packages": {\n    "": {"name": "x", "version": "1.2.0"},\n    "node_modules/y": {"version": "9.9.9"}\n  }\n}\n' > package-lock.json
+sed -i.bak 's/"0.1.0"/"1.2.0"/' package.json; rm package.json.bak
+git add -A; git commit -qm lockfile; git push -q origin main
+release
+echo "release — package-lock root versions"
+check "package.json bumped"                    'on_origin package.json | grep -q "\"version\": \"1.2.1\""'
+check "both lockfile root versions bumped"     'on_origin package-lock.json | python3 -c '\''import json, sys; p = json.load(sys.stdin); sys.exit(0 if p["version"] == "1.2.1" and p["packages"][""]["version"] == "1.2.1" else 1)'\'''
+check "lockfile dependency version is untouched" 'on_origin package-lock.json | grep -q "\"node_modules/y\": {\"version\": \"9.9.9\"}"'
+
 # ── 5. a repo with no VERSION file yet ───────────────────────────────────────
 new_repo three 's/^VERSION_FILE=.*/VERSION_FILE="VERSION"/'
 release
@@ -140,7 +151,7 @@ check "exit 0 and v2.3.2 shipped"               '[[ $(cat "$R/status") -eq 0 ]] 
 check "[project] bumped, tool table untouched"  'on_origin pyproject.toml | grep -q "^version = \"2.3.2\"" && on_origin pyproject.toml | grep -q "^version = \"0.0.9\""'
 check "CRLF kept in VERSION"                    '[[ "$(on_origin VERSION | od -c | head -1)" == *"\r  \n"* ]]'
 check "executable mode kept"                    '[[ "$(git --git-dir="$R/origin.git" ls-tree main VERSION | cut -c1-6)" == 100755 ]]'
-check "a non-JSON extra is untouched + WARNING" 'on_origin Cargo.toml | grep -q "^version = \"2.3.0\"" && grep -q "Cargo.toml is neither JSON nor a pyproject.toml" "$R/out"'
+check "a non-JSON extra is untouched + WARNING" 'on_origin Cargo.toml | grep -q "^version = \"2.3.0\"" && grep -q "Cargo.toml is neither JSON, package-lock.json, nor a pyproject.toml" "$R/out"'
 check "[Unreleased] (CRLF) got its heading"     'on_origin CHANGELOG.md | grep -q "^## 2.3.2 - " && ! grep -q "Unreleased. heading" "$R/out"'
 
 # c. a misconfigured JSON version file must stop, never ship 0.0.1

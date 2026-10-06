@@ -121,7 +121,7 @@ VER = re.compile(r"(?m)^(version\s*=\s*\")([^\"]*)(\")")
 
 if cmd == "read":
     text = sys.stdin.read()
-    if kind == "json":
+    if kind in ("json", "package-lock"):
         print(json.loads(text)["version"])
     elif kind == "pyproject":
         a, b = pyproject_span(text)
@@ -160,6 +160,41 @@ elif cmd == "write":
                     break
             except ValueError:
                 pass
+    elif kind == "package-lock":
+        # package-lock.json has two root versions: its top-level field and packages[""].version.
+        # Locate their JSON value spans structurally so dependency versions are left untouched.
+        decoder = json.JSONDecoder()
+        def ws(i):
+            while i < len(text) and text[i].isspace(): i += 1
+            return i
+        def object_value_span(start, key):
+            i = ws(start)
+            if i >= len(text) or text[i] != "{": return None
+            i = ws(i + 1)
+            while i < len(text) and text[i] != "}":
+                name, after_name = decoder.raw_decode(text, i)
+                i = ws(after_name)
+                if i >= len(text) or text[i] != ":": return None
+                value_start = ws(i + 1)
+                _, value_end = decoder.raw_decode(text, value_start)
+                if name == key: return value_start, value_end
+                i = ws(value_end)
+                if i >= len(text) or text[i] != ",": return None
+                i = ws(i + 1)
+            return None
+        root_version = object_value_span(0, "version")
+        packages = object_value_span(0, "packages")
+        root_package = object_value_span(packages[0], "") if packages else None
+        package_version = object_value_span(root_package[0], "version") if root_package else None
+        if root_version and package_version:
+            replacement = json.dumps(new)
+            for start, end in sorted((root_version, package_version), reverse=True):
+                text = text[:start] + replacement + text[end:]
+            try:
+                parsed = json.loads(text)
+                ok = parsed["version"] == new and parsed["packages"][""]["version"] == new
+            except (KeyError, TypeError, ValueError):
+                ok = False
     elif kind == "pyproject":
         span = pyproject_span(text)
         if span:
@@ -180,7 +215,7 @@ elif cmd == "write":
 ' "$@"
 }
 kind_of() {
-    case "$1" in *.json) echo json ;; *pyproject.toml) echo pyproject ;; *) echo plain ;; esac
+    case "$1" in *package-lock.json) echo package-lock ;; *.json) echo json ;; *pyproject.toml) echo pyproject ;; *) echo plain ;; esac
 }
 read_version() {   # tree → current version (a missing PLAIN version file starts at 0.0.0)
     local kind; kind="$(kind_of "$VERSION_FILE")"
@@ -263,7 +298,7 @@ build_commit() {   # sets RELEASE_SHA from BASE_TREE, NEW, MSG
     for f in ${EXTRA_VERSION_FILES[@]+"${EXTRA_VERSION_FILES[@]}"}; do
         kind="$(kind_of "$f")"
         if [[ "$kind" == plain ]]; then
-            finding "WARNING" "Version" "$f is neither JSON nor a pyproject.toml — its version was not bumped"
+            finding "WARNING" "Version" "$f is neither JSON, package-lock.json, nor a pyproject.toml — its version was not bumped"
             continue
         fi
         put_blob "$idx" "$f" "$kind" || return 1
