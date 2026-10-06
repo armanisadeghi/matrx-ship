@@ -108,7 +108,8 @@ done < <(find "$profile_dir/launchd" -type f -name '*.plist' | sort)
 if [[ "$mode" == "install" ]]; then
   manual+=("launchd job files were copied only; load or enable them locally after reviewing their target checkout")
 fi
-manual+=("sign in locally where needed: gh auth login; vercel login; supabase login")
+manual+=("sign in locally where needed: gh auth login; vercel login")
+manual+=("Supabase: use existing CLI auth or the connected MCP; if the token expired, repair it through an authorized noninteractive flow (do not run supabase login/logout or recreate a Keychain entry)")
 manual+=("Claude schedule cadence/enablement is host runtime state; enroll ship-all-claude at :13 and :43 locally")
 manual+=("Codex task/thread/project identities are host-bound; enroll $codex_template_count local schedules from ~/.codex/automation-templates")
 
