@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.aimatrx.night.clone-refresh</string>
+  <!-- THE NIGHTLY CLONE REFRESH (database workload safety, Arman approved 2026-09-26: "1AM pacific is good").
+       Creates clone-YYYYMMDD as a data branch of production, measures live before/during/after,
+       aborts promotion on any impact, quarantines, promotes CURRENT.md + CLONE-REF, keeps the previous
+       clone as fallback and deletes the one before it. The script's own preflight refuses outside
+       00:30-02:30 Pacific. Log: ~/Library/Logs/aimatrx/clone-refresh.log; report committed to
+       common-docs/projects/database-workload-safety/clone-runs/<date>.md. Register row:
+       common-docs/operations/scheduled-tasks.md (clone-refresh). -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>__HOME__/.local/bin/uv</string>
+    <string>run</string>
+    <string>python</string>
+    <string>scripts/clone/refresh_clone.py</string>
+  </array>
+  <key>WorkingDirectory</key><string>__CODE_ROOT__/aidream</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key><string>__HOME__/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <key>HOME</key><string>__HOME__</string>
+  </dict>
+  <key>StartCalendarInterval</key>
+  <dict><key>Hour</key><integer>1</integer><key>Minute</key><integer>0</integer></dict>
+  <key>RunAtLoad</key><false/>
+  <key>AbandonProcessGroup</key><true/>
+  <key>StandardOutPath</key><string>__HOME__/Library/Logs/aimatrx/clone-refresh.log</string>
+  <key>StandardErrorPath</key><string>__HOME__/Library/Logs/aimatrx/clone-refresh.log</string>
+</dict>
+</plist>

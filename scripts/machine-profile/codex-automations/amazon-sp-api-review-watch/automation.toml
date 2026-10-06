@@ -1,0 +1,6 @@
+version = 1
+kind = "heartbeat"
+name = "Amazon SP-API Review Watch"
+prompt = "Check the Amazon Solution Provider Portal for AI Matrx Commerce app ID amzn1.sp.solution.9cb1ef0e-81e5-45b9-9b7d-575462067637 and its Case Log. The developer profile is already approved under case 22059603231. The public Appstore listing was submitted on 2026-09-28 and currently shows Edit pending review. Look for approval, rejection, requests for changes, or deadlines. Update __CODE_ROOT__/common-docs/projects/ebay-store-management/API-ACCESS.md and ACCESS-PREP.md only when status changes, following the common-docs rules and never recording credentials. Stay quiet while status is unchanged and non-actionable. Notify Arman immediately with the exact request and next move when Amazon changes the status or requires action. Stop monitoring once the listing is approved and documented."
+status = "ACTIVE"
+rrule = "FREQ=DAILY;BYHOUR=9,15;BYMINUTE=0"

@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>AbandonProcessGroup</key>
+	<true/>
+	<key>Label</key>
+	<string>com.aimatrx.night.clone-catchup-nightly</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/bin/zsh</string>
+		<string>__CODE_ROOT__/matrx-frontend/scripts/night/clone-catchup.sh</string>
+	</array>
+	<key>RunAtLoad</key>
+	<false/>
+	<key>StandardErrorPath</key>
+	<string>__CODE_ROOT__/common-docs/projects/data-doctrine-adoption/v5/handoff-2026-09-20/night-clone-catchup.log</string>
+	<key>StandardOutPath</key>
+	<string>__CODE_ROOT__/common-docs/projects/data-doctrine-adoption/v5/handoff-2026-09-20/night-clone-catchup.log</string>
+	<key>StartCalendarInterval</key>
+	<dict>
+		<key>Hour</key>
+		<integer>2</integer>
+		<key>Minute</key>
+		<integer>15</integer>
+	</dict>
+	<key>WorkingDirectory</key>
+	<string>__CODE_ROOT__/matrx-frontend</string>
+</dict>
+</plist>

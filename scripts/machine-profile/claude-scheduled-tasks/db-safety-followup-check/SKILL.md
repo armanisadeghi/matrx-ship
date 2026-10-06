@@ -1,0 +1,12 @@
+---
+name: db-safety-followup-check
+description: Verify the DB memory recorder and the deleted rehearsal branch did no harm; record results on the workboard
+---
+
+You are verifying two database changes Arman approved on 2026-09-25 and asked to be re-checked "so we don't mess anything up". Work in __CODE_ROOT__/common-docs; read its CLAUDE.md and __CODE_ROOT__/common-docs/systems/architecture/database/projects/database-workload-safety/PLAN.md section "Follow-ups any agent must check" (rows F1, F2, F2a). Live Supabase project brsgrqvjdzwihsvnfqkf (db.matrxserver.com); NEVER touch txzxabzwovsujtloxrus. Use the supabase MCP execute_sql / query_logs tools, read-only except for writing results onto the workboard.
+
+F1 — the DB machine recorder (scheduler.sch_task id a7c1e2d3-0000-4e5f-9a00-000000001051, every 60 s, writes ops.db_host_sample): run `select count(*), min(sampled_at), max(sampled_at), bool_and(scrape_ok), round(min(mem_available_bytes)/1e9,2) min_avail_gb, max(round((swap_total_bytes-swap_free_bytes)*100.0/nullif(swap_total_bytes,0),1)) max_swap_pct from ops.db_host_sample where sampled_at > now()-interval '24 hours'`. Expect ~1,440 rows, recent max, scrape_ok true. Count `database_host` alerts in ops_issue_class/ops_issue_event in 24 h. Confirm it did not add measurable DB load (pg_stat_statements for its queries). If it failed to run at all (zero new rows), find why (server deployed without the handler? scheduler error in system_error) and fix or report. If it floods alerts or misbehaves, disable it with `update scheduler.sch_task set enabled=false where id='a7c1e2d3-0000-4e5f-9a00-000000001051'` and say so.
+
+F2/F2a — the deleted branch unified-data-campaign (ksfhewuxgxwavkpceein): grep __CODE_ROOT__/{aidream,matrx-frontend,matrx-ship,common-docs} for ksfhewuxgxwavkpceein and SUPABASE_BRANCH_DATABASE_URL; check system_error / release logs for connection failures to it. Report whether the `--target branch` retarget to the clone (row F2a) has been done; if not, flag it prominently.
+
+Write a dated one-line result into the Result column of F1, F2 and F2a on the workboard and commit with `git commit -- projects/database-workload-safety/WORKBOARD.md` (never git add -A). Then report in plain English, under 250 words, leading with anything wrong. Also read memory trend: if min available memory fell under 2 GB or swap exceeded 75% at any point, say so first.

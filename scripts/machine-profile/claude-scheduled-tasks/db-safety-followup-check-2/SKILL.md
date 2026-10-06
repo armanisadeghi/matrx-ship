@@ -1,0 +1,6 @@
+---
+name: db-safety-followup-check-2
+description: Second check of the DB memory recorder and rehearsal-branch deletion, day 3
+---
+
+Second follow-up for two database changes Arman approved 2026-09-25 (the DB memory recorder enabled every 60 s; the stale rehearsal branch unified-data-campaign deleted). Work in __CODE_ROOT__/common-docs; read CLAUDE.md and projects/database-workload-safety/WORKBOARD.md rows F1, F2, F2a. Live project brsgrqvjdzwihsvnfqkf only; never txzxabzwovsujtloxrus. Repeat the checks written in those rows over the last 72 hours (ops.db_host_sample row count, scrape_ok, memory/swap trend min/max per day, database_host alert count, any connection errors to ksfhewuxgxwavkpceein, whether --target branch now points at the clone). Write a dated result line into each row's Result column, commit only that file with `git commit -- projects/database-workload-safety/WORKBOARD.md`, and report under 250 words, leading with anything wrong and with the 3-day memory trend (is available memory shrinking day over day?).

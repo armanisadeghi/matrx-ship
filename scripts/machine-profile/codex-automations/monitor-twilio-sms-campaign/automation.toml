@@ -1,0 +1,10 @@
+version = 1
+kind = "cron"
+name = "Monitor Twilio SMS campaign"
+prompt = "Check the Twilio A2P 10DLC campaign status for the AI Matrx messaging service operated by ALL GREEN ELECTRONICS RECYCLING, LLC. Work read-only: load Twilio credentials from __CODE_ROOT__/matrx-frontend/.env.local without printing secrets, fetch the UsAppToPerson campaign through the Twilio API, and report its campaign_status and any error codes/descriptions. The campaign was resubmitted on August 11, 2026 and was IN_PROGRESS with zero errors. If it is still IN_PROGRESS, give a one-sentence unchanged update and leave this automation active. If it becomes VERIFIED, tell Arman SMS testing can begin, then pause automation monitor-twilio-sms-campaign so no further checks run. If it becomes FAILED or SUSPENDED, clearly explain every returned error and the recommended correction, then pause automation monitor-twilio-sms-campaign; do not edit, delete, or resubmit the Twilio campaign without Arman's approval."
+status = "PAUSED"
+rrule = "RRULE:FREQ=DAILY;BYHOUR=9;BYMINUTE=0"
+model = "gpt-5.6-terra"
+reasoning_effort = "low"
+execution_environment = "local"
+cwds = ["__CODE_ROOT__/matrx-frontend"]

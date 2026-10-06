@@ -1,0 +1,6 @@
+version = 1
+kind = "heartbeat"
+name = "Mandate model lookup follow-up"
+prompt = "One-time follow-up in two hours: check whether the other agent properly resolved the repeated Overrides-tab modelRegistry/fetchModelById failure for research_client.output_slides. Deprecated Gemini 3.7 Flash exists in ai.model_definition but is excluded by ai.model_config. Inspect current work and verify localhost behavior and regression coverage. If fully repaired, report briefly. Otherwise coordinate around active work and complete the durable repair of the deprecated-model configuration contract, retry loop, and diagnostics. Preserve unrelated UI work. Do not run a release. Armani authorized this follow-up and repair. After this follow-up, pause this automation.\n\nAlways commit all of your own work and ensure you do not leave random files, worktrees, or other things around."
+status = "PAUSED"
+rrule = "FREQ=HOURLY;INTERVAL=2;COUNT=2"

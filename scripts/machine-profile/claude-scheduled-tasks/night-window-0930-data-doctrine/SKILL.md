@@ -1,0 +1,12 @@
+---
+name: night-window-0930-data-doctrine
+description: One-time quiet-window job for the Unified Data System program: finish the scopes store-first press for the organizations that deadlocked in daytime, then the two slow policy regenerations and the record-store read policy refresh.
+---
+
+You are lane NIGHT-WINDOW-0930 of the Unified Data System program. Work in __CODE_ROOT__. Read first: common-docs/projects/data-doctrine-adoption/v5/LANE-PREAMBLE.md, matrx-frontend/CLAUDE.md, PROGRESS-FINAL-SWITCH-2.md, and ~/.claude/projects/-Users-armanisadeghi-code/memory/project_data_doctrine_program.md (search "NIGHT-WINDOW", "FINAL-SWITCH-2", "NEW ROOT RULE").
+
+RULES: commit locally by pathspec, NEVER push, never git stash/branches/worktrees/reset. NEW ROOT RULE from Arman (2026-09-29): never test against the live database; anything that creates tables, changes permissions, or locks live is announced to Arman first and done with him watching. Therefore THIS RUN TOUCHES THE DEV CLONE ONLY (common-docs/operations/clone/CLONE-REF or CURRENT.md). No production changes of any kind. Never Arman's account or organization. NEVER press the final switch on production.
+
+JOB (clone only): the final switch rehearsal: on the dev clone run Step 1 (Copy again for every organization + context copy), then the platform press, then the undo, recording per-organization times, lock levels (nothing above row locks), refusals by name, and readiness before/after; both press and undo must complete; write the numbers into the page's rehearsal card the way rehearsal 13 was recorded and into PROGRESS-NIGHT-WINDOW-0930.md. Then, still on the clone, rehearse (rule 27 legs only, no production) the three files that WOULD run in a production window: the TABLE-API-1 personal-key row policy (matrx-frontend a84a88572c), the two slow-lane read-policy regenerations (workspace.threads, war_rooms), and the custom.record + 14 custom.* standard select regeneration via iam.apply_rls inside iam.take_sign_in_freeze; record how long each takes and what it locks, so Arman can watch the production run later with numbers in hand.
+
+FINISH: write common-docs/projects/data-doctrine-adoption/v5/PROGRESS-NIGHT-WINDOW-0930.md (rehearsal table, per-file clone timings/locks, "ready for a watched production window: yes/no") and append a dated bullet to the program memory file named above. Commit both by pathspec. Do not push.
