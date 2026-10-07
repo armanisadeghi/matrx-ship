@@ -241,20 +241,26 @@ def active_release_slot(info):
     if name in ("aidream", "matrx-local"):
         workflows = ("deploy.yml",) if name == "aidream" else ("off-host-release.yml", "release.yml")
         label = "AI Dream" if name == "aidream" else "Matrx Local"
+        active = ("queued", "pending", "waiting", "in_progress", "requested", "action_required")
         for workflow in workflows:
-            for status in ("queued", "pending", "waiting", "in_progress", "requested", "action_required"):
-                rc, out, err = run(["gh", "run", "list", "--workflow", workflow, "--status", status,
-                                    "--limit", "1000", "--json", "status"], repo, timeout=45)
-                if rc != 0:
-                    return "%s release status could not be verified: %s" % (label, err.strip()[:200])
-                try:
-                    runs = json.loads(out)
-                except ValueError:
-                    return "%s release status was not valid JSON" % label
-                if not isinstance(runs, list) or any(not isinstance(item, dict) for item in runs):
-                    return "%s release status had an unexpected shape" % label
-                if runs:
-                    return "%s has an active or queued release workflow" % label
+            # One call per workflow (not one per status): six calls per lane per round used to
+            # exhaust the GitHub API quota, and a rate-limit 403 then read as a busy slot.
+            for attempt in range(3):
+                rc, out, err = run(["gh", "run", "list", "--workflow", workflow, "--limit", "100",
+                                    "--json", "status"], repo, timeout=45)
+                if rc == 0 or "rate limit" not in err.lower() or attempt == 2:
+                    break
+                time.sleep(30)
+            if rc != 0:
+                return "%s release status could not be verified: %s" % (label, err.strip()[:200])
+            try:
+                runs = json.loads(out)
+            except ValueError:
+                return "%s release status was not valid JSON" % label
+            if not isinstance(runs, list) or any(not isinstance(item, dict) for item in runs):
+                return "%s release status had an unexpected shape" % label
+            if any(item.get("status") in active for item in runs):
+                return "%s has an active or queued release workflow" % label
     elif name == "matrx-frontend":
         for project in ("ai-matrx", "ai-matrx-manage", "ai-matrx-demos"):
             cursor, seen = None, set()
