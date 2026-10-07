@@ -1,0 +1,6 @@
+interface:
+  display_name: "Secret Location Audit"
+  short_description: "Inventory and rotate secrets across every environment"
+  default_prompt: "Use $secret-location-audit to map every local and hosted secret store before rotating a credential."
+policy:
+  allow_implicit_invocation: true

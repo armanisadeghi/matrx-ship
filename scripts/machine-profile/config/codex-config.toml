@@ -1,0 +1,122 @@
+model = "gpt-6-astra"
+model_reasoning_effort = "medium"
+approval_policy = "never"
+approvals_reviewer = "user"
+sandbox_mode = "danger-full-access"
+service_tier = "default"
+
+[marketplaces.ai-matrx]
+source_type = "git"
+source = "https://github.com/AI-Matrix-Engine/matrx-codex-plugin.git"
+ref = "main"
+
+
+[plugins."documents@openai-primary-runtime"]
+enabled = true
+
+
+[plugins."spreadsheets@openai-primary-runtime"]
+enabled = true
+
+
+[plugins."presentations@openai-primary-runtime"]
+enabled = true
+
+
+[plugins."github@openai-curated"]
+enabled = true
+
+
+[plugins."pdf@openai-primary-runtime"]
+enabled = true
+
+
+[plugins."template-creator@openai-primary-runtime"]
+enabled = true
+
+
+[plugins."chrome@openai-bundled"]
+enabled = true
+
+
+[plugins."visualize@openai-bundled"]
+enabled = true
+
+
+[plugins."browser@openai-bundled"]
+enabled = true
+
+
+[plugins."matrx-codex-plugin@ai-matrx"]
+enabled = true
+
+
+[plugins."computer-use@openai-bundled"]
+enabled = true
+
+
+[plugins."codex-app-tools@openai-bundled"]
+enabled = true
+
+
+[plugins."unified-computer-use@openai-bundled"]
+enabled = true
+
+
+[plugins."code-review@openai-bundled"]
+enabled = true
+
+
+[plugins."computer-history@openai-bundled"]
+enabled = true
+
+
+[projects."__CODE_ROOT__/aidream"]
+trust_level = "trusted"
+
+
+[projects."__CODE_ROOT__/matrx-mcp-template"]
+trust_level = "trusted"
+
+
+[projects."__CODE_ROOT__/matrx-frontend"]
+trust_level = "trusted"
+
+
+[projects."__CODE_ROOT__/matrx-sandbox"]
+trust_level = "trusted"
+
+
+[projects."__CODE_ROOT__"]
+trust_level = "trusted"
+
+
+[projects."__CODE_ROOT__/matrx-local"]
+trust_level = "trusted"
+
+
+[projects."__CODE_ROOT__/matrx-extend"]
+trust_level = "trusted"
+
+
+[projects."__CODE_ROOT__/matrx-codex-plugin"]
+trust_level = "trusted"
+
+
+[projects."__CODE_ROOT__/matrx-ship"]
+trust_level = "trusted"
+
+
+[projects."__CODE_ROOT__/common-docs"]
+trust_level = "trusted"
+
+
+[features]
+js_repl = false
+memories = true
+chronicle = true
+
+
+[agents]
+default_subagent_model = "gpt-5.6-terra"
+default_subagent_reasoning_effort = "medium"

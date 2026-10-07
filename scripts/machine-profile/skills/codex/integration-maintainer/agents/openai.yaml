@@ -1,0 +1,4 @@
+interface:
+  display_name: "Integration Maintainer"
+  short_description: "Continuously merge work and verify platform health"
+  default_prompt: "Use $integration-maintainer to sweep every in-scope repository, integrate compatible work into canonical main, and report only concrete blockers or health failures."

@@ -15,3 +15,11 @@ Codex automation, thread, and project identifiers are stripped because they are 
 The bootstrap checks for `gh`, `vercel`, `pnpm`, `uv`, `node`, `python3`, and `supabase`. Its report names missing tools and the human logins required. Credential values never belong here: use the approved vault or the repository-local gitignored environment file. Existing machine credential requirements and enrollment limits remain in [the parent feature](../FEATURE.md).
 
 Update a prompt, template, or instruction here first. The next `setup-machine.sh --check` shows which machine copies differ. This is intentionally a warning rather than a change made during `ship-all`: release runs must not rewrite a developer's active agent configuration.
+
+## Added 2026-10-06 (machine-parity request)
+
+- `skills/claude`, `skills/codex`: the skills not already in `common-docs/skills/` (matrx-sync, usage-guard, triage-tool-traces, grill-me, integration-maintainer, secret-location-audit), paths rendered at install.
+- `config/claude-settings.json`, `config/codex-config.toml`: permissions, hooks, plugins, trusted code roots, with every credential and host-bound entry removed. Installed only when absent.
+- [SCHEDULES.md](SCHEDULES.md): cadence and which machine runs each task. [CREDENTIALS.md](CREDENTIALS.md): credential names and where they live.
+- `setup-machine.sh` modes: `--check` (default, read-only), `--drift` (warn-only; `ship-all.sh` runs it on every round), `--install` (add what is absent, install missing CLIs with Homebrew/npm), `--sync` (also replace differing files after saving `<file>.pre-profile-<timestamp>`). Rerunning changes nothing once a machine matches.
+- Keeping machines identical: edit the committed copy here, push; each machine's next `ship-all` prints a drift warning and `--sync` brings it up. Chosen over auto-install because a release run must not rewrite a developer's active configuration.

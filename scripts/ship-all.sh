@@ -6,4 +6,7 @@
 #   scripts/ship-all.sh --only matrx-frontend,aidream
 SELF="${BASH_SOURCE[0]}"
 while [[ -L "$SELF" ]]; do SELF="$(cd "$(dirname "$SELF")" && cd "$(dirname "$(readlink "$SELF")")" && pwd)/$(basename "$(readlink "$SELF")")"; done
-exec python3 "$(cd "$(dirname "$SELF")" && pwd)/ship_all.py" "$@"
+HERE="$(cd "$(dirname "$SELF")" && pwd)"
+# Warn (never change anything) when this machine's agent files differ from the committed profile.
+[[ -x "$HERE/machine-profile/setup-machine.sh" ]] && bash "$HERE/machine-profile/setup-machine.sh" --drift >&2 || true
+exec python3 "$HERE/ship_all.py" "$@"

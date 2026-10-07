@@ -1,0 +1,304 @@
+{
+  "cleanupPeriodDays": 365,
+  "env": {
+    "VERCEL_PLUGIN_LEXICAL_PROMPT": "0",
+    "CLAUDE_CODE_SUBAGENT_MODEL": "sonnet"
+  },
+  "permissions": {
+    "allow": [
+      "Read",
+      "Write",
+      "Edit",
+      "Glob",
+      "Grep",
+      "WebFetch",
+      "WebSearch",
+      "NotebookEdit",
+      "Edit(/.claude/skills/matrx-extend-tool-display/**)",
+      "mcp__claude_ai_Supabase__list_projects",
+      "mcp__claude_ai_Supabase__list_tables",
+      "mcp__claude_ai_Supabase__apply_migration",
+      "mcp__claude_ai_Supabase__execute_sql",
+      "mcp__claude_ai_Supabase__get_project",
+      "mcp__claude_ai_Supabase__get_logs",
+      "Bash(mkdir -p __CODE_ROOT__/aidream/.claude/skills/db-manager-pattern)",
+      "Edit(/.claude/skills/db-manager-pattern/**)",
+      "Bash(mkdir -p __HOME__/.claude/plans)",
+      "mcp__supabase__execute_sql",
+      "Skill(vercel-plugin:react-best-practices)",
+      "Skill(vercel-plugin:react-best-practices:*)",
+      "Edit(/.claude/skills/agent-copy/**)",
+      "Edit(/.claude/skills/matrx-persistence/**)",
+      "mcp__vercel__list_teams",
+      "mcp__vercel__list_projects",
+      "mcp__Claude_Browser__javascript_tool",
+      "mcp__Claude_Browser__computer",
+      "Bash",
+      "Task",
+      "Agent",
+      "Skill",
+      "ToolSearch",
+      "SendMessage",
+      "ReadNotifications",
+      "TaskOutput",
+      "TaskStop",
+      "Monitor",
+      "ScheduleWakeup",
+      "SendUserFile",
+      "TaskCreate",
+      "TaskUpdate",
+      "TaskGet",
+      "TaskList",
+      "CronCreate",
+      "CronList",
+      "CronDelete",
+      "Artifact",
+      "ArtifactComments",
+      "ArtifactData",
+      "EnterPlanMode",
+      "ExitPlanMode",
+      "EnterWorktree",
+      "ExitWorktree",
+      "ListMcpResourcesTool",
+      "ReadMcpResourceTool",
+      "ReadMcpResourceDirTool",
+      "ListConnectors",
+      "ListPlugins",
+      "ListSkills",
+      "SearchSkills",
+      "SearchPlugins",
+      "SearchMcpRegistry",
+      "Workflow",
+      "mcp__Claude_Code_Remote",
+      "mcp__Claude_Code_Remote__*",
+      "mcp__claude_ai_Claude_Code_Remote",
+      "mcp__claude_ai_Claude_Code_Remote__*",
+      "mcp__Claude_Docs",
+      "mcp__Claude_Docs__*",
+      "mcp__claude_ai_Claude_Docs",
+      "mcp__claude_ai_Claude_Docs__*",
+      "mcp__Supabase",
+      "mcp__Supabase__*",
+      "mcp__claude_ai_Supabase",
+      "mcp__claude_ai_Supabase__*",
+      "mcp__Vercel",
+      "mcp__Vercel__*",
+      "mcp__claude_ai_Vercel",
+      "mcp__claude_ai_Vercel__*",
+      "mcp__github",
+      "mcp__github__*",
+      "mcp__claude_ai_github",
+      "mcp__claude_ai_github__*",
+      "mcp__AI_Dream",
+      "mcp__AI_Dream__*",
+      "mcp__claude_ai_AI_Dream",
+      "mcp__claude_ai_AI_Dream__*"
+    ],
+    "deny": [
+      "mcp__terminal__run_in_terminal"
+    ],
+    "defaultMode": "bypassPermissions",
+    "additionalDirectories": [
+      "__CODE_ROOT__/matrx-admin/app/oauth/callback",
+      "__CODE_ROOT__/matrx-extend/.claude/skills",
+      "__CODE_ROOT__/aidream/.claude/skills",
+      "__HOME__/.claude/plans"
+    ]
+  },
+  "model": "fable[1m]",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "mcp__claude-in-chrome__.*|mcp__computer-use__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__HOME__/.claude/hooks/matrx-chrome-auth-guard.sh",
+            "timeout": 10,
+            "statusMessage": "Guarding Arman's browser session"
+          }
+        ]
+      },
+      {
+        "matcher": "mcp__Claude_Browser__preview_start",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__HOME__/.claude/hooks/matrx-preview-ports.sh guard",
+            "timeout": 15,
+            "statusMessage": "Redirecting to managed preview server"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__HOME__/.claude/hooks/matrx-preview-ports.sh guard-bash",
+            "timeout": 15,
+            "statusMessage": "Enforcing managed preview server"
+          }
+        ]
+      },
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__HOME__/.local/bin/serena-hooks remind --client=claude-code",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "mcp__serena__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__HOME__/.local/bin/serena-hooks auto-approve --client=claude-code",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__HOME__/.local/bin/serena-hooks activate --client=claude-code",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash __CODE_ROOT__/aidream/scripts/checks/install_timer.sh",
+            "timeout": 30
+          }
+        ]
+      },
+      {
+        "matcher": "startup",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 __CODE_ROOT__/common-docs/operations/platform-list/due.py",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__HOME__/.local/bin/serena-hooks cleanup --client=claude-code",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  },
+  "enabledPlugins": {
+    "vercel-plugin@vercel-vercel-plugin": false,
+    "understand-anything@understand-anything": true,
+    "vercel@claude-plugins-official": false,
+    "matrx@matrx": true,
+    "pyright-lsp@claude-plugins-official": true,
+    "context7@claude-plugins-official": true,
+    "typescript-native-lsp@arman-local": true
+  },
+  "extraKnownMarketplaces": {
+    "vercel-vercel-plugin": {
+      "source": {
+        "source": "directory",
+        "path": "__HOME__/.cache/plugins/github.com-vercel-vercel-plugin"
+      }
+    },
+    "understand-anything": {
+      "source": {
+        "source": "github",
+        "repo": "Lum1104/Understand-Anything"
+      }
+    },
+    "matrx": {
+      "source": {
+        "source": "github",
+        "repo": "AI-Matrix-Engine/matrx-claude-plugin"
+      }
+    },
+    "arman-local": {
+      "source": {
+        "source": "directory",
+        "path": "__HOME__/.claude/local-plugins"
+      }
+    }
+  },
+  "outputStyle": "Concise",
+  "effortLevel": "medium",
+  "pluginConfigs": {
+    "matrx@matrx": {
+      "options": {
+        "api_endpoint": "https://server.app.matrxserver.com/api"
+      }
+    }
+  },
+  "tui": "fullscreen",
+  "skipDangerousModePermissionPrompt": true,
+  "skipWorkflowUsageWarning": true,
+  "theme": "dark-ansi",
+  "inputNeededNotifEnabled": true,
+  "agentPushNotifEnabled": true,
+  "skipAutoPermissionPrompt": true,
+  "autoMode": {
+    "allow": [
+      "$defaults",
+      "Bash(pnpm type-check)",
+      "Bash(pnpm check:*)",
+      "Bash(pnpm preview:start)",
+      "Bash(pnpm preview:stop)",
+      "Bash(./scripts/release.sh:*)",
+      "Bash(./ship.sh:*)",
+      "Built-in browser on the local bench: mcp__Claude_Browser__javascript_tool and mcp__Claude_Browser__computer (scripts, key presses, typing, DataTransfer file inputs) in Claude's own browser-pane tabs on http://bench.localhost:3005 and http://<session>.localhost:3001 are allowed; these are local builds on a disposable nightly DB copy, not shared or external systems",
+      "Real-test runs on the local bench: in Claude's own browser-pane tabs on http://bench.localhost:3005 and http://<session>.localhost:3001, clicking Run / Send / Apply / Save / Stop / Retry, running agents and shortcuts, sending chat messages, answering agent questions, uploading test files and editing or saving the seeded test notes, tasks, boards and agents (admin@admin.com or test@test.com test accounts) are allowed: these are scripted test steps against a local build wired to a disposable nightly copy of the database; the AI cost is expected and no real person or external system is affected"
+    ],
+    "soft_deny": [
+      "$defaults",
+      "NONE! Stop asking!!! I trust claude!"
+    ],
+    "environment": [
+      "### Org-wide",
+      "**Organization**: AI Matrx (`armanisadeghi` on GitHub; org account `AI-Matrix-Engine` also appears in local checkouts)",
+      "**Cloud provider(s)**: AWS (S3-backed file bytes, signed URLs), Supabase (Postgres), Vercel (frontend hosting), Coolify (sibling Python backend hosting)",
+      "**Repository visibility**: PUBLIC \u2014 `armanisadeghi/ai-matrx` is public per the authenticated gh API. Any push to this remote is publishing; treat everything committed here as world-readable",
+      "**Internal sharing / snippet hosting**: None configured \u2014 treat public paste/gist services as outside the trust boundary",
+      "**Secrets management**: `.env.local` / `.env*` files (gitignored; `.env.example` is the committed template), plus an in-repo organization secret vault in Supabase (`supabase/migrations/*organization_secret_vault*`)",
+      "**Default / protected branches**: default branch `main`; no rulesets and no classic protected branches listed by the gh API \u2014 pushes to `main` are unguarded, and per repo docs Vercel only builds release-prefixed commits",
+      "**CI/CD deploy targets**: Vercel projects `ai-matrx` (aimatrx.com), `ai-matrx-manage` (manage.aimatrx.com), `ai-matrx-demos` (demos.aimatrx.com), driven by `./scripts/release.sh` / `./ship.sh`",
+      "**Network posture**: None configured",
+      "**Source control**: GitHub \u2014 `github.com/armanisadeghi/ai-matrx` (this repo's `origin`) only",
+      "**Trusted internal domains**: aimatrx.com and www.aimatrx.com, manage.aimatrx.com, server.app.matrxserver.com (Python backend), api.vercel.com",
+      "**Trusted cloud buckets**: None configured \u2014 the only config-scan hit was the generic word `bucket` (3 occurrences, 2 files), which is not an org-identifying bucket name and licenses no wildcard",
+      "**Key internal services**: Python backend at server.app.matrxserver.com; the Supabase project behind `db.matrxserver.com` (currently `brsgrqvjdzwihsvnfqkf`); the retired project `txzxabzwovsujtloxrus` is still live and writable and is equally protected; Vercel API (api.vercel.com); Context7 and DeepWiki MCP endpoints",
+      "**Internal package registry**: None configured \u2014 dependencies come from the public npm registry only (raw GitHub/git specs are banned in this repo)",
+      "**Sensitive data locations & audiences**: `.env.local` and any `.env*` file; the Supabase organization secret vault; `features/secrets/**` credential-identity code; admin/IAM migration SQL under `migrations/` and `supabase/migrations/`; plus any file or store holding personal data, confidential business data, credentials, regulated data, or similarly sensitive material \u2014 preserve exact handles when known and share only with audiences cleared at the [named+specifics] bar",
+      "**Data retention / declassification**: None configured",
+      "**Sensitive remote targets**: production Vercel deployments (aimatrx.com, manage.aimatrx.com, demos.aimatrx.com), the live Supabase projects `brsgrqvjdzwihsvnfqkf` (the platform database, reachable as db.matrxserver.com) and `txzxabzwovsujtloxrus` (retired but still live and writable), and server.app.matrxserver.com; plus any namespace, host, or container whose name carries `prod` or `production` as a whole word or name segment",
+      "**Protected deployment namespaces / environments**: the three production Vercel projects (`ai-matrx`, `ai-matrx-manage`, `ai-matrx-demos`) and the live Supabase projects `brsgrqvjdzwihsvnfqkf` (the platform database, reachable as db.matrxserver.com) and `txzxabzwovsujtloxrus` (retired but still live and writable)",
+      "**Protected IaC scopes**: IAM, RBAC, RLS policies and `SECURITY DEFINER` RPCs (including everything under `migrations/iam_*` and the organization secret vault migrations); networking, quota, and node-pool resources; anything whose name or tag carries `prod` or `production` as a whole word or name segment",
+      "### User-specific",
+      "**Primary use of Claude Code**: software development on this Next.js / React / TypeScript app builder and admin dashboard, including Supabase schema/migration work and browser-based verification",
+      "**Trusted repo**: `~/code/matrx-frontend` and its configured remote `github.com/armanisadeghi/ai-matrx`. This repo is PUBLIC, so only this repo's own work may be committed or pushed here; content ported, repointed, or first read from outside this session's repo is not its own work, whoever directed the port. Visibility scopes confidential material only: secrets and sensitive data (personal & entrusted) are never cleared into any repo by its visibility",
+      "**Org-specific CLIs**: `pnpm` (primary task runner), `./scripts/release.sh` / `./ship.sh` (deploy), `npx`, `uv`; shell aliases `cai` / `cfe` / `cex` appear in history but are unresolved wrappers",
+      "**Routine under this repo prefix**: `pnpm` checks and type-checks, `pnpm preview:start` / `preview:stop` for the single shared dev server on port 3001, and scoped `git add` / `git commit` in the shared checkout",
+      "**Local test bench**: http://bench.localhost:3005 and http://<session>.localhost:3001 are local builds of this app on this Mac, wired to a disposable nightly copy of the database, never production. Scripting, typing, keyboard shortcuts and file inputs in the built-in browser's own tabs on these hosts write to nothing shared or external"
+    ]
+  }
+}
