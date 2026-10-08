@@ -35,6 +35,7 @@ Local branches and worktrees are reported, never touched.
 import datetime
 import fcntl
 import json
+import re
 import os
 import subprocess
 import sys
@@ -301,6 +302,60 @@ def active_release_slot(info):
     return None
 
 
+# ── Is the last release LIVE? (a push is not a release; Arman 2026-10-07: seven ai-matrx
+# releases in a row ERRORed on Vercel for 3h while every round reported "shipped") ──────
+LIVE_CHECK_SH = r'''
+set -u
+source scripts/release-outcome.sh >/dev/null 2>&1 || exit 0
+sha="$1"; msg="$2"
+case "$msg" in release-all:*) t=all;; release-admin:*) t=admin;; release-demos:*) t=demos;; release-lab:*) t=lab;; *) t=main;; esac
+for bt in $(release_outcome_targets "$t"); do
+  release_outcome_would_build "$msg" "$bt" || continue
+  pid=$(release_outcome_project_id "$bt"); IFS=$'\t' read -r st uid url < <(release_outcome_fetch "$pid" "$sha")
+  served=""; [ "$st" = READY ] && served=$(release_outcome_serving "$(release_outcome_domain "$bt")" | head -1)
+  printf '%s\t%s\t%s\t%s\t%s\n' "$(release_outcome_project_name "$bt")" "$st" "$uid" "$url" "$served"
+done
+'''
+
+
+def release_liveness(info):
+    """For repos that deploy through Vercel (scripts/release-outcome.sh): the state of the
+    newest release commits on origin/main. Returns problem lines; [] when the newest release
+    is live, or still building within 40 minutes of its push with nothing failed before it."""
+    repo = info["path"]
+    if not os.path.isfile(os.path.join(repo, "scripts", "release-outcome.sh")):
+        return []
+    rc, out, _err = git(repo, "log", "origin/main", "-200", "--format=%H%x09%ct%x09%s")
+    rels = [l.split("\t", 2) for l in lines(out) if re.match(r"^release(-[a-z]+)?: ", l.split("\t", 2)[-1])][:3]
+    if not rels:
+        return []
+    states = []
+    for sha, ct, subj in rels:
+        p = subprocess.run(["bash", "-c", LIVE_CHECK_SH, "x", sha, subj], cwd=repo, capture_output=True, text=True, timeout=180)
+        rows = [r.split("\t") for r in lines(p.stdout)]
+        states.append((sha, int(ct), subj.split(" - ")[0], rows))
+    def live(rows):
+        return rows and all(r[1] == "READY" and (r[4] == "" or r[4] == r[2]) for r in rows)
+    def failed(rows):
+        return any(r[1] in ("ERROR", "CANCELED") for r in rows)
+    sha, ct, name, rows = states[0]
+    age_min = (time.time() - ct) / 60
+    if live(rows):
+        return []
+    if any(r[1] in ("NO_TOKEN", "UNREACHABLE") for r in rows):
+        return ["%s: LAST RELEASE UNVERIFIED — no Vercel answer (%s)" % (name, ", ".join("%s %s" % (r[0], r[1]) for r in rows))]
+    prior_failed = [s for s in states[1:] if failed(s[3])]
+    if not failed(rows) and age_min < 40 and not prior_failed:
+        return []
+    out = []
+    for s_sha, s_ct, s_name, s_rows in states:
+        bad = ["%s %s %s" % (r[0], r[1] if not (r[1] == "READY" and r[4] and r[4] != r[2]) else "READY-NOT-SERVING", r[3]) for r in s_rows
+               if not (r[1] == "READY" and (r[4] == "" or r[4] == r[2]))]
+        if bad:
+            out.append("%s (%s, %d min ago) NOT LIVE: %s" % (s_name, s_sha[:10], (time.time() - s_ct) / 60, "; ".join(bad)))
+    return out
+
+
 def open_items(repo):
     checker = os.path.join(repo, "scripts", "check-conflict-markers.py")
     if not os.path.isfile(checker):
@@ -486,6 +541,11 @@ def main(args=None):
         with ThreadPoolExecutor(max_workers=8) as pool:
             list(pool.map(after, infos))
         say("■ landed in %s" % fmt(time.time() - t0))
+    for info in infos:
+        try:
+            info["not_live"] = release_liveness(info) if info["fetch_ok"] else []
+        except Exception as error:  # never let the check vanish silently
+            info["not_live"] = ["release liveness check crashed: %s" % error]
 
     # ── 3. only now: what is open, and who edited each held file (one pass) ──────────────
     for info in infos:
@@ -536,7 +596,13 @@ def main(args=None):
     problems = [r for r in infos if r["status"] in ("shipped with problems", "could not reach GitHub", "NOT PULLED", "RELEASE SLOT BUSY")]
     stale_after = [r for r in infos if r.get("stale_packages_after")]
     landing = [r for r in infos if r.get("needs_landing")]
+    not_live = [r for r in infos if r.get("not_live")]
     say("")
+    if not_live:
+        say("RELEASES NOT LIVE — TOP PRIORITY: read the Vercel build log, fix the cause, ./ship.sh until READY and serving")
+        for r in not_live:
+            for line in r["not_live"]:
+                say("  %s: %s" % (r["repo"], line))
     for r in infos:
         for line in r.get("landed", []):
             say("  LANDED  %s: %s" % (r["repo"], line))
@@ -563,7 +629,7 @@ def main(args=None):
         for r in problems:
             say("  %s: %s  %s" % (r["repo"], r["status"], r.get("release_slot_blocker", r.get("log", r.get("fetch_error", "")))))
     say("done in %s. summary: %s" % (fmt(time.time() - t_all), os.path.join(out_dir, "summary.json")))
-    return 1 if (open_repos or problems or landing or stale_after) else 0
+    return 1 if (open_repos or problems or landing or stale_after or not_live) else 0
 
 
 if __name__ == "__main__":
