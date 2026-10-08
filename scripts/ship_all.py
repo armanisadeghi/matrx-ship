@@ -356,6 +356,33 @@ def release_liveness(info):
     return out
 
 
+RELEASE_WORKFLOW = re.compile(r"release|publish|deploy|nominate", re.I)
+
+
+def failed_release_workflows(info):
+    """Every release/publish/deploy GitHub workflow whose NEWEST finished run failed (a later
+    success clears it; cancelled/skipped runs are superseded, not verdicts)."""
+    repo = info["path"]
+    if not os.path.isdir(os.path.join(repo, ".github", "workflows")):
+        return []
+    rc, out, err = run(["gh", "run", "list", "--limit", "40", "--json",
+                        "databaseId,workflowName,conclusion,status,url,createdAt,displayTitle"], repo, 60)
+    if rc != 0:
+        return ["release workflows UNVERIFIED — gh could not answer: %s" % (err.strip().splitlines() or ["?"])[-1][:160]]
+    seen, bad = set(), []
+    for r in json.loads(out or "[]"):
+        name = r.get("workflowName") or ""
+        if not RELEASE_WORKFLOW.search(name) or name in seen or r.get("status") != "completed":
+            continue
+        if r.get("conclusion") in ("cancelled", "skipped", "neutral"):
+            continue
+        seen.add(name)
+        if r.get("conclusion") != "success":
+            bad.append("workflow '%s' %s (%s) %s — gh run view %s --log-failed" % (
+                name, r.get("conclusion"), r.get("createdAt", "")[:16], r.get("url", ""), r.get("databaseId")))
+    return bad
+
+
 def open_items(repo):
     checker = os.path.join(repo, "scripts", "check-conflict-markers.py")
     if not os.path.isfile(checker):
@@ -543,7 +570,7 @@ def main(args=None):
         say("■ landed in %s" % fmt(time.time() - t0))
     for info in infos:
         try:
-            info["not_live"] = release_liveness(info) if info["fetch_ok"] else []
+            info["not_live"] = (release_liveness(info) + failed_release_workflows(info)) if info["fetch_ok"] else []
         except Exception as error:  # never let the check vanish silently
             info["not_live"] = ["release liveness check crashed: %s" % error]
 
@@ -599,7 +626,7 @@ def main(args=None):
     not_live = [r for r in infos if r.get("not_live")]
     say("")
     if not_live:
-        say("RELEASES NOT LIVE — TOP PRIORITY: read the Vercel build log, fix the cause, ./ship.sh until READY and serving")
+        say("RELEASES NOT LIVE — EVERYTHING ELSE STOPS: read the failing build log, fix the cause, ship, watch the new build until it is live")
         for r in not_live:
             for line in r["not_live"]:
                 say("  %s: %s" % (r["repo"], line))
