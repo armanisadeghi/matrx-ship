@@ -13,7 +13,7 @@ importers:
     dependencies:
       '@ai-matrx/kit':
         specifier: latest
-        version: 0.36.0(react@19.3.0)
+        version: 0.36.1(react@19.3.0)
       '@codemirror/lang-sql':
         specifier: ^6.10.0
         version: 6.10.0
@@ -122,7 +122,7 @@ importers:
     dependencies:
       '@ai-matrx/kit':
         specifier: latest
-        version: 0.36.0(react@19.3.0)
+        version: 0.36.1(react@19.3.0)
       '@matrx/admin-ui':
         specifier: workspace:*
         version: link:../packages/admin-ui
@@ -280,7 +280,7 @@ importers:
     dependencies:
       '@ai-matrx/kit':
         specifier: latest
-        version: 0.36.0(react@19.3.0)
+        version: 0.36.1(react@19.3.0)
       '@aws-sdk/client-cloudtrail':
         specifier: ^3.1141.0
         version: 3.1141.0
@@ -323,7 +323,7 @@ importers:
     dependencies:
       '@ai-matrx/kit':
         specifier: latest
-        version: 0.36.0(react@19.3.0)
+        version: 0.36.1(react@19.3.0)
       '@matrx/admin-ui':
         specifier: workspace:*
         version: link:../../packages/admin-ui
@@ -406,11 +406,14 @@ importers:
 
 packages:
 
-  '@ai-matrx/kit@0.36.0':
-    resolution: {integrity: sha512-6JAioWO2C0RdcGjWQg/w2iBpYDZ7z03V5mauD3bQeyT+hwAgxBFYn67DAR4/LPUbgonvfMRQCaUAZ1v8feJk3w==}
+  '@ai-matrx/kit@0.36.1':
+    resolution: {integrity: sha512-qjj0DiWcd2jPZp/EBgWzM8Q3Zrwb4nEnsebt0gYomHBl92tsjyhP60yJmWHkuXOYcTAfjdwn2z9dG80H20A5RQ==}
     engines: {node: '>=20'}
     peerDependencies:
       react: '>=18.0.0'
+    peerDependenciesMeta:
+      react:
+        optional: true
 
   '@alloc/quick-lru@5.3.0':
     resolution: {integrity: sha512-U4+70Pc5ZS9osnCBCE5Jha/ciHM+Yp+CNMNC/7HvYbNRk1Ldd+f7qO65W5qfhu/TCv+/ozljlXXe9Nj8419DMA==}
@@ -5508,12 +5511,13 @@ packages:
 
 snapshots:
 
-  '@ai-matrx/kit@0.36.0(react@19.3.0)':
+  '@ai-matrx/kit@0.36.1(react@19.3.0)':
     dependencies:
       idb: 8.0.4
       json5: 2.2.3
       jsonrepair: 3.15.0
       jsqr: 1.4.0
+    optionalDependencies:
       react: 19.3.0
 
   '@alloc/quick-lru@5.3.0': {}
