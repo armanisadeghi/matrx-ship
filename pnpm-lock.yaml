@@ -13,7 +13,7 @@ importers:
     dependencies:
       '@ai-matrx/kit':
         specifier: latest
-        version: 0.35.1(react@19.3.0)
+        version: 0.35.2(react@19.3.0)
       '@codemirror/lang-sql':
         specifier: ^6.10.0
         version: 6.10.0
@@ -122,7 +122,7 @@ importers:
     dependencies:
       '@ai-matrx/kit':
         specifier: latest
-        version: 0.35.1(react@19.3.0)
+        version: 0.35.2(react@19.3.0)
       '@matrx/admin-ui':
         specifier: workspace:*
         version: link:../packages/admin-ui
@@ -280,7 +280,7 @@ importers:
     dependencies:
       '@ai-matrx/kit':
         specifier: latest
-        version: 0.35.1(react@19.3.0)
+        version: 0.35.2(react@19.3.0)
       '@aws-sdk/client-cloudtrail':
         specifier: ^3.1141.0
         version: 3.1141.0
@@ -323,7 +323,7 @@ importers:
     dependencies:
       '@ai-matrx/kit':
         specifier: latest
-        version: 0.35.1(react@19.3.0)
+        version: 0.35.2(react@19.3.0)
       '@matrx/admin-ui':
         specifier: workspace:*
         version: link:../../packages/admin-ui
@@ -410,8 +410,8 @@ packages:
     resolution: {integrity: sha512-qjVm7g7QVLx8KzmulkxYRG1Ew9bcArKhc630CQB1jnGnBVTOYM1tvPDhpvl3yP3syk95grMD9gYVsshthXkeHA==}
     engines: {node: '>=20'}
 
-  '@ai-matrx/kit@0.35.1':
-    resolution: {integrity: sha512-5KwHWwrfZCJt+zA7ohJRDZptQ83jaN+FNKwzdwB8nJazn75VABAe9JFqpvlUd+LISZhXmLDuEA1k/c4cEZXrnw==}
+  '@ai-matrx/kit@0.35.2':
+    resolution: {integrity: sha512-5/s8tw6Or2FsHVu8XG4Bu5zFGjRJzCI3LdBp5u/YMS13Qwow/ZIRwHQzpeNL46yWoGkaBol1GpMhb2KTW5g/pA==}
     engines: {node: '>=20'}
     peerDependencies:
       react: '>=18.0.0'
@@ -3997,6 +3997,10 @@ packages:
   jsonfile@6.2.1:
     resolution: {integrity: sha512-zwOTdL3rFQ/lRdBnntKVOX6k5cKJwEc1HdilT71BWEu7J41gXIB2MRp+vxduPSwZJPWBxEzv4yH1wYLJGUHX4Q==}
 
+  jsonrepair@3.15.0:
+    resolution: {integrity: sha512-wy8OTjwsJwQRnQJkKnMJJ9vcytRdBPAgIF/Hy6+s1dAj42BHMKiyL8JzEieIl3JY7idt8eyHwBWTO8mh/+mtwA==}
+    hasBin: true
+
   jsqr@1.4.0:
     resolution: {integrity: sha512-dxLob7q65Xg2DvstYkRpkYtmKm2sPJ9oFhrhmudT1dZvNFFTlroai3AWSpLey/w5vMcLBXRgOJsbXpdN9HzU/A==}
 
@@ -5513,11 +5517,12 @@ snapshots:
       '@types/react': 19.3.0
       ajv: 8.20.0
 
-  '@ai-matrx/kit@0.35.1(react@19.3.0)':
+  '@ai-matrx/kit@0.35.2(react@19.3.0)':
     dependencies:
       '@ai-matrx/content-ir': 0.22.7
       idb: 8.0.4
       json5: 2.2.3
+      jsonrepair: 3.15.0
       jsqr: 1.4.0
       react: 19.3.0
 
@@ -9260,6 +9265,8 @@ snapshots:
       universalify: 2.0.1
     optionalDependencies:
       graceful-fs: 4.2.11
+
+  jsonrepair@3.15.0: {}
 
   jsqr@1.4.0: {}
 
