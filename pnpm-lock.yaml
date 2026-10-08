@@ -13,7 +13,7 @@ importers:
     dependencies:
       '@ai-matrx/kit':
         specifier: latest
-        version: 0.35.2(react@19.3.0)
+        version: 0.36.0(react@19.3.0)
       '@codemirror/lang-sql':
         specifier: ^6.10.0
         version: 6.10.0
@@ -122,7 +122,7 @@ importers:
     dependencies:
       '@ai-matrx/kit':
         specifier: latest
-        version: 0.35.2(react@19.3.0)
+        version: 0.36.0(react@19.3.0)
       '@matrx/admin-ui':
         specifier: workspace:*
         version: link:../packages/admin-ui
@@ -280,7 +280,7 @@ importers:
     dependencies:
       '@ai-matrx/kit':
         specifier: latest
-        version: 0.35.2(react@19.3.0)
+        version: 0.36.0(react@19.3.0)
       '@aws-sdk/client-cloudtrail':
         specifier: ^3.1141.0
         version: 3.1141.0
@@ -323,7 +323,7 @@ importers:
     dependencies:
       '@ai-matrx/kit':
         specifier: latest
-        version: 0.35.2(react@19.3.0)
+        version: 0.36.0(react@19.3.0)
       '@matrx/admin-ui':
         specifier: workspace:*
         version: link:../../packages/admin-ui
@@ -406,12 +406,8 @@ importers:
 
 packages:
 
-  '@ai-matrx/content-ir@0.22.7':
-    resolution: {integrity: sha512-qjVm7g7QVLx8KzmulkxYRG1Ew9bcArKhc630CQB1jnGnBVTOYM1tvPDhpvl3yP3syk95grMD9gYVsshthXkeHA==}
-    engines: {node: '>=20'}
-
-  '@ai-matrx/kit@0.35.2':
-    resolution: {integrity: sha512-5/s8tw6Or2FsHVu8XG4Bu5zFGjRJzCI3LdBp5u/YMS13Qwow/ZIRwHQzpeNL46yWoGkaBol1GpMhb2KTW5g/pA==}
+  '@ai-matrx/kit@0.36.0':
+    resolution: {integrity: sha512-6JAioWO2C0RdcGjWQg/w2iBpYDZ7z03V5mauD3bQeyT+hwAgxBFYn67DAR4/LPUbgonvfMRQCaUAZ1v8feJk3w==}
     engines: {node: '>=20'}
     peerDependencies:
       react: '>=18.0.0'
@@ -5512,14 +5508,8 @@ packages:
 
 snapshots:
 
-  '@ai-matrx/content-ir@0.22.7':
+  '@ai-matrx/kit@0.36.0(react@19.3.0)':
     dependencies:
-      '@types/react': 19.3.0
-      ajv: 8.20.0
-
-  '@ai-matrx/kit@0.35.2(react@19.3.0)':
-    dependencies:
-      '@ai-matrx/content-ir': 0.22.7
       idb: 8.0.4
       json5: 2.2.3
       jsonrepair: 3.15.0
