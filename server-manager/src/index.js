@@ -3807,6 +3807,7 @@ const MICROSERVICES = {
     publicBase: "https://files.matrxserver.com",
     healthPath: "/files-service/health",
     readyPath: "/files-service/ready",
+    preflightModule: "matrx_files.standalone.preflight",
     optDir: "/opt/matrx-files",
     envFile: "/etc/matrx-files.env",
     pypiPackage: "matrx-files",
@@ -3848,6 +3849,14 @@ function msDockerRunImage(svc, image) {
   return `sudo docker run -d --name ${svc.container} --restart unless-stopped -p 127.0.0.1:${svc.port}:${svc.port} ${extra}--env-file ${svc.envFile} ${image} >/dev/null`;
 }
 function msDockerRun(svc, tag) { return msDockerRunImage(svc, `${svc.container}:${tag}`); }
+// The installed image owns policy validation. A missing old helper refuses
+// upgrade/restart/rollback before the running container is removed.
+function msPreflightImage(svc, image) {
+  if (!svc.preflightModule) return ":";
+  const extra = svc.dockerRunExtraArgs ? `${svc.dockerRunExtraArgs} ` : "";
+  return `sudo docker run --rm ${extra}--env-file ${svc.envFile} --entrypoint python ${image} -m ${svc.preflightModule}`;
+}
+
 function msLocalHealthUrl(svc) { return `http://127.0.0.1:${svc.port}${svc.healthPath}`; }
 
 // Re-runs the container at its current version (env is read at RUN time only —
@@ -3855,7 +3864,7 @@ function msLocalHealthUrl(svc) { return `http://127.0.0.1:${svc.port}${svc.healt
 // from docker inspect, never CURRENT; a missing container fails before anything
 // is removed. Used by the Secrets store.
 function msRestartCommand(svc) {
-  return `IMAGE=$(sudo docker inspect ${svc.container} --format '{{.Config.Image}}' 2>/dev/null); [ -n "$IMAGE" ] || { echo 'APPLY_UNAVAILABLE: live container image not found'; exit 3; }; sudo docker image inspect "$IMAGE" >/dev/null 2>&1 || { echo "APPLY_UNAVAILABLE: image $IMAGE is not present"; exit 3; }; sudo docker rm -f ${svc.container} >/dev/null; ${msDockerRunImage(svc, '"$IMAGE"')} || exit 1; code=000; for i in $(seq 1 20); do sleep 3; code=$(curl -s -o /dev/null -w '%{http_code}' -m 4 ${msLocalHealthUrl(svc)} || true); [ "$code" = 200 ] && break; done; [ "$code" = 200 ] || { echo "APPLY_FAILED health:$code image:$IMAGE"; exit 1; }; echo "APPLY_OK health:$code image:$IMAGE"`;
+  return `IMAGE=$(sudo docker inspect ${svc.container} --format '{{.Config.Image}}' 2>/dev/null); [ -n "$IMAGE" ] || { echo 'APPLY_UNAVAILABLE: live container image not found'; exit 3; }; sudo docker image inspect "$IMAGE" >/dev/null 2>&1 || { echo "APPLY_UNAVAILABLE: image $IMAGE is not present"; exit 3; }; ${msPreflightImage(svc, '"$IMAGE"')} || { echo 'APPLY_BLOCKED: installed policy preflight failed'; exit 3; }; sudo docker rm -f ${svc.container} >/dev/null; ${msDockerRunImage(svc, '"$IMAGE"')} || exit 1; code=000; for i in $(seq 1 20); do sleep 3; code=$(curl -s -o /dev/null -w '%{http_code}' -m 4 ${msLocalHealthUrl(svc)} || true); [ "$code" = 200 ] && break; done; [ "$code" = 200 ] || { echo "APPLY_FAILED health:$code image:$IMAGE"; exit 1; }; echo "APPLY_OK health:$code image:$IMAGE"`;
 }
 
 // null (not an error) when the package has never been published — that is how
@@ -3970,10 +3979,11 @@ function msUpgradeScript(svc, version, dockerfileB64) {
     `[ "$GOT" = "${version}" ] || { echo "VERIFY_FAILED image contains $GOT"; exit 1; }`,
     `PREV_IMAGE=$(sudo docker inspect ${c} --format '{{.Config.Image}}' 2>/dev/null)`,
     `[ -n "$PREV_IMAGE" ] || { echo "VERIFY_FAILED live image not found"; exit 1; }`,
+    `${msPreflightImage(svc, `${c}:${version}`)} || { echo "UPGRADE_BLOCKED installed policy preflight failed"; exit 1; }`,
     `sudo docker rm -f ${c} >/dev/null 2>&1 || true`,
     msDockerRun(svc, version),
     `ok=""; for i in $(seq 1 20); do sleep 3; code=$(curl -s -o /dev/null -w '%{http_code}' -m 4 ${msLocalHealthUrl(svc)} || true); [ "$code" = 200 ] && { ok=1; break; }; done`,
-    `if [ -z "$ok" ]; then echo "HEALTH_FAILED rolling back to $PREV_IMAGE"; sudo docker rm -f ${c} >/dev/null 2>&1 || true; ${msDockerRunImage(svc, '"$PREV_IMAGE"')}; exit 1; fi`,
+    `if [ -z "$ok" ]; then echo "HEALTH_FAILED evaluating rollback to $PREV_IMAGE"; ${msPreflightImage(svc, '"$PREV_IMAGE"')} || { echo "ROLLBACK_BLOCKED installed policy preflight failed; current container preserved"; exit 1; }; sudo docker rm -f ${c} >/dev/null 2>&1 || true; ${msDockerRunImage(svc, '"$PREV_IMAGE"')}; exit 1; fi`,
     `echo "\${PREV_IMAGE##*:}" | sudo tee ${d}/PREVIOUS >/dev/null`,
     `echo "${version}" | sudo tee ${d}/CURRENT >/dev/null`,
     `echo "UPGRADE_OK ${version} (was $PREV_IMAGE)"`,

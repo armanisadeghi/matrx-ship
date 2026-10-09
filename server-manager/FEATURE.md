@@ -25,6 +25,15 @@ installed Python package version, host-local health, and `/opt/<service>/CURRENT
 - The Secrets banner must say what was observed and what Apply will do. Never
   predict failure from a missing record.
 
+Files upgrades, Secrets Apply and failure rollback execute
+`matrx_files.standalone.preflight` from the exact image with the same environment
+and volume before removing the running container. This validates installed
+source-aware mint/admission, database and central refusal contracts. Older images
+without that policy cannot be an enforcement rollback. A failed rollback
+preflight reports `ROLLBACK_BLOCKED` and preserves the current container; it does
+not silently restore signature-only admission. Positive credential/key and file
+lifecycle evidence remains a separate acceptance requirement.
+
 ## AI Dream API ownership
 
 AWS ECS/Fargate is the sole AI Dream API runtime and release owner. The retired
