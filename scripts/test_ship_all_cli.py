@@ -178,6 +178,24 @@ class ShipAllCliTests(unittest.TestCase):
         self.assertIn("UNVERIFIED", problems[0])
         self.assertIn("history is incomplete", problems[0])
 
+    def test_release_workflow_rest_rate_limit_never_treats_graphql_success_as_complete_census(self):
+        info = {"repo": "example", "path": "/unused/example"}
+
+        def responses(cmd, cwd, timeout):
+            if cmd[:3] == ["gh", "run", "list"]:
+                return 1, "", "HTTP 403: API rate limit exceeded"
+            if cmd[:4] == ["git", "config", "--get", "remote.origin.url"]:
+                return 0, "https://github.com/owner/example.git\n", ""
+            if cmd[:3] == ["gh", "api", "graphql"]:
+                return 0, self.graphql_history(conclusion="SUCCESS"), ""
+            self.fail("unexpected command: %r" % (cmd,))
+
+        with patch.object(ship_all.os.path, "isdir", return_value=True), \
+             patch.object(ship_all, "run", side_effect=responses):
+            problems = ship_all.failed_release_workflows(info)
+        self.assertIn("UNVERIFIED", problems[0])
+        self.assertIn("complete release-workflow census", problems[0])
+
     def test_release_workflow_non_rate_rest_error_does_not_fallback(self):
         info = {"repo": "example", "path": "/unused/example"}
         with patch.object(ship_all.os.path, "isdir", return_value=True), \

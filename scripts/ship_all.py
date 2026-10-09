@@ -415,8 +415,10 @@ def github_repository_slug(repo):
 def graphql_release_workflows(repo):
     """Read the newest terminal release-workflow suite per workflow through GraphQL.
 
-    Returns (problems, None) when GraphQL provided a complete, usable answer.  Otherwise
-    returns (None, reason); callers must report that state as UNVERIFIED rather than clean.
+    Returns a concrete observed failure or pending verdict when GraphQL can prove one.
+    GraphQL check suites cover default-branch commits only, so even an all-success response
+    cannot establish that tag-only, off-branch, rerun, or cancelled workflow history is clean.
+    That state remains UNVERIFIED rather than becoming a clean release verdict.
     """
     slug = github_repository_slug(repo)
     if not slug:
@@ -478,7 +480,9 @@ def graphql_release_workflows(repo):
             run_id = (newest.get("workflowRun") or {}).get("databaseId")
             problems.append("workflow '%s' %s (%s) %s — GraphQL run %s" % (
                 workflow, str(conclusion).lower(), newest["createdAt"][:16], newest.get("url", ""), run_id or "?"))
-    return problems, None
+    if problems:
+        return problems, None
+    return None, "GraphQL cannot establish a complete release-workflow census"
 
 
 def failed_release_workflows(info):
