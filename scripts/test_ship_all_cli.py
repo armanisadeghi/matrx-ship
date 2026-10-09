@@ -158,6 +158,26 @@ class ShipAllCliTests(unittest.TestCase):
         self.assertIn("UNVERIFIED", problems[0])
         self.assertIn("still IN_PROGRESS", problems[0])
 
+    def test_release_workflow_rest_rate_limit_keeps_truncated_history_unverified(self):
+        info = {"repo": "example", "path": "/unused/example"}
+        history = json.loads(self.graphql_history())
+        history["data"]["repository"]["defaultBranchRef"]["target"]["history"]["pageInfo"]["hasNextPage"] = True
+
+        def responses(cmd, cwd, timeout):
+            if cmd[:3] == ["gh", "run", "list"]:
+                return 1, "", "HTTP 403: API rate limit exceeded"
+            if cmd[:4] == ["git", "config", "--get", "remote.origin.url"]:
+                return 0, "https://github.com/owner/example.git\n", ""
+            if cmd[:3] == ["gh", "api", "graphql"]:
+                return 0, json.dumps(history), ""
+            self.fail("unexpected command: %r" % (cmd,))
+
+        with patch.object(ship_all.os.path, "isdir", return_value=True), \
+             patch.object(ship_all, "run", side_effect=responses):
+            problems = ship_all.failed_release_workflows(info)
+        self.assertIn("UNVERIFIED", problems[0])
+        self.assertIn("history is incomplete", problems[0])
+
     def test_release_workflow_non_rate_rest_error_does_not_fallback(self):
         info = {"repo": "example", "path": "/unused/example"}
         with patch.object(ship_all.os.path, "isdir", return_value=True), \

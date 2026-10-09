@@ -363,8 +363,9 @@ RELEASE_WORKFLOW = re.compile(r"release|publish|deploy|nominate", re.I)
 
 # GitHub meters Actions REST and GraphQL independently.  A fleet pass can exhaust the
 # REST core bucket with `gh run list` calls while the read-only GraphQL check-suite path
-# remains available.  This query deliberately reads completed check suites from recent
-# default-branch commits; it never dispatches, reruns, or mutates a workflow.
+# remains available.  It only gives a verdict when the queried default-branch history is
+# complete; otherwise an older release or tag run could be outside the window.  It never
+# dispatches, reruns, or mutates a workflow.
 RELEASE_WORKFLOW_GRAPHQL = r'''
 query($owner: String!, $name: String!) {
   repository(owner: $owner, name: $name) {
@@ -428,6 +429,8 @@ def graphql_release_workflows(repo):
     try:
         history = json.loads(out)["data"]["repository"]["defaultBranchRef"]["target"]["history"]
         commits = history["nodes"]
+        if history["pageInfo"]["hasNextPage"]:
+            return None, "GraphQL release-workflow history is incomplete"
         if not isinstance(commits, list):
             return None, "GraphQL commit history had an unexpected shape"
     except (KeyError, TypeError, ValueError):
