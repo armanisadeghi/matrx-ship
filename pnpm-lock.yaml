@@ -13,7 +13,7 @@ importers:
     dependencies:
       '@ai-matrx/kit':
         specifier: latest
-        version: 0.40.0(react@19.3.0)
+        version: 0.40.1(react@19.3.0)
       '@codemirror/lang-sql':
         specifier: ^6.10.0
         version: 6.10.0
@@ -122,7 +122,7 @@ importers:
     dependencies:
       '@ai-matrx/kit':
         specifier: latest
-        version: 0.40.0(react@19.3.0)
+        version: 0.40.1(react@19.3.0)
       '@matrx/admin-ui':
         specifier: workspace:*
         version: link:../packages/admin-ui
@@ -280,7 +280,7 @@ importers:
     dependencies:
       '@ai-matrx/kit':
         specifier: latest
-        version: 0.40.0(react@19.3.0)
+        version: 0.40.1(react@19.3.0)
       '@aws-sdk/client-cloudtrail':
         specifier: ^3.1141.0
         version: 3.1141.0
@@ -323,7 +323,7 @@ importers:
     dependencies:
       '@ai-matrx/kit':
         specifier: latest
-        version: 0.40.0(react@19.3.0)
+        version: 0.40.1(react@19.3.0)
       '@matrx/admin-ui':
         specifier: workspace:*
         version: link:../../packages/admin-ui
@@ -406,8 +406,8 @@ importers:
 
 packages:
 
-  '@ai-matrx/kit@0.40.0':
-    resolution: {integrity: sha512-dqqPp73VapLfKPi0XSwWcjjP3AwCtWtB15rjKGWJoxW+JMOJ7uOJk/OZLuBcgSJrNaUdn/Ct381LxyQ+obYoWQ==}
+  '@ai-matrx/kit@0.40.1':
+    resolution: {integrity: sha512-4bhVNRiRThUzhsFG4hamzgbl6FFaR4+99Wp7zSwPp0A2y9424njTbKGu5bA7yea2f7oGdoYkVI8hSPXi0FOdzQ==}
     engines: {node: '>=20'}
     peerDependencies:
       react: '>=18.0.0'
@@ -4000,9 +4000,6 @@ packages:
     resolution: {integrity: sha512-wy8OTjwsJwQRnQJkKnMJJ9vcytRdBPAgIF/Hy6+s1dAj42BHMKiyL8JzEieIl3JY7idt8eyHwBWTO8mh/+mtwA==}
     hasBin: true
 
-  jsqr@1.4.0:
-    resolution: {integrity: sha512-dxLob7q65Xg2DvstYkRpkYtmKm2sPJ9oFhrhmudT1dZvNFFTlroai3AWSpLey/w5vMcLBXRgOJsbXpdN9HzU/A==}
-
   jsx-ast-utils@3.3.5:
     resolution: {integrity: sha512-ZZow9HBI5O6EPgSJLUb8n2NKgmVWTwCvHGwFuJlMjvLFqlGG6pjirPhtdsseaLZjSibD8eegzmYpUZwoIlj2cQ==}
     engines: {node: '>=4.0'}
@@ -5511,12 +5508,11 @@ packages:
 
 snapshots:
 
-  '@ai-matrx/kit@0.40.0(react@19.3.0)':
+  '@ai-matrx/kit@0.40.1(react@19.3.0)':
     dependencies:
       idb: 8.0.4
       json5: 2.2.3
       jsonrepair: 3.15.0
-      jsqr: 1.4.0
     optionalDependencies:
       react: 19.3.0
 
@@ -9261,8 +9257,6 @@ snapshots:
       graceful-fs: 4.2.11
 
   jsonrepair@3.15.0: {}
-
-  jsqr@1.4.0: {}
 
   jsx-ast-utils@3.3.5:
     dependencies:
