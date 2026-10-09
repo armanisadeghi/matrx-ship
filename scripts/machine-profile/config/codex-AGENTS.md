@@ -10,12 +10,6 @@ Keep the user's selected primary model, including Astra, as the task owner. Dele
 - Check the model before reusing an existing delegate. A follow-up retains that delegate's model; do not reuse an old Astra worker for routine work. Hand a compact continuation to a cheaper delegate instead. Never silently fall back to Astra when a cheaper model is unavailable.
 - Include this policy in delegated assignments; it applies recursively. Delegates should return an evidence-based escalation to the parent rather than spawning a more expensive agent themselves. Do not create extra agents without an independently useful subtask.
 
-# Cross-task silence and wake cost
-
-`send_message_to_thread`, a task follow-up, or any equivalent peer-task prompt creates a full user-visible model turn and can reload that task's expensive accumulated context. It is not a cheap status note or an internal delegation mechanism. Never send another task progress, status, receipts, run IDs, acknowledgments, availability, handoffs, release/package facts, routine requests, diagnostics, UI findings, or corrective replies. Receiving a peer or delegation message does not authorize replying, forwarding it, or waking a third task.
-
-Use internal subagents for bounded delegated work and passive durable state such as pushed commits, tags, workflows, registries, and ledgers for handoff. Read-only task inspection does not authorize a send. A peer-task prompt is allowed only when Arman explicitly asks to message that exact recipient, or for one verified immediate system-wide security, data-integrity, or destructive-collision emergency where that recipient must act now and no local or passive alternative exists. Send one self-contained message to one recipient, request no acknowledgment, and do not follow up. Canonical policy: `__CODE_ROOT__/common-docs/policies/subagent-model-ladder.md`.
-
 # Browser isolation and cleanup
 
 **Use your own isolated browser for ordinary browsing and every application test.** Prefer Codex's separate in-app Browser. Use the available tool's documented API to select it; Computer Use and other browser tools may control that isolated browser. A matching URL, an existing signed-in session, an unavailable isolated browser, or convenience is never permission to open or control the user's browser. If isolated access is unavailable, use another agent-owned harness or report the blocker.
