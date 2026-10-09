@@ -361,6 +361,122 @@ def release_liveness(info):
 
 RELEASE_WORKFLOW = re.compile(r"release|publish|deploy|nominate", re.I)
 
+# GitHub meters Actions REST and GraphQL independently.  A fleet pass can exhaust the
+# REST core bucket with `gh run list` calls while the read-only GraphQL check-suite path
+# remains available.  This query deliberately reads completed check suites from recent
+# default-branch commits; it never dispatches, reruns, or mutates a workflow.
+RELEASE_WORKFLOW_GRAPHQL = r'''
+query($owner: String!, $name: String!) {
+  repository(owner: $owner, name: $name) {
+    defaultBranchRef {
+      target {
+        ... on Commit {
+          history(first: 40) {
+            pageInfo { hasNextPage }
+            nodes {
+              oid
+              checkSuites(first: 100) {
+                pageInfo { hasNextPage }
+                nodes {
+                  id
+                  createdAt
+                  status
+                  conclusion
+                  url
+                  workflowRun { databaseId workflow { name } }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+'''
+
+
+def rest_rate_limited(err):
+    """True only for the REST-core failure where the GraphQL fallback is relevant."""
+    lowered = err.lower()
+    return "rate limit" in lowered and ("403" in lowered or "api rate limit" in lowered)
+
+
+def github_repository_slug(repo):
+    """Return the GitHub owner/name for origin, or None when it is not parseable."""
+    rc, url, _err = git(repo, "config", "--get", "remote.origin.url")
+    if rc != 0:
+        return None
+    match = re.search(r"github\.com[:/]([^/]+)/([^/\s]+?)(?:\.git)?$", url.strip())
+    return "%s/%s" % match.groups() if match else None
+
+
+def graphql_release_workflows(repo):
+    """Read the newest terminal release-workflow suite per workflow through GraphQL.
+
+    Returns (problems, None) when GraphQL provided a complete, usable answer.  Otherwise
+    returns (None, reason); callers must report that state as UNVERIFIED rather than clean.
+    """
+    slug = github_repository_slug(repo)
+    if not slug:
+        return None, "origin is not a parseable GitHub repository"
+    owner, name = slug.split("/", 1)
+    rc, out, err = run(["gh", "api", "graphql", "-f", "owner=" + owner,
+                        "-f", "name=" + name, "-f", "query=" + RELEASE_WORKFLOW_GRAPHQL], repo, 60)
+    if rc != 0:
+        return None, "GraphQL could not answer: %s" % (err.strip().splitlines() or ["?"])[-1][:160]
+    try:
+        history = json.loads(out)["data"]["repository"]["defaultBranchRef"]["target"]["history"]
+        commits = history["nodes"]
+        if not isinstance(commits, list):
+            return None, "GraphQL commit history had an unexpected shape"
+    except (KeyError, TypeError, ValueError):
+        return None, "GraphQL response had an unexpected shape"
+
+    observed = {}
+    for commit in commits:
+        try:
+            suites = commit["checkSuites"]
+            if suites["pageInfo"]["hasNextPage"]:
+                return None, "GraphQL check suites exceeded the safe page"
+            nodes = suites["nodes"]
+            if not isinstance(nodes, list):
+                return None, "GraphQL check suites had an unexpected shape"
+        except (KeyError, TypeError):
+            return None, "GraphQL check suites had an unexpected shape"
+        for suite in nodes:
+            try:
+                workflow = suite["workflowRun"]["workflow"]["name"]
+                created_at = suite["createdAt"]
+                status = suite["status"]
+                conclusion = suite["conclusion"]
+            except (KeyError, TypeError):
+                continue                    # third-party check suites are not Actions workflows
+            if not isinstance(workflow, str):
+                return None, "GraphQL workflow suite had an unexpected shape"
+            if not RELEASE_WORKFLOW.search(workflow):
+                continue
+            if not isinstance(created_at, str) or not isinstance(status, str):
+                return None, "GraphQL workflow suite had an unexpected shape"
+            observed.setdefault(workflow, []).append(suite)
+
+    if not observed:
+        return None, "GraphQL observed no release/publish/deploy workflow suites"
+
+    problems = []
+    for workflow, suites in observed.items():
+        newest = max(suites, key=lambda suite: suite["createdAt"])
+        if newest["status"] != "COMPLETED":
+            return None, "GraphQL observed workflow '%s' still %s" % (workflow, newest["status"])
+        conclusion = newest.get("conclusion")
+        if conclusion in ("CANCELLED", "SKIPPED", "NEUTRAL"):
+            continue
+        if conclusion != "SUCCESS":
+            run_id = (newest.get("workflowRun") or {}).get("databaseId")
+            problems.append("workflow '%s' %s (%s) %s — GraphQL run %s" % (
+                workflow, str(conclusion).lower(), newest["createdAt"][:16], newest.get("url", ""), run_id or "?"))
+    return problems, None
+
 
 def failed_release_workflows(info):
     """Every release/publish/deploy GitHub workflow whose NEWEST finished run failed (a later
@@ -371,6 +487,11 @@ def failed_release_workflows(info):
     rc, out, err = run(["gh", "run", "list", "--limit", "40", "--json",
                         "databaseId,workflowName,conclusion,status,url,createdAt,displayTitle"], repo, 60)
     if rc != 0:
+        if rest_rate_limited(err):
+            problems, fallback_error = graphql_release_workflows(repo)
+            if fallback_error:
+                return ["release workflows UNVERIFIED — REST rate limited; %s" % fallback_error]
+            return problems
         return ["release workflows UNVERIFIED — gh could not answer: %s" % (err.strip().splitlines() or ["?"])[-1][:160]]
     seen, bad = set(), []
     for r in json.loads(out or "[]"):

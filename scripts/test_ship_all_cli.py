@@ -14,6 +14,15 @@ SPEC.loader.exec_module(ship_all)
 
 
 class ShipAllCliTests(unittest.TestCase):
+    @staticmethod
+    def graphql_history(workflow="Release", status="COMPLETED", conclusion="SUCCESS"):
+        return json.dumps({"data": {"repository": {"defaultBranchRef": {"target": {
+            "history": {"pageInfo": {"hasNextPage": False}, "nodes": [{"oid": "abc",
+                "checkSuites": {"pageInfo": {"hasNextPage": False}, "nodes": [{
+                    "id": "suite", "createdAt": "2026-10-08T20:00:00Z", "status": status,
+                    "conclusion": conclusion, "url": "https://example.test/check", "workflowRun": {
+                        "databaseId": 42, "workflow": {"name": workflow}}}]}}]}}}}}})
+
     def assert_non_mutating_exit(self, args, expected_exit):
         with patch.object(ship_all, "inspect") as inspect, \
              patch.object(ship_all.os, "makedirs") as makedirs, \
@@ -60,8 +69,7 @@ class ShipAllCliTests(unittest.TestCase):
         with patch.object(ship_all, "run", side_effect=release_status) as run:
             self.assertIn("Matrx Local has an active or queued", ship_all.active_release_slot(info))
             workflows = [call.args[0][4] for call in run.call_args_list]
-            self.assertEqual(workflows[:6], ["off-host-release.yml"] * 6)
-            self.assertEqual(workflows[6], "release.yml")
+            self.assertEqual(workflows, ["off-host-release.yml", "release.yml"])
 
     def test_matrx_local_unverified_slot_fails_closed(self):
         info = {"repo": "matrx-local", "path": "/unused/matrx-local"}
@@ -111,6 +119,52 @@ class ShipAllCliTests(unittest.TestCase):
         self.assertEqual(result["status"], "RELEASE SLOT BUSY")
         self.assertEqual(result["release_slot_blocker"], "busy")
         popen.assert_not_called()
+
+    def test_release_workflow_rest_rate_limit_uses_graphql_failure_verdict(self):
+        info = {"repo": "example", "path": "/unused/example"}
+
+        def responses(cmd, cwd, timeout):
+            if cmd[:3] == ["gh", "run", "list"]:
+                return 1, "", "HTTP 403: API rate limit exceeded"
+            if cmd[:4] == ["git", "config", "--get", "remote.origin.url"]:
+                return 0, "git@github.com:owner/example.git\n", ""
+            if cmd[:3] == ["gh", "api", "graphql"]:
+                return 0, self.graphql_history(conclusion="FAILURE"), ""
+            self.fail("unexpected command: %r" % (cmd,))
+
+        with patch.object(ship_all.os.path, "isdir", return_value=True), \
+             patch.object(ship_all, "run", side_effect=responses):
+            problems = ship_all.failed_release_workflows(info)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("workflow 'Release' failure", problems[0])
+        self.assertIn("GraphQL run 42", problems[0])
+
+    def test_release_workflow_rest_rate_limit_keeps_graphql_unknown_unverified(self):
+        info = {"repo": "example", "path": "/unused/example"}
+
+        def responses(cmd, cwd, timeout):
+            if cmd[:3] == ["gh", "run", "list"]:
+                return 1, "", "HTTP 403: API rate limit exceeded"
+            if cmd[:4] == ["git", "config", "--get", "remote.origin.url"]:
+                return 0, "https://github.com/owner/example.git\n", ""
+            if cmd[:3] == ["gh", "api", "graphql"]:
+                return 0, self.graphql_history(status="IN_PROGRESS", conclusion=None), ""
+            self.fail("unexpected command: %r" % (cmd,))
+
+        with patch.object(ship_all.os.path, "isdir", return_value=True), \
+             patch.object(ship_all, "run", side_effect=responses):
+            problems = ship_all.failed_release_workflows(info)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("UNVERIFIED", problems[0])
+        self.assertIn("still IN_PROGRESS", problems[0])
+
+    def test_release_workflow_non_rate_rest_error_does_not_fallback(self):
+        info = {"repo": "example", "path": "/unused/example"}
+        with patch.object(ship_all.os.path, "isdir", return_value=True), \
+             patch.object(ship_all, "run", return_value=(1, "", "provider unavailable")) as run:
+            problems = ship_all.failed_release_workflows(info)
+        self.assertIn("gh could not answer", problems[0])
+        self.assertEqual(run.call_count, 1)
 
 
 if __name__ == "__main__":
