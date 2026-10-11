@@ -33,6 +33,20 @@ class ShipAllCliTests(unittest.TestCase):
         makedirs.assert_not_called()
         listdir.assert_not_called()
 
+    def test_ship_sh_survives_its_own_sync_rewriting_it(self):
+        import subprocess, tempfile
+        with tempfile.TemporaryDirectory() as d:
+            Path(d, "ship.sh").write_text(
+                'echo "note=$1"\n'
+                'printf "echo broken (\\n%.0s" $(seq 1 40) > ship.sh\n'
+                'echo finished\n'
+                'exit 7\n')
+            out = subprocess.run(ship_all.SHIP_CMD + ["ship-all x"], cwd=d,
+                                 capture_output=True, text=True)
+        self.assertEqual(out.returncode, 7, out.stderr)
+        self.assertIn("note=ship-all x", out.stdout)
+        self.assertIn("finished", out.stdout)
+
     def test_help_returns_before_any_repository_or_output_work(self):
         self.assert_non_mutating_exit(["--help"], 0)
 

@@ -178,6 +178,11 @@ def stale_packages(repo):
     return stale
 
 
+# `source` reads the whole file before running it. Plain `bash ./ship.sh` reads line by line, so
+# when its own sync pulls a new ship.sh the running copy breaks mid-file (matrx-frontend
+# 2026-10-10 19:23: "syntax error near unexpected token", nothing released).
+SHIP_CMD = ["bash", "-c", 'source ./ship.sh "$@"', "bash"]
+
 PROTECTED_BRANCH_PREFIXES = ("deploy/",)   # pointers CI moves (matrx-sandbox deploy/hosted)
 
 
@@ -590,7 +595,7 @@ def _ship_locked(info, out_dir, stamp):
     say("… %-26s running (started %s)" % (name, started))
     lines = []
     with open(log, "w") as f:
-        proc = subprocess.Popen(["bash", "./ship.sh", "ship-all %s" % stamp], cwd=repo,
+        proc = subprocess.Popen(SHIP_CMD + ["ship-all %s" % stamp], cwd=repo,
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                 text=True, errors="replace", bufsize=1)
         for line in proc.stdout:
