@@ -317,6 +317,7 @@ case "$msg" in release-all:*) t=all;; release-admin:*) t=admin;; release-demos:*
 for bt in $(release_outcome_targets "$t"); do
   release_outcome_would_build "$msg" "$bt" || continue
   pid=$(release_outcome_project_id "$bt"); IFS=$'\t' read -r st uid url < <(release_outcome_fetch "$pid" "$sha")
+  if [ "$st" = CANCELED ] && [ "$bt" != main ] && release_outcome_satellite_skipped "$uid"; then st=SKIPPED_BY_DESIGN; fi
   served=""; [ "$st" = READY ] && served=$(release_outcome_serving "$(release_outcome_domain "$bt")" | head -1)
   printf '%s\t%s\t%s\t%s\t%s\n' "$(release_outcome_project_name "$bt")" "$st" "$uid" "$url" "$served"
 done
@@ -340,25 +341,35 @@ def release_liveness(info):
         rows = [r.split("\t") for r in lines(p.stdout)]
         states.append((sha, int(ct), subj.split(" - ")[0], rows))
     def live(rows):
-        return rows and all(r[1] == "READY" and (r[4] == "" or r[4] == r[2]) for r in rows)
+        return rows and all(r[1] == "SKIPPED_BY_DESIGN" or
+                            (r[1] == "READY" and r[2] and r[4] == r[2]) for r in rows)
     def failed(rows):
         return any(r[1] in ("ERROR", "CANCELED") for r in rows)
     sha, ct, name, rows = states[0]
     age_min = (time.time() - ct) / 60
+    if not rows:
+        return ["%s: LAST RELEASE UNVERIFIED — no Vercel deployment rows" % name]
     if live(rows):
         return []
     if any(r[1] in ("NO_TOKEN", "UNREACHABLE") for r in rows):
         return ["%s: LAST RELEASE UNVERIFIED — no Vercel answer (%s)" % (name, ", ".join("%s %s" % (r[0], r[1]) for r in rows))]
     # The release before the newest: READY (even if since replaced on the domain) means the
     # pipeline was healthy, so a newest one still building inside 40 minutes is just in flight.
-    prev_ok = len(states) < 2 or all(r[1] == "READY" for r in states[1][3])
-    if not failed(rows) and age_min < 40 and prev_ok:
+    prev_ok = len(states) < 2 or (bool(states[1][3]) and
+                                  all(r[1] in ("READY", "SKIPPED_BY_DESIGN") for r in states[1][3]))
+    # An in-flight deployment can use the grace window, but READY without a matching
+    # served deployment ID has already failed the live check.
+    in_flight_or_live = all(
+        r[1] in ("BUILDING", "QUEUED", "INITIALIZING", "MISSING", "SKIPPED_BY_DESIGN") or
+        (r[1] == "READY" and r[2] and r[4] == r[2]) for r in rows)
+    if not failed(rows) and age_min < 40 and prev_ok and in_flight_or_live:
         return []
     out = []
     for i, (s_sha, s_ct, s_name, s_rows) in enumerate(states):
         # Only the newest release must be the one the domain serves; an older READY was superseded.
         bad = ["%s %s %s" % (r[0], "READY-NOT-SERVING" if r[1] == "READY" else r[1], r[3]) for r in s_rows
-               if not (r[1] == "READY" and (i > 0 or r[4] == "" or r[4] == r[2]))]
+               if not (r[1] == "SKIPPED_BY_DESIGN" or
+                       (r[1] == "READY" and (i > 0 or (r[2] and r[4] == r[2]))))]
         if bad:
             out.append("%s (%s, %d min ago) NOT LIVE: %s" % (s_name, s_sha[:10], (time.time() - s_ct) / 60, "; ".join(bad)))
     return out

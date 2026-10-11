@@ -3,8 +3,12 @@
 import importlib.util
 import json
 from pathlib import Path
+import subprocess
+import tempfile
 import unittest
 from unittest.mock import patch
+from types import SimpleNamespace
+import time
 
 
 MODULE_PATH = Path(__file__).with_name("ship_all.py")
@@ -14,6 +18,77 @@ SPEC.loader.exec_module(ship_all)
 
 
 class ShipAllCliTests(unittest.TestCase):
+    def test_release_liveness_accepts_verified_satellite_skips(self):
+        sha = "a" * 40
+        commits = "%s\t%d\trelease-all: v1 - sweep\n" % (sha, int(time.time()))
+        rows = ("ai-matrx\tREADY\tmain-id\turl\tmain-id\n"
+                "ai-matrx-manage\tSKIPPED_BY_DESIGN\tadmin-id\turl\t\n"
+                "ai-matrx-demos\tSKIPPED_BY_DESIGN\tdemos-id\turl\t\n"
+                "ai-matrx-lab\tREADY\tlab-id\turl\tlab-id\n")
+        with patch.object(ship_all.os.path, "isfile", return_value=True), \
+             patch.object(ship_all, "git", return_value=(0, commits, "")), \
+             patch.object(ship_all.subprocess, "run", return_value=SimpleNamespace(stdout=rows)):
+            self.assertEqual(ship_all.release_liveness({"path": "/unused/frontend"}), [])
+
+        # A canceled satellite without its deployment-log skip marker remains a failed release.
+        with patch.object(ship_all.os.path, "isfile", return_value=True), \
+             patch.object(ship_all, "git", return_value=(0, commits, "")), \
+             patch.object(ship_all.subprocess, "run", return_value=SimpleNamespace(
+                 stdout=rows.replace("SKIPPED_BY_DESIGN", "CANCELED", 1))):
+            self.assertIn("CANCELED", " ".join(ship_all.release_liveness({"path": "/unused/frontend"})))
+
+        for served in ("", "different-id"):
+            with self.subTest(served=served), \
+                 patch.object(ship_all.os.path, "isfile", return_value=True), \
+                 patch.object(ship_all, "git", return_value=(0, commits, "")), \
+                 patch.object(ship_all.subprocess, "run", return_value=SimpleNamespace(
+                     stdout=rows.replace("main-id\n", served + "\n", 1))):
+                self.assertIn("READY-NOT-SERVING", " ".join(
+                    ship_all.release_liveness({"path": "/unused/frontend"})))
+
+        with patch.object(ship_all.os.path, "isfile", return_value=True), \
+             patch.object(ship_all, "git", return_value=(0, commits, "")), \
+             patch.object(ship_all.subprocess, "run", return_value=SimpleNamespace(stdout="")):
+            self.assertIn("UNVERIFIED", " ".join(
+                ship_all.release_liveness({"path": "/unused/frontend"})))
+
+        older = "%s\t%d\trelease-all: v0 - earlier\n" % ("b" * 40, int(time.time()) - 1800)
+        with patch.object(ship_all.os.path, "isfile", return_value=True), \
+             patch.object(ship_all, "git", return_value=(0, commits + older, "")), \
+             patch.object(ship_all.subprocess, "run", side_effect=[
+                 SimpleNamespace(stdout=rows.replace("ai-matrx\tREADY", "ai-matrx\tBUILDING", 1)),
+                 SimpleNamespace(stdout="")]):
+            self.assertIn("BUILDING", " ".join(
+                ship_all.release_liveness({"path": "/unused/frontend"})))
+
+    def test_liveness_shell_classifies_only_verified_satellite_skip(self):
+        with tempfile.TemporaryDirectory() as d:
+            scripts = Path(d, "scripts")
+            scripts.mkdir()
+            Path(scripts, "release-outcome.sh").write_text("""
+release_outcome_targets() { echo 'main admin'; }
+release_outcome_would_build() { return 0; }
+release_outcome_project_id() { echo "$1"; }
+release_outcome_project_name() { echo "$1"; }
+release_outcome_fetch() {
+  if [ "$1" = main ]; then printf '%s\\t%s\\t%s\\n' "${MAIN_STATE:-READY}" main-id url;
+  else printf 'CANCELED\\tadmin-id\\turl\\n'; fi
+}
+release_outcome_satellite_skipped() { [ "${SKIP_MARKER:-}" = present ]; }
+release_outcome_serving() { echo main-id; }
+""")
+
+            def rows(main_state, marker):
+                env = dict(ship_all.os.environ, MAIN_STATE=main_state, SKIP_MARKER=marker)
+                result = subprocess.run(["bash", "-c", ship_all.LIVE_CHECK_SH,
+                                         "x", "a" * 40, "release-all: v1 - sweep"],
+                                        cwd=d, env=env, capture_output=True, text=True, check=True)
+                return result.stdout
+
+            self.assertIn("admin\tSKIPPED_BY_DESIGN\tadmin-id", rows("READY", "present"))
+            self.assertIn("admin\tCANCELED\tadmin-id", rows("READY", ""))
+            self.assertIn("main\tCANCELED\tmain-id", rows("CANCELED", "present"))
+
     @staticmethod
     def graphql_history(workflow="Release", status="COMPLETED", conclusion="SUCCESS"):
         return json.dumps({"data": {"repository": {"defaultBranchRef": {"target": {
