@@ -1,4 +1,5 @@
 name: Rollback Deployment
+run-name: ${{ github.event_name == 'workflow_dispatch' && format('{0} (by {1})', github.workflow, inputs.requested_by || 'manual') || '' }}
 
 on:
   workflow_dispatch:
@@ -17,6 +18,11 @@ on:
       confirm:
         description: 'Type "ROLLBACK" to confirm'
         required: true
+        type: string
+      requested_by:
+        description: "Agent session or lane that asked for this run (ci-spend attribution)"
+        required: false
+        default: ""
         type: string
 
 env:

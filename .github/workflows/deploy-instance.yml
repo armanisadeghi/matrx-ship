@@ -1,4 +1,5 @@
 name: Deploy Specific Instance
+run-name: ${{ github.event_name == 'workflow_dispatch' && format('{0} (by {1})', github.workflow, inputs.requested_by || 'manual') || '' }}
 
 on:
   workflow_dispatch:
@@ -12,6 +13,11 @@ on:
         required: false
         type: boolean
         default: false
+      requested_by:
+        description: "Agent session or lane that asked for this run (ci-spend attribution)"
+        required: false
+        default: ""
+        type: string
 
 env:
   REGISTRY: ghcr.io
