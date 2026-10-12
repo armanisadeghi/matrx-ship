@@ -15,10 +15,20 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
+  # Cost guard (ci-spend, 2026-10-11) in its own job: a red guard must never hold the production deploy.
+  ci-cost-guard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Workflow cost guard (proves it can fail, then checks every workflow)
+        run: python3 scripts/check_workflow_runner_cost.py --self-test && python3 scripts/check_workflow_runner_cost.py
+
   # ── Lint & Type Check ────────────────────────────────────────────────
   lint:
     name: Lint & Type Check
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
@@ -50,6 +60,7 @@ jobs:
   build:
     name: Build Application
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: lint
     steps:
       - name: Checkout code
@@ -81,6 +92,7 @@ jobs:
   docker:
     name: Build & Push Main App
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     needs: build
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')
     permissions:
@@ -129,6 +141,7 @@ jobs:
   docker-deploy:
     name: Build & Push Deploy Service
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')
     permissions:
       contents: read
@@ -173,6 +186,7 @@ jobs:
   docker-manager:
     name: Build & Push Manager Service
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')
     permissions:
       contents: read
@@ -224,6 +238,7 @@ jobs:
   deploy-production:
     name: Deploy to Production — best-effort; host poller is authoritative
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     needs: [docker, docker-deploy, docker-manager]
     if: github.ref == 'refs/heads/main'
     continue-on-error: true
@@ -338,6 +353,7 @@ jobs:
   deploy-staging:
     name: Deploy to Staging
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     needs: [docker, docker-deploy, docker-manager]
     if: github.ref == 'refs/heads/develop'
     environment:
