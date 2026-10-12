@@ -13,7 +13,7 @@ importers:
     dependencies:
       '@ai-matrx/kit':
         specifier: latest
-        version: 0.42.3(react@19.3.0)
+        version: 0.42.4(react@19.3.0)
       '@codemirror/lang-sql':
         specifier: ^6.10.0
         version: 6.10.0
@@ -122,7 +122,7 @@ importers:
     dependencies:
       '@ai-matrx/kit':
         specifier: latest
-        version: 0.42.3(react@19.3.0)
+        version: 0.42.4(react@19.3.0)
       '@matrx/admin-ui':
         specifier: workspace:*
         version: link:../packages/admin-ui
@@ -280,7 +280,7 @@ importers:
     dependencies:
       '@ai-matrx/kit':
         specifier: latest
-        version: 0.42.3(react@19.3.0)
+        version: 0.42.4(react@19.3.0)
       '@aws-sdk/client-cloudtrail':
         specifier: ^3.1141.0
         version: 3.1141.0
@@ -323,7 +323,7 @@ importers:
     dependencies:
       '@ai-matrx/kit':
         specifier: latest
-        version: 0.42.3(react@19.3.0)
+        version: 0.42.4(react@19.3.0)
       '@matrx/admin-ui':
         specifier: workspace:*
         version: link:../../packages/admin-ui
@@ -406,8 +406,8 @@ importers:
 
 packages:
 
-  '@ai-matrx/kit@0.42.3':
-    resolution: {integrity: sha512-kH1jMn2kzX7JmF0NwIdnPhqPhYZnFPs6Ok/BOfmVRrae1QZiDiaaMxGPfr1tmmdbnP77ot8Bqr9RvFUkGcS53g==}
+  '@ai-matrx/kit@0.42.4':
+    resolution: {integrity: sha512-WntUp3osdnzlawKNafOAZdbQQj5ZCjWhZkvg97FYiAzjk7x4N/4tEgppi8qzDq8CcWRaIYgRtf5R1+LUQRtY+A==}
     engines: {node: '>=20'}
     peerDependencies:
       react: '>=18.0.0'
@@ -5508,7 +5508,7 @@ packages:
 
 snapshots:
 
-  '@ai-matrx/kit@0.42.3(react@19.3.0)':
+  '@ai-matrx/kit@0.42.4(react@19.3.0)':
     dependencies:
       idb: 8.0.4
       json5: 2.2.3
