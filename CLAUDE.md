@@ -136,3 +136,5 @@ used by both admin UIs) and [packages/ticket-widget/](packages/ticket-widget/)
   `/Users/armanisadeghi/code/common-docs/systems/architecture/database/projects/no-db-assigned-org/PLAN.md`.
 
 - **Logging into any Matrx UI**: sign in as `admin@admin.com` — the password is `AI_ADMIN_PASSWORD` in the `.env` of `aidream` or `matrx-frontend` (`AI_ADMIN_USERNAME` holds the email).
+
+- **Release cadence** (Arman, 2026-10-11): only aidream and ai-matrx (matrx-frontend) ride the ~30-minute train — `ship_all.py` RELEASE_TRAIN; every other repo is synced, never released by ship-all, and releases only on a deliberate run when there is something meaningful to ship (Matrx 2 Mac ≤ daily, Windows/Linux weekly).

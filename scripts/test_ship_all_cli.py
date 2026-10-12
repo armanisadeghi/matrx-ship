@@ -199,6 +199,42 @@ release_outcome_serving() { echo main-id; }
         with patch.object(ship_all, "run", return_value=(0, '{"deployments": [], "pagination": []}', "")):
             self.assertIn("unexpected shape", ship_all.active_release_slot(info))
 
+    def test_only_aidream_and_frontend_ride_the_release_train(self):
+        # Release cadence (Arman, 2026-10-11): every other repo is synced, never released.
+        self.assertEqual(ship_all.RELEASE_TRAIN, {"aidream", "matrx-frontend"})
+        for name in ("aidream", "matrx-frontend"):
+            self.assertEqual(ship_all.ship_cmd({"repo": name, "path": "/unused"}, "n"), ship_all.SHIP_CMD + ["n"])
+        with tempfile.TemporaryDirectory() as d:
+            Path(d, "ship.sh").write_text('python3 "$ROOT/scripts/sync-main.py" --skip-matrx-packages\nbash scripts/release.sh\n')
+            for name in ("matrx-local", "matrx-vscode", "matrx-claude-plugin", "matrx-extend"):
+                cmd = ship_all.ship_cmd({"repo": name, "path": d}, "n")
+                self.assertNotIn("./ship.sh", " ".join(cmd))
+                self.assertIn("scripts/sync-main.py", cmd[2])
+                self.assertNotRegex(cmd[2], r"release\.sh|dispatch|gh workflow")
+                self.assertEqual(cmd[-1], "--skip-matrx-packages")
+            # The sync-only command really runs the sync and prints ship-all's summary line.
+            Path(d, "scripts").mkdir()
+            Path(d, "scripts", "sync-main.py").write_text("import sys; print('synced', sys.argv[1:])\n")
+            out = subprocess.run(ship_all.ship_cmd({"repo": "matrx-local", "path": d}, "n"), cwd=d,
+                                 capture_output=True, text=True)
+            self.assertEqual(out.returncode, 0)
+            self.assertIn("synced ['--skip-matrx-packages']", out.stdout)
+            self.assertIn("ship.sh: sync exit 0, release exit 0 (sync only)", out.stdout)
+
+    def test_off_train_repo_never_checks_a_release_slot_or_releases(self):
+        info = {"repo": "matrx-local", "path": "/unused/matrx-local", "dirty": 0, "ahead": 0, "behind": 0,
+                "origin_before": ""}
+        fake = SimpleNamespace(stdout=iter(["ship.sh: sync exit 0, release exit 0 (sync only)\n"]),
+                               wait=lambda: 0, returncode=0)
+        with tempfile.TemporaryDirectory() as out_dir, \
+             patch.object(ship_all, "active_release_slot") as slot, \
+             patch.object(ship_all.subprocess, "Popen", return_value=fake) as popen, \
+             patch.object(ship_all, "say"):
+            result = ship_all._ship_locked(info, out_dir, "stamp")
+        slot.assert_not_called()
+        self.assertNotIn("./ship.sh", " ".join(popen.call_args.args[0]))
+        self.assertEqual(result["status"], "shipped")
+
     def test_busy_slot_never_spawns_ship_script(self):
         info = {"repo": "aidream", "path": "/unused/aidream"}
         with patch.object(ship_all, "active_release_slot", return_value="busy"), \

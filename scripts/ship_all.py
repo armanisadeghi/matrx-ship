@@ -8,7 +8,9 @@ For every git repository directly under the code folder (the parent of matrx-shi
      extra worktrees, remote branches, open pull requests.
   2. SKIP it when there is nothing to sync: no uncommitted files, not ahead of or behind GitHub,
      and every @ai-matrx package at npm latest (its check:matrx-packages passes).
-  3. otherwise run its ./ship.sh (sync with GitHub, then release) and keep the full output,
+  3. otherwise run its ./ship.sh (sync with GitHub, then release) and keep the full output —
+     only for the RELEASE_TRAIN repos (aidream, matrx-frontend); every other repo is synced
+     (scripts/sync-main.py: commit, merge, push) and never released by ship-all,
      then check the checkout now holds the origin/main seen in step 1: status NOT PULLED if not.
   4. only AFTER every ship has finished: list what is open in each _conflicts/README.md and, in
      ONE pass over the transcripts, the conversations (Claude Code / Codex) that edited each held
@@ -182,6 +184,30 @@ def stale_packages(repo):
 # when its own sync pulls a new ship.sh the running copy breaks mid-file (matrx-frontend
 # 2026-10-10 19:23: "syntax error near unexpected token", nothing released).
 SHIP_CMD = ["bash", "-c", 'source ./ship.sh "$@"', "bash"]
+
+# Release cadence (Arman, 2026-10-11): only the server and the web app ride the ~30-minute train.
+# Every other repo (Matrx Desktop, Matrx Local, matrx-vscode, the plugins, any other app) releases
+# only on a deliberate run of its own release script or workflow, when there is something
+# meaningful to ship: ship-all syncs it (commit, merge GitHub's main, push) and never releases it.
+# (2026-10: ship-all released matrx-local ~20 times a day, each a macOS/Windows/Linux build.)
+RELEASE_TRAIN = {"aidream", "matrx-frontend"}
+SYNC_ONLY_SCRIPT = ('python3 scripts/sync-main.py "$@"; rc=$?; echo ""; '
+                    'echo "ship-all: not on the 30-minute release train: synced, not released."; '
+                    'echo "ship.sh: sync exit $rc, release exit 0 (sync only)"; exit $rc')
+
+
+def ship_cmd(info, note):
+    """The command ship-all runs in one repo: ./ship.sh on the train, the sync alone otherwise."""
+    if info["repo"] in RELEASE_TRAIN:
+        return SHIP_CMD + [note]
+    flags = []
+    try:
+        with open(os.path.join(info["path"], "ship.sh")) as f:
+            if "--skip-matrx-packages" in f.read():
+                flags.append("--skip-matrx-packages")
+    except OSError:
+        pass
+    return ["bash", "-c", SYNC_ONLY_SCRIPT, "bash"] + flags
 
 PROTECTED_BRANCH_PREFIXES = ("deploy/",)   # pointers CI moves (matrx-sandbox deploy/hosted)
 
@@ -594,7 +620,7 @@ def _ship_locked(info, out_dir, stamp):
     is printed as ONE block (START, everything it printed, END) so nothing from another repo is
     mixed in. The full output is also in the log file."""
     name, repo = info["repo"], info["path"]
-    slot_blocker = active_release_slot(info)
+    slot_blocker = active_release_slot(info) if name in RELEASE_TRAIN else None
     if slot_blocker:
         info["status"] = "RELEASE SLOT BUSY"
         info["release_slot_blocker"] = slot_blocker
@@ -606,7 +632,7 @@ def _ship_locked(info, out_dir, stamp):
     say("… %-26s running (started %s)" % (name, started))
     lines = []
     with open(log, "w") as f:
-        proc = subprocess.Popen(SHIP_CMD + ["ship-all %s" % stamp], cwd=repo,
+        proc = subprocess.Popen(ship_cmd(info, "ship-all %s" % stamp), cwd=repo,
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                 text=True, errors="replace", bufsize=1)
         for line in proc.stdout:
