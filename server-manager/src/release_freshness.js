@@ -16,7 +16,7 @@
 
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import { formatDurationMs } from "@ai-matrx/kit/format";
+import { formatDurationMs, formatRelativeTime } from "@ai-matrx/kit/format";
 import { STALE_CRITICAL_HOURS, hoursSince } from "./deploy_attempts.js";
 
 const STATE_FILE = "/host-srv/apps/deploy-state/release-freshness.json";
@@ -82,7 +82,7 @@ export function judgeFreshness(svc, { running, latest, latestAt = null, now = Da
   const status = hours >= STALE_CRITICAL_HOURS ? "critical" : "warning";
   return {
     ...base, status, facts,
-    detail: `Running ${short(running)} while ${short(latest)} was released ${formatDurationMs(hours * 3_600_000, { style: "long", parts: 2 })} ago. ${svc.impact} ${svc.howItShips}`,
+    detail: `Running ${short(running)} while ${short(latest)} was released ${formatRelativeTime(since, { style: "long", now })}. ${svc.impact} ${svc.howItShips}`,
   };
 }
 
