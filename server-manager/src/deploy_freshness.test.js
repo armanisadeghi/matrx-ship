@@ -4,7 +4,7 @@ import {
   parseLedger, shouldAutoAttempt, recordAttempt, releaseLastAttempt, failureReason,
   firstAttemptAt, AUTO_DEPLOY_RETRY_HOURS,
 } from "./deploy_attempts.js";
-import { judgeFreshness, WEBSITE_RELEASE_SUBJECT } from "./release_freshness.js";
+import { judgeFreshness, judgeUnreadable, WEBSITE_RELEASE_SUBJECT } from "./release_freshness.js";
 
 const H = 3600_000;
 const T0 = Date.parse("2026-10-12T10:00:00Z");
@@ -69,12 +69,24 @@ test("behind-since survives re-checks and resets only for a newer release", () =
   assert.equal(state.scraper.since, new Date(T0 + 6 * H).toISOString());
 });
 
-test("no running version is critical; no latest is unknown", () => {
+test("no running version is critical; no latest is unknown at first, an alarm after hours", () => {
   assert.equal(judgeFreshness(SVC, { running: null, latest: "2", now: T0 }, {}).status, "critical");
-  assert.equal(judgeFreshness(SVC, { running: "1", latest: null, now: T0 }, {}).status, "unknown");
+  const state = {};
+  assert.equal(judgeFreshness(SVC, { running: "1", latest: null, now: T0 }, state).status, "unknown");
+  const later = judgeFreshness(SVC, { running: "1", latest: null, now: T0 + 3 * H }, state);
+  assert.equal(later.status, "warning");
+  assert.match(later.detail, /would go unnoticed/);
+  judgeFreshness(SVC, { running: "1", latest: "1", now: T0 + 4 * H }, state);
+  assert.equal(state["scraper:unreadable"], undefined);
 });
 
-test("every website release prefix counts as a release commit", () => {
-  for (const s of ["release: v1", "release-all: v1", "release-admin: v1", "release-demos: x", "release-lab: x"]) assert.ok(WEBSITE_RELEASE_SUBJECT.test(s), s);
-  assert.ok(!WEBSITE_RELEASE_SUBJECT.test("fix: release notes"));
+test("a failing read is the same alarm", () => {
+  const state = {};
+  judgeUnreadable(SVC, "failed (GitHub 403)", state, T0);
+  assert.equal(judgeUnreadable(SVC, "failed (GitHub 403)", state, T0 + 3 * H).status, "warning");
+});
+
+test("only release commits that build www count", () => {
+  for (const s of ["release: v1", "release-all: v1"]) assert.ok(WEBSITE_RELEASE_SUBJECT.test(s), s);
+  for (const s of ["release-admin: v1", "release-demos: x", "release-lab: x", "fix: release notes"]) assert.ok(!WEBSITE_RELEASE_SUBJECT.test(s), s);
 });

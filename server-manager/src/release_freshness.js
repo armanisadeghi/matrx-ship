@@ -20,9 +20,13 @@ import { STALE_CRITICAL_HOURS, hoursSince } from "./deploy_attempts.js";
 
 const STATE_FILE = "/host-srv/apps/deploy-state/release-freshness.json";
 
-// A release commit on the website repo starts with one of these (vercel.json →
-// scripts/vercel-ignore-build.sh in ai-matrx). Every prefix builds www.
-export const WEBSITE_RELEASE_SUBJECT = /^release(-all|-admin|-demos|-lab)?:/;
+// A release commit that builds www (ai-matrx scripts/vercel-ignore-build.sh):
+// `release:` and `release-all:`. `release-admin:`/`-demos:`/`-lab:` build other projects.
+export const WEBSITE_RELEASE_SUBJECT = /^release(-all)?:/;
+
+// A check that cannot be read for this long is itself an alarm — an unreadable
+// check that quietly reads "unknown" is the same silence this file exists to end.
+export const UNREADABLE_ALARM_HOURS = 2;
 
 export const RELEASED_SERVICES = [
   {
@@ -59,7 +63,8 @@ export function saveState(state, path = STATE_FILE) {
 export function judgeFreshness(svc, { running, latest, latestAt = null, now = Date.now() }, state) {
   const base = { id: svc.id, label: svc.label, actions: [] };
   const short = (v) => (v && /^[0-9a-f]{40}$/.test(v) ? v.slice(0, 7) : v);
-  if (!latest) return { ...base, status: "unknown", detail: `Could not read the latest release of ${svc.label}.` };
+  if (!latest) return judgeUnreadable(svc, `could not find its latest release`, state, now);
+  delete state[`${svc.id}:unreadable`];
   if (!running) return { ...base, status: "critical", detail: `${svc.label} does not report a running version at ${svc.runningUrl}. ${svc.impact}` };
   if (running === latest) {
     delete state[svc.id];
@@ -78,6 +83,18 @@ export function judgeFreshness(svc, { running, latest, latestAt = null, now = Da
     ...base, status, facts,
     detail: `Running ${short(running)} while ${short(latest)} was released ${formatHours(hours)} ago. ${svc.impact} ${svc.howItShips}`,
   };
+}
+
+/** Pure: "unknown" for a short blip, a warning once the check has been unreadable for hours. */
+export function judgeUnreadable(svc, why, state, now = Date.now()) {
+  const key = `${svc.id}:unreadable`;
+  const since = state[key]?.since || new Date(now).toISOString();
+  state[key] = { since };
+  const hours = hoursSince(since, now) ?? 0;
+  const base = { id: svc.id, label: svc.label, actions: [] };
+  if (hours < UNREADABLE_ALARM_HOURS) return { ...base, status: "unknown", detail: `Freshness check ${why}.` };
+  return { ...base, status: "warning", facts: { service: svc.id, unreadable_since: since },
+    detail: `The freshness check for ${svc.label} has ${why} for ${formatHours(hours)}, so a stale build would go unnoticed.` };
 }
 
 export function formatHours(hours) {
@@ -123,7 +140,7 @@ export async function checkReleasedService(svc, { githubToken = "", state, now =
     const [running, { latest, latestAt }] = await Promise.all([readRunning(svc), readLatest(svc, githubToken)]);
     return judgeFreshness(svc, { running, latest, latestAt, now }, state);
   } catch (e) {
-    return { id: svc.id, label: svc.label, status: "unknown", detail: `Freshness check failed: ${e.message}`, actions: [] };
+    return judgeUnreadable(svc, `failed (${e.message})`, state, now);
   }
 }
 

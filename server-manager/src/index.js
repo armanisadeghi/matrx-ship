@@ -23,7 +23,7 @@ import {
   fullRestore,
 } from "./supabase.js";
 import { syncFleetIssuesToOps, opsConfigured } from "./ops_triage.js";
-import { parseLedger, shouldAutoAttempt, recordAttempt, releaseLastAttempt, lastAttempt, firstAttemptAt, failureReason, hoursSince, STALE_CRITICAL_HOURS, AUTO_DEPLOY_RETRY_HOURS } from "./deploy_attempts.js";
+import { parseLedger, shouldAutoAttempt, recordAttempt, lastAttempt, firstAttemptAt, failureReason, hoursSince, STALE_CRITICAL_HOURS, AUTO_DEPLOY_RETRY_HOURS } from "./deploy_attempts.js";
 import { checkAllReleasedServices, formatHours } from "./release_freshness.js";
 import {
   awsConfigured,
@@ -3872,6 +3872,17 @@ function msRestartCommand(svc) {
 
 // null (not an error) when the package has never been published — that is how
 // an undeployed service stays quiet instead of throwing on every sweep.
+// When PyPI published a version: the start of "behind", independent of whether
+// auto-deploy ever attempted it (disabled, disk-full and old ledgers record none).
+async function msPypiPublishedAt(svc, version) {
+  try {
+    const r = await fetch(`https://pypi.org/pypi/${svc.pypiPackage}/${version}/json`, { signal: AbortSignal.timeout(8000) });
+    if (!r.ok) return null;
+    const urls = (await r.json()).urls || [];
+    return urls.map((u) => u.upload_time_iso_8601).filter(Boolean).sort()[0] || null;
+  } catch { return null; }
+}
+
 async function msPypiLatest(svc) {
   const r = await fetch(`https://pypi.org/pypi/${svc.pypiPackage}/json`, { signal: AbortSignal.timeout(8000) });
   if (r.status === 404) return null;
@@ -4027,8 +4038,13 @@ function msWriteLedger(svc, ledger) {
   try { mkdirSync(dirname(svc.attemptsFile), { recursive: true }); writeFileSync(svc.attemptsFile, JSON.stringify(ledger, null, 2)); } catch (e) { console.error(`[${svc.id}] could not write the attempt ledger:`, e.message); }
 }
 
+// One deploy per service at a time: a build can take 420s and the sweep runs
+// every 300s, so without this a second sweep would start the same version again.
+const msDeploying = new Set();
+
 async function msMaybeAutoDeploy(svc) {
-  if (!svc.autoDeploy) return;
+  if (!svc.autoDeploy || msDeploying.has(svc.id)) return;
+  msDeploying.add(svc.id);
   try {
     const latest = await msPypiLatest(svc);
     if (!latest) return; // never published — nothing to deploy, nothing to say
@@ -4043,19 +4059,22 @@ async function msMaybeAutoDeploy(svc) {
     const decision = shouldAutoAttempt(ledger, latest);
     if (!decision.attempt) return;
     console.log(`[${svc.id}] ${deployed} -> ${latest}: auto-deploy starting (${decision.why})`);
-    const res = await msDeploy(svc, latest);
+    let res;
+    try { res = await msDeploy(svc, latest); }
+    catch (e) { res = { ok: false, error: `deploy could not run: ${e.message}` }; } // recorded like any failure, so it waits the retry window
     const reason = res.ok ? null : failureReason(res.error);
     console.log(`[${svc.id}] auto-deploy ${latest}: ${res.ok ? "OK" : "FAILED"} ${reason || ""}`);
     // A full host disk is not a broken release — record nothing, so the next
     // sweep tries again once disk is reclaimed. Fleet health reports "deploys blocked".
     if (!res.ok && /DISK_FULL|No space left on device/.test(res.error || "")) {
       console.error(`[${svc.id}] auto-deploy ${latest} was BLOCKED BY HOST DISK on ${svc.host}, not by the release — it will retry once disk is reclaimed.`);
-      msWriteLedger(svc, releaseLastAttempt(recordAttempt(ledger, latest, { ok: false, reason }), latest));
       return;
     }
     msWriteLedger(svc, recordAttempt(ledger, latest, { ok: res.ok, reason }));
   } catch (e) {
     console.error(`[${svc.id}] auto-deploy sweep failed:`, e.message);
+  } finally {
+    msDeploying.delete(svc.id);
   }
 }
 
@@ -4192,13 +4211,17 @@ async function checkMicroservice(svc) {
       // four days as "check the audit log" with the reason in a console line.
       const ledger = msReadLedger(svc);
       const last = lastAttempt(ledger, latest);
-      const since = firstAttemptAt(ledger, latest);
+      const since = (await msPypiPublishedAt(svc, latest)) || firstAttemptAt(ledger, latest);
       const hours = hoursSince(since);
       const why = !svc.autoDeploy
         ? ` Auto-deploy is DISABLED (${svc.autoDeployEnvVar}=0).`
-        : last && !last.ok
-          ? ` The last auto-deploy of ${latest} failed${last.at ? ` at ${last.at}` : ""}: ${last.reason || "no reason recorded"}. It retries every ${AUTO_DEPLOY_RETRY_HOURS} hours.`
-          : " Auto-deploy has not attempted it yet.";
+        : msDeploying.has(id)
+          ? " An auto-deploy is running now."
+          : last && !last.ok
+            ? ` The last auto-deploy of ${latest} failed${last.at ? ` at ${last.at}` : ""}: ${last.reason || "no reason recorded"}. It retries every ${AUTO_DEPLOY_RETRY_HOURS} hours.`
+            : last && last.ok
+              ? ` Auto-deploy reported ${latest} installed${last.at ? ` at ${last.at}` : ""}, but the container still runs ${deployed}.`
+              : " Auto-deploy has not attempted it yet.";
       const age = hours != null ? ` Behind for ${formatHours(hours)}.` : "";
       const status = hours != null && hours >= STALE_CRITICAL_HOURS ? "critical" : "warning";
       const facts = { service: id, running: deployed, latest, behind_since: since, last_failure: last && !last.ok ? last.reason : null };
