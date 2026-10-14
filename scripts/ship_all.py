@@ -49,8 +49,10 @@ HERE = os.path.dirname(os.path.realpath(__file__))   # real location, even when 
 CODE = os.path.dirname(os.path.dirname(HERE))          # .../code
 OUT_ROOT = os.path.expanduser("~/.matrx/ship-all")
 FIND_SESSIONS = os.path.join(HERE, "find-file-sessions.py")
-# Never part of ship-all (Arman, 2026-09-24).
-EXCLUDED = {"wordpress-infrastructure", "titanium-marketing-wordpress", "real-singles", "matrx-mobile", "ai-matrx-biz"}
+# Never part of ship-all (Arman, 2026-09-24). matrx-local: updated only when Arman asks by hand,
+# never synced, package-bumped or released by ship-all (Arman, 2026-10-14).
+EXCLUDED = {"wordpress-infrastructure", "titanium-marketing-wordpress", "real-singles", "matrx-mobile", "ai-matrx-biz",
+            "matrx-local"}
 
 USAGE = """Usage: ship-all.sh [--dry-run] [--only REPOS] [--skip REPOS] [--days DAYS] [--jobs JOBS]
 
