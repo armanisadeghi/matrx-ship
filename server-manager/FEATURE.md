@@ -34,6 +34,23 @@ preflight reports `ROLLBACK_BLOCKED` and preserves the current container; it doe
 not silently restore signature-only admission. Positive credential/key and file
 lifecycle evidence remains a separate acceptance requirement.
 
+## Release freshness
+
+Every separately deployed service answers one question each sweep: is what runs the latest release,
+and if not, for how long and why. Microservices (`matrx-files`, `matrx-seo`) are judged from the SSM
+observation plus the attempt ledger (`src/deploy_attempts.js`): each auto-deploy attempt is recorded
+with its time and the one failing line (`failureReason`), a failed version is retried every
+`AUTO_DEPLOY_RETRY_HOURS` (6) instead of once forever, and a service behind longer than
+`STALE_CRITICAL_HOURS` (24) is critical. Services the Manager does not deploy (`src/release_freshness.js`
+`RELEASED_SERVICES`: scraper via PyPI vs `/health/version`, website via the newest `release*:` commit vs
+`www.aimatrx.com/api/version`) are judged the same way after a 60-minute grace, with "behind since" kept
+in `deploy-state/release-freshness.json`. Each unhealthy check carries `facts` (running, latest,
+behind_since, last_failure) into `ops.ops_issue_class.metadata`, and every sweep rewrites the heartbeat
+class `fleet:watch`. The super-admin attention dock reads both (`platform.deploy_freshness_for_attention`)
+and raises "the deploy watch has gone quiet" when the heartbeat is 30 minutes old. Not yet covered: ECS
+services other than the API (admin dashboard, studio, workers — no public version), the Manager and
+Deploy server (no version), MyMatrx and Matrx Games (deployment id only). Tests: `src/deploy_freshness.test.js`.
+
 ## AI Dream API ownership
 
 AWS ECS/Fargate is the sole AI Dream API runtime and release owner. The retired
@@ -162,6 +179,11 @@ For changes to this surface:
    health and runtime version.
 
 ## Change log
+
+- **2026-10-13** — Release freshness (section above). matrx-files sat on 0.2.280 for four days while
+  13 releases refused preflight; the one-attempt ledger never retried and the fleet mirror had
+  skipped every sweep since 2026-08-23 (`MATRX_FLEET_OPS_ORGANIZATION_ID` was never set; now set to the
+  platform tenant, the same organization aidream files its ops telemetry under).
 
 - 2026-09-11 — Readiness probes authenticate separately to the hosted and EC2 orchestrators instead of turning protected healthy roots into false 504 outages.
 - 2026-08-23 — Fleet ops events require the registered operation's explicit organization; removed recent-event organization borrowing.

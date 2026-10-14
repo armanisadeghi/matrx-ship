@@ -120,6 +120,7 @@ async function reportIssue(check, organizationId) {
         disposition: "monitor",
         is_active: true,
         description,
+        metadata: { status: check.status, ...(check.facts || {}) },
       }),
     });
     cls = ins && ins[0];
@@ -129,7 +130,7 @@ async function reportIssue(check, organizationId) {
     await opsRequest(`ops_issue_class?id=eq.${cls.id}`, {
       method: "PATCH",
       prefer: "return=minimal",
-      body: JSON.stringify({ is_active: true, severity, description, updated_at: now }),
+      body: JSON.stringify({ is_active: true, severity, description, metadata: { status: check.status, ...(check.facts || {}) }, updated_at: now }),
     });
   }
 
@@ -167,6 +168,28 @@ async function resolveIssue(check) {
 }
 
 /**
+ * The watcher's own heartbeat: class `fleet:watch`, rewritten every sweep.
+ * The attention dock raises "the deploy watch has gone quiet" when it is older
+ * than its window — on 2026-08-23 this sync started skipping every sweep for a
+ * missing setting and nothing anywhere said so for seven weeks.
+ */
+async function writeHeartbeat(checks, counts) {
+  const key = "fleet:watch";
+  const now = new Date().toISOString();
+  const metadata = { last_sweep_at: now, checks: (checks || []).length, ...counts };
+  const rows = await opsRequest(`ops_issue_class?key=eq.${encodeURIComponent(key)}&select=id`);
+  if (rows === null) return;
+  if (!rows[0]) {
+    await opsRequest("ops_issue_class", {
+      method: "POST", prefer: "return=minimal",
+      body: JSON.stringify({ key, name: "Fleet: deploy watch heartbeat", category: "infrastructure", severity: "low", disposition: "monitor", is_active: false, description: "Rewritten by the Ship Manager on every fleet sweep.", metadata }),
+    });
+  } else {
+    await opsRequest(`ops_issue_class?id=eq.${rows[0].id}`, { method: "PATCH", prefer: "return=minimal", body: JSON.stringify({ metadata, updated_at: now }) });
+  }
+}
+
+/**
  * Mirror one fleet-health snapshot into ops-triage. Never throws.
  */
 export async function syncFleetIssuesToOps(checks) {
@@ -184,5 +207,6 @@ export async function syncFleetIssuesToOps(checks) {
       console.error(`ops-triage sync failed for check '${check.id}':`, err.message);
     }
   }
+  try { await writeHeartbeat(checks, { reported, resolved }); } catch (err) { console.error("ops-triage heartbeat failed:", err.message); }
   return { reported, resolved };
 }

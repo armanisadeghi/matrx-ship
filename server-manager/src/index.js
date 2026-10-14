@@ -23,6 +23,8 @@ import {
   fullRestore,
 } from "./supabase.js";
 import { syncFleetIssuesToOps, opsConfigured } from "./ops_triage.js";
+import { parseLedger, shouldAutoAttempt, recordAttempt, releaseLastAttempt, lastAttempt, firstAttemptAt, failureReason, hoursSince, STALE_CRITICAL_HOURS, AUTO_DEPLOY_RETRY_HOURS } from "./deploy_attempts.js";
+import { checkAllReleasedServices, formatHours } from "./release_freshness.js";
 import {
   awsConfigured,
   awsRegion,
@@ -3758,7 +3760,8 @@ async function computeFleetHealth() {
     ...Object.values(MICROSERVICES).map((svc) => checkMicroservice(svc)),
   ]);
   const images = checkSandboxImages();
-  const checks = [drift, images, deploys, aidreamHealth, aidreamPipeline, hostedDeploy, ...micro];
+  const released = await checkAllReleasedServices({ githubToken: process.env.GITHUB_PAT || process.env.GH_TOKEN || "" });
+  const checks = [drift, images, deploys, aidreamHealth, aidreamPipeline, hostedDeploy, ...micro, ...released];
   for (const c of checks) {
     if (c.status !== "critical" && c.status !== "warning") continue;
     const e = expectedRestart(c.id);
@@ -4017,6 +4020,13 @@ async function msDeploy(svc, version) {
   return { ok, edge, output: (r.stdout || "").slice(-4000), error: ok ? null : tail };
 }
 
+function msReadLedger(svc) {
+  try { return parseLedger(readFileSync(svc.attemptsFile, "utf-8")); } catch { return parseLedger(""); }
+}
+function msWriteLedger(svc, ledger) {
+  try { mkdirSync(dirname(svc.attemptsFile), { recursive: true }); writeFileSync(svc.attemptsFile, JSON.stringify(ledger, null, 2)); } catch (e) { console.error(`[${svc.id}] could not write the attempt ledger:`, e.message); }
+}
+
 async function msMaybeAutoDeploy(svc) {
   if (!svc.autoDeploy) return;
   try {
@@ -4025,26 +4035,25 @@ async function msMaybeAutoDeploy(svc) {
     const observed = await msObservedState(svc);
     const deployed = observed.version;
     if (!deployed || deployed === latest) return; // no first install, only upgrades
-    let attempts;
-    try { attempts = JSON.parse(readFileSync(svc.attemptsFile, "utf-8")); } catch { attempts = { tried: [] }; }
-    if (attempts.tried.includes(latest)) return; // one auto-attempt per version
-    attempts.tried = attempts.tried.slice(-50); attempts.tried.push(latest);
-    try { mkdirSync(dirname(svc.attemptsFile), { recursive: true }); writeFileSync(svc.attemptsFile, JSON.stringify(attempts, null, 2)); } catch { /* */ }
-    console.log(`[${svc.id}] ${deployed} -> ${latest}: auto-deploy starting`);
+    // A failed version is tried again every AUTO_DEPLOY_RETRY_HOURS: a missing
+    // setting fixed later must not leave that release skipped forever (files
+    // sat 13 versions behind on 2026-10-13), and a truly broken release costs
+    // one cached rebuild per window, never a loop.
+    const ledger = msReadLedger(svc);
+    const decision = shouldAutoAttempt(ledger, latest);
+    if (!decision.attempt) return;
+    console.log(`[${svc.id}] ${deployed} -> ${latest}: auto-deploy starting (${decision.why})`);
     const res = await msDeploy(svc, latest);
-    console.log(`[${svc.id}] auto-deploy ${latest}: ${res.ok ? "OK" : "FAILED"} ${(res.error || "").slice(-1500)}`);
-    // The one-attempt ledger exists so a BROKEN RELEASE stays stuck instead of
-    // loop-building. A full host disk is not a broken release — burning the
-    // attempt would silently skip a perfectly good version forever, even after
-    // the disk is reclaimed. Give the version its attempt back and say why.
+    const reason = res.ok ? null : failureReason(res.error);
+    console.log(`[${svc.id}] auto-deploy ${latest}: ${res.ok ? "OK" : "FAILED"} ${reason || ""}`);
+    // A full host disk is not a broken release — record nothing, so the next
+    // sweep tries again once disk is reclaimed. Fleet health reports "deploys blocked".
     if (!res.ok && /DISK_FULL|No space left on device/.test(res.error || "")) {
-      try {
-        const back = JSON.parse(readFileSync(svc.attemptsFile, "utf-8"));
-        back.tried = (back.tried || []).filter((v) => v !== latest);
-        writeFileSync(svc.attemptsFile, JSON.stringify(back, null, 2));
-      } catch (e) { console.error(`[${svc.id}] could not release the disk-full attempt for ${latest}:`, e.message); }
-      console.error(`[${svc.id}] auto-deploy ${latest} was BLOCKED BY HOST DISK on ${svc.host}, not by the release — attempt released, it will retry once disk is reclaimed. Fleet health reports this as "deploys blocked".`);
+      console.error(`[${svc.id}] auto-deploy ${latest} was BLOCKED BY HOST DISK on ${svc.host}, not by the release — it will retry once disk is reclaimed.`);
+      msWriteLedger(svc, releaseLastAttempt(recordAttempt(ledger, latest, { ok: false, reason }), latest));
+      return;
     }
+    msWriteLedger(svc, recordAttempt(ledger, latest, { ok: res.ok, reason }));
   } catch (e) {
     console.error(`[${svc.id}] auto-deploy sweep failed:`, e.message);
   }
@@ -4179,7 +4188,21 @@ async function checkMicroservice(svc) {
         ? ` CURRENT records ${observed.recorded_version}, but the running ${observed.version_source || "container"} is ${deployed}; runtime wins.`
         : "";
     if (latest && deployed && deployed !== latest) {
-      return { id, label, status: "warning", detail: `Observed healthy (${ms}ms), running ${deployed} from ${observed.image}, while PyPI has ${latest}.${record} Auto-deploy ${svc.autoDeploy ? "tries each version once — check the audit log / Manager logs for the failure" : `is DISABLED (${svc.autoDeployEnvVar}=0)`}. Manual: POST /api/microservices/${id}/deploy.${diskNote}`, observed, actions: [] };
+      // Say WHY it is behind and for how long — the 2026-10-13 files stall sat
+      // four days as "check the audit log" with the reason in a console line.
+      const ledger = msReadLedger(svc);
+      const last = lastAttempt(ledger, latest);
+      const since = firstAttemptAt(ledger, latest);
+      const hours = hoursSince(since);
+      const why = !svc.autoDeploy
+        ? ` Auto-deploy is DISABLED (${svc.autoDeployEnvVar}=0).`
+        : last && !last.ok
+          ? ` The last auto-deploy of ${latest} failed${last.at ? ` at ${last.at}` : ""}: ${last.reason || "no reason recorded"}. It retries every ${AUTO_DEPLOY_RETRY_HOURS} hours.`
+          : " Auto-deploy has not attempted it yet.";
+      const age = hours != null ? ` Behind for ${formatHours(hours)}.` : "";
+      const status = hours != null && hours >= STALE_CRITICAL_HOURS ? "critical" : "warning";
+      const facts = { service: id, running: deployed, latest, behind_since: since, last_failure: last && !last.ok ? last.reason : null };
+      return { id, label, status, facts, detail: `Running ${deployed} while ${latest} is released.${age}${why}${record} ${svc.impact} Manual: POST /api/microservices/${id}/deploy.${diskNote}`, observed, actions: [] };
     }
     if (disk.status === "low") {
       return { id, label, status: "warning", detail: `Observed deployed and healthy in ${ms}ms running ${deployed || observed.image}.${diskNote}`, observed, actions: [] };
