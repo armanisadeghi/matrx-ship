@@ -24,7 +24,7 @@ import {
 } from "./supabase.js";
 import { syncFleetIssuesToOps, opsConfigured } from "./ops_triage.js";
 import { parseLedger, shouldAutoAttempt, recordAttempt, lastAttempt, firstAttemptAt, failureReason, hoursSince, STALE_CRITICAL_HOURS, AUTO_DEPLOY_RETRY_HOURS } from "./deploy_attempts.js";
-import { checkAllReleasedServices, formatHours } from "./release_freshness.js";
+import { checkAllReleasedServices } from "./release_freshness.js";
 import {
   awsConfigured,
   awsRegion,
@@ -4222,7 +4222,7 @@ async function checkMicroservice(svc) {
             : last && last.ok
               ? ` Auto-deploy reported ${latest} installed${last.at ? ` at ${last.at}` : ""}, but the container still runs ${deployed}.`
               : " Auto-deploy has not attempted it yet.";
-      const age = hours != null ? ` Behind for ${formatHours(hours)}.` : "";
+      const age = hours != null ? ` Behind for ${formatDurationMs(hours * 3_600_000, { style: "long", parts: 2 })}.` : "";
       const status = hours != null && hours >= STALE_CRITICAL_HOURS ? "critical" : "warning";
       const facts = { service: id, running: deployed, latest, behind_since: since, last_failure: last && !last.ok ? last.reason : null };
       return { id, label, status, facts, detail: `Running ${deployed} while ${latest} is released.${age}${why}${record} ${svc.impact} Manual: POST /api/microservices/${id}/deploy.${diskNote}`, observed, actions: [] };

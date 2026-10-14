@@ -16,6 +16,7 @@
 
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
+import { formatDurationMs } from "@ai-matrx/kit/format";
 import { STALE_CRITICAL_HOURS, hoursSince } from "./deploy_attempts.js";
 
 const STATE_FILE = "/host-srv/apps/deploy-state/release-freshness.json";
@@ -81,7 +82,7 @@ export function judgeFreshness(svc, { running, latest, latestAt = null, now = Da
   const status = hours >= STALE_CRITICAL_HOURS ? "critical" : "warning";
   return {
     ...base, status, facts,
-    detail: `Running ${short(running)} while ${short(latest)} was released ${formatHours(hours)} ago. ${svc.impact} ${svc.howItShips}`,
+    detail: `Running ${short(running)} while ${short(latest)} was released ${formatDurationMs(hours * 3_600_000, { style: "long", parts: 2 })} ago. ${svc.impact} ${svc.howItShips}`,
   };
 }
 
@@ -94,13 +95,7 @@ export function judgeUnreadable(svc, why, state, now = Date.now()) {
   const base = { id: svc.id, label: svc.label, actions: [] };
   if (hours < UNREADABLE_ALARM_HOURS) return { ...base, status: "unknown", detail: `Freshness check ${why}.` };
   return { ...base, status: "warning", facts: { service: svc.id, unreadable_since: since },
-    detail: `The freshness check for ${svc.label} has ${why} for ${formatHours(hours)}, so a stale build would go unnoticed.` };
-}
-
-export function formatHours(hours) {
-  if (hours < 1) return `${Math.max(1, Math.round(hours * 60))} minutes`;
-  if (hours < 48) return `${Math.round(hours)} hours`;
-  return `${Math.round(hours / 24)} days`;
+    detail: `The freshness check for ${svc.label} has ${why} for ${formatDurationMs(hours * 3_600_000, { style: "long", parts: 2 })}, so a stale build would go unnoticed.` };
 }
 
 async function readRunning(svc) {
