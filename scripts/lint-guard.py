@@ -62,14 +62,28 @@ def linter_for(repo, rel):
     return None
 
 
+def run_tool(cmd, cwd, timeout):
+    """A linter that is missing or slow is SKIPPED, loudly — it never refuses anyone's work."""
+    try:
+        return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        print(f"lint-guard: skipped {os.path.basename(cmd[0])} ({type(e).__name__}: {e}); nothing was checked.", file=sys.stderr)
+        return None
+
+
 def run_eslint(repo, rels):
     exe = os.path.join(repo, "node_modules", ".bin", "eslint")
     if not os.path.exists(exe):
         return []
-    r = subprocess.run([exe, "--format", "json", "--no-warn-ignored", *rels], cwd=repo, capture_output=True, text=True)
+    r = run_tool([exe, "--format", "json", "--no-warn-ignored", *rels], repo, 90)
+    if r is None:
+        return []
     try:
         data = json.loads(r.stdout or "[]")
     except json.JSONDecodeError:
+        data = None
+    if data is None or (not data and r.returncode not in (0, 1)):
+        print(f"lint-guard: the linter failed (exit {r.returncode}): {(r.stderr or r.stdout).strip()[:200]}; nothing was checked.", file=sys.stderr)
         return []
     out = []
     for f in data:
@@ -81,10 +95,15 @@ def run_eslint(repo, rels):
 
 
 def run_ruff(repo, rels):
-    r = subprocess.run(["uv", "run", "--quiet", "ruff", "check", "--output-format", "json", *rels], cwd=repo, capture_output=True, text=True)
+    r = run_tool(["uv", "run", "--quiet", "ruff", "check", "--output-format", "json", *rels], repo, 60)
+    if r is None:
+        return []
     try:
         data = json.loads(r.stdout or "[]")
     except json.JSONDecodeError:
+        data = None
+    if data is None or (not data and r.returncode not in (0, 1)):
+        print(f"lint-guard: the linter failed (exit {r.returncode}): {(r.stderr or r.stdout).strip()[:200]}; nothing was checked.", file=sys.stderr)
         return []
     return [
         {"file": os.path.relpath(d["filename"], repo), "line": d["location"]["row"], "rule": d.get("code") or "syntax", "message": d.get("message", "")}
@@ -122,27 +141,51 @@ def parse_hunks(diff_text):
     return lines
 
 
-def changed_lines(repo, rel, staged):
-    if staged:
-        return parse_hunks(git(repo, "diff", "--cached", "-U0", "--", rel))
-    if not git(repo, "ls-files", "--", rel).strip():
-        return None  # untracked: every line is this change's
-    return parse_hunks(git(repo, "diff", "-U0", "HEAD", "--", rel))
+# git ends a ---/+++ path that contains a space with a TAB.
+DIFF_FILE = re.compile(r'^\+\+\+ (?:b/(.*?)\t?|/dev/null)$')
+
+
+def touched_lines(repo, rels):
+    """{rel: set of changed line numbers | None (new file)} against HEAD, in the WORKTREE's line
+    numbering (what the linter reads). Renames are detected (-M), so a moved file is not new."""
+    out = {r: set() for r in rels}
+    current = None
+    for row in git(repo, "-c", "core.quotepath=off", "diff", "-M", "-U0", "--no-color", "HEAD").splitlines():
+        m = DIFF_FILE.match(row)
+        if m:
+            current = m.group(1)
+            continue
+        if current in out:
+            out[current] |= parse_hunks(row)
+    untracked = set(git(repo, "ls-files", "-z", "--others", "--exclude-standard", "--", *rels).split("\0")) if rels else set()
+    for r in rels:
+        if r in untracked:
+            out[r] = None  # new file: every line is this change's
+    return out
 
 
 def changed_files(repo, staged):
     if staged:
-        return git(repo, "diff", "--cached", "--name-only", "--diff-filter=ACMR").split()
-    tracked = git(repo, "diff", "--name-only", "--diff-filter=ACMR", "HEAD").split()
-    return tracked + git(repo, "ls-files", "--others", "--exclude-standard").split()
+        return [f for f in git(repo, "diff", "--cached", "-z", "--name-only", "-M", "--diff-filter=ACMR").split("\0") if f]
+    tracked = git(repo, "diff", "-z", "--name-only", "-M", "--diff-filter=ACMR", "HEAD").split("\0")
+    return [f for f in tracked + git(repo, "ls-files", "-z", "--others", "--exclude-standard").split("\0") if f]
 
 
-def split(findings, touched):
-    """touched: {rel: set|None}. None = whole file is new. -> (mine, inherited)."""
+def split(findings, touched, written=None, texts=None):
+    """touched: {rel: set|None}; None = whole file is new. -> (mine, inherited).
+
+    written/texts (Stop hook only): {rel: text this session's edit tools wrote}, {rel: current
+    lines}. In a shared checkout the diff against HEAD also holds OTHER lanes' uncommitted lines;
+    a changed line is this session's only if its text is in what this session wrote."""
     mine, inherited = [], []
     for f in findings:
         lines = touched.get(f["file"], set())
-        (mine if lines is None or f["line"] in lines else inherited).append(f)
+        ours = lines is None or f["line"] in lines
+        if ours and written is not None and f["file"] in written:
+            body = (texts.get(f["file"]) or [])
+            line_text = body[f["line"] - 1].strip() if 0 < f["line"] <= len(body) else ""
+            ours = bool(line_text) and line_text in written[f["file"]]
+        (mine if ours else inherited).append(f)
     return mine, inherited
 
 
@@ -164,7 +207,8 @@ def session_of_commit(repo, sha):
 
 
 def session_by_edit_time(repo, rel, when):
-    """No trailer: the conversation whose last edit of the file is closest before the commit."""
+    """No trailer: the conversation that edited the file in the 30 minutes before the commit.
+    Nothing in that window -> nobody is mailed (a wrong recipient is worse than none)."""
     r = subprocess.run(
         [sys.executable, os.path.join(SCRIPTS, "find-file-sessions.py"), "--days", str(BLAME_WINDOW_DAYS + 1), "--json", os.path.join(repo, rel)],
         capture_output=True, text=True,
@@ -178,7 +222,7 @@ def session_by_edit_time(repo, rel, when):
         if row.get("kind") != "edited" or not row.get("last"):
             continue
         t = time.mktime(time.strptime(row["last"], "%Y-%m-%d %H:%M"))
-        if t <= when + 120 and (best is None or t > best[0]):
+        if when - 1800 <= t <= when + 120 and (best is None or t > best[0]):
             # A sub-agent's work belongs to the conversation that spawned it.
             parent = re.search(r"sub-agent .* of ([0-9a-f-]{36})", row.get("title", ""))
             best = (t, (row["tool"], parent.group(1) if parent else row["session"]))
@@ -244,13 +288,21 @@ def describe(mine):
     return "\n".join(f"  {f['file']}:{f['line']}  {f['rule']}  {f['message'].splitlines()[0][:200] if f['message'] else ''}" for f in mine)
 
 
-def check(repo, rels, staged, me):
+def check(repo, rels, staged, me, written=None):
     rels = rels or changed_files(repo, staged)
     rels = [r for r in rels if linter_for(repo, r)]
     if not rels:
         return [], []
-    touched = {r: changed_lines(repo, r, staged) for r in rels}
-    mine, inherited = split(lint(repo, rels), touched)
+    touched = touched_lines(repo, rels)
+    texts = {}
+    if written is not None:
+        for r in rels:
+            try:
+                with open(os.path.join(repo, r), encoding="utf-8", errors="replace") as fh:
+                    texts[r] = fh.read().splitlines()
+            except OSError:
+                pass
+    mine, inherited = split(lint(repo, rels), touched, written, texts)
     told = notify_inherited(repo, inherited, me)
     return mine, told
 
@@ -283,7 +335,8 @@ SERENA_EDIT = re.compile(r"^mcp__serena__(replace|insert|rename|safe_delete|crea
 
 
 def edited_files(transcript):
-    files = set()
+    """{path: text this session's edit tools wrote into it}."""
+    files = {}
     try:
         fh = open(transcript)
     except OSError:
@@ -300,10 +353,12 @@ def edited_files(transcript):
                 if not isinstance(part, dict) or part.get("type") != "tool_use":
                     continue
                 name, inp = part.get("name", ""), part.get("input") or {}
-                if name in EDIT_TOOLS and inp.get("file_path"):
-                    files.add(inp["file_path"])
-                elif SERENA_EDIT.match(name) and inp.get("relative_path"):
-                    files.add(inp["relative_path"])  # resolved against cwd below
+                path = inp.get("file_path") if name in EDIT_TOOLS else inp.get("relative_path") if SERENA_EDIT.match(name) else None
+                if not path:
+                    continue
+                pieces = [inp.get(k) for k in ("new_string", "content", "body", "new_source", "repl")]
+                pieces += [e.get("new_string") for e in inp.get("edits") or [] if isinstance(e, dict)]
+                files[path] = files.get(path, "") + "\n" + "\n".join(p for p in pieces if isinstance(p, str))
     return files
 
 
@@ -317,7 +372,9 @@ def cmd_stop_hook():
     cwd = hook.get("cwd") or os.getcwd()
     counter = os.path.join(STATE_DIR, f"blocks-{session}")
     by_repo = {}
-    for p in edited_files(transcript):
+    written_by_path = edited_files(transcript)
+    written = {}
+    for p, text in written_by_path.items():
         full = p if os.path.isabs(p) else os.path.join(cwd, p)
         repo = repo_root(full) if os.path.exists(full) else None
         if not repo or not full.startswith(CODE):
@@ -325,13 +382,14 @@ def cmd_stop_hook():
         rel = os.path.relpath(full, repo)
         if linter_for(repo, rel):
             by_repo.setdefault(repo, []).append(rel)
+            written.setdefault(repo, {})[rel] = text
     mine = []
     for repo, rels in by_repo.items():
         # Only files still carrying uncommitted changes: committed work already passed pre-commit.
         dirty = set(changed_files(repo, False))
         rels = [r for r in rels if r in dirty]
         if rels:
-            found, _ = check(repo, rels, False, session)
+            found, _ = check(repo, rels, False, session, written.get(repo, {}))
             mine += [dict(f, file=os.path.join(os.path.basename(repo), f["file"])) for f in found]
     if not mine:
         try:
@@ -362,6 +420,10 @@ def cmd_self_test():
     findings = [{"file": "a.ts", "line": 4}, {"file": "a.ts", "line": 9}, {"file": "new.ts", "line": 1}]
     mine, inherited = split(findings, {"a.ts": {4, 5}, "new.ts": None})
     assert [f["line"] for f in mine] == [4, 1] and [f["line"] for f in inherited] == [9], (mine, inherited)
+    # another lane's uncommitted line in the same file is never this session's
+    mine, inherited = split([{"file": "p.tsx", "line": 3}, {"file": "p.tsx", "line": 1}], {"p.tsx": {1, 3}},
+                            {"p.tsx": "\nconst mine = 1;"}, {"p.tsx": ["const mine = 1;", "x", "BAD otherlane"]})
+    assert [f["line"] for f in mine] == [1] and [f["line"] for f in inherited] == [3], (mine, inherited)
     print("lint-guard self-test: ok")
     return 0
 
@@ -382,4 +444,10 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except SystemExit:
+        raise
+    except BaseException as e:  # a broken guard never refuses anyone's work; it says so
+        print(f"lint-guard: internal failure ({type(e).__name__}: {e}); nothing was checked.", file=sys.stderr)
+        sys.exit(0)
