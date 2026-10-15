@@ -13,12 +13,12 @@ All tools live in `__CODE_ROOT__/scripts/`.
 | Sync + release every repo that needs it | `bash scripts/ship-all.sh` from `__CODE_ROOT__` (`--dry-run` to only look). Result: `~/.matrx/ship-all/latest.json` |
 | See what is open in a repo | `<repo>/_conflicts/README.md`; check with `python3 scripts/check-conflict-markers.py` in that repo |
 | Who edited a file | `python3 scripts/find-file-sessions.py <file>` |
-| Tell another conversation something | `python3 scripts/board.py post <conversation id or provider session id> "<message>" [--urgent]` |
+| Tell another conversation something | `python3 scripts/board.py post <conversation id or provider session id> "<message>" [--urgent] --from <your conversation id, or a script name>` |
 
 **Conflicts.** A held file is `<repo>/_conflicts/<time>/<file>.held`: our version, with a FACTS
 block (who changed what, when). GitHub's version is live. Done = final code in the live file,
 `.held` file deleted, its line deleted from the README. Both versions stay in git forever.
 
-**Agent mail.** `board.py post` delivers through agent mail (an urgent message wakes an idle session); the file board and its URGENT marker are gone. How it works: `aidream/aidream/services/agent_messaging/FEATURE.md`.
+**Agent mail.** `board.py post` delivers through agent mail (an urgent message wakes an idle session); the file board and its URGENT marker are gone. Without a session `--from` the message is an automated notice from that script name, never from the person. How it works: `aidream/aidream/services/agent_messaging/FEATURE.md`.
 
 **When a tool fails**, it prints the reason. ripgrep missing (slow lookups): `brew install ripgrep`.

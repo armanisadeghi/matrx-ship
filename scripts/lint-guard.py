@@ -298,7 +298,7 @@ def notify_inherited(repo, inherited, me):
             print(f"[dry] would mail {tool} {session}:\n{text}", file=sys.stderr)
             told.append((tool, session, len(items)))
             continue
-        r = subprocess.run([sys.executable, os.path.join(SCRIPTS, "board.py"), "post", f"{tool} {session}", text, "--urgent"], capture_output=True, text=True)
+        r = subprocess.run([sys.executable, os.path.join(SCRIPTS, "board.py"), "post", f"{tool} {session}", text, "--urgent", "--from", "lint-guard"], capture_output=True, text=True)
         if r.returncode == 0:
             for key, _, _ in items:
                 sent[key] = int(time.time())

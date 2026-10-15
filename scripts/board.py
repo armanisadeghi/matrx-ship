@@ -2,15 +2,17 @@
 """board — tell another AI session something, through agent mail (the file board is retired).
 
   python3 code/scripts/board.py post <conversation id | provider session id (or its first 6+ chars)> "<message>"
-                                     [--urgent] [--from "<your conversation id | who you are>"]
+                                     [--urgent] [--from "<your conversation id | script name>"]
 
 post   sends the message into the recipient's direct room on the server (REST door
        POST /api/agent-messages/post, service aidream/services/agent_messaging). Priority is `note`,
        or `urgent` with --urgent (an urgent message wakes an idle Claude Code session, a Matrx 2
        session, and reaches Codex at its next hook). The recipient is an AI Matrx conversation
        id, or a provider session id ("claude 7665566b" works: the leading word is ignored).
-       Sender: --from <conversation id> (or env MATRX_CONVERSATION_ID) sends as that session;
-       anything else sends as the signed-in person, with "[from <who>]" in front of the text.
+       Sender: --from <conversation id> (or env MATRX_CONVERSATION_ID) sends as that session.
+       Anything else is an AUTOMATED NOTICE, never the person: --from "<script or lane name>"
+       (e.g. "ship-all", "frontend release"), else env MATRX_AUTOMATION_LABEL, else the calling
+       script's name. The recipient reads "automated notice from <label>".
 list / done   retired. Mail is read by the recipient session itself (agent_messages tool,
        action "read"), and nothing is left to deliver by hand.
 
@@ -103,12 +105,32 @@ def parse(args):
     return rest[0], " ".join(rest[1].split()), urgent, opts.get("--from") or os.environ.get("MATRX_CONVERSATION_ID", "")
 
 
+def caller_label():
+    """The calling script's name (lint-guard.py -> "lint-guard"); "" for a shell or an agent."""
+    try:
+        r = subprocess.run(["ps", "-o", "command=", "-p", str(os.getppid())], capture_output=True, text=True)
+        args = r.stdout.split()
+    except OSError:
+        return ""
+    for a in args[:3]:
+        base = os.path.basename(a)
+        if base.endswith((".py", ".sh", ".mjs", ".js")) and base != "board.py":
+            return base.rsplit(".", 1)[0]
+    return ""
+
+
+def automation_label(who):
+    """Who an automated notice is from: never the person whose sign-in carries it."""
+    label = " ".join((who or os.environ.get("MATRX_AUTOMATION_LABEL") or caller_label()).split())
+    return (label or "board.py (sender not named)")[:80]
+
+
 def build(to, msg, urgent, who):
     body = {"to": to, "priority": "urgent" if urgent else "note"}
     if UUID.match(who.strip()):
         body.update({"from": who.strip(), "text": msg})
     else:
-        body.update({"from": "person", "text": ("[from %s] %s" % (who, msg)) if who else msg})
+        body.update({"from": "automation:" + automation_label(who), "text": msg})
     return body
 
 
