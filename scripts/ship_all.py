@@ -182,6 +182,22 @@ def stale_packages(repo):
     return stale
 
 
+def npm_publish_lag(info):
+    """THE PUBLISH-LAG ALARM (2026-10-15): a repo that publishes @ai-matrx packages (aidream) carries
+    scripts/check-npm-publish-lag.mjs. Its ERROR lines name every package whose source on main npm
+    latest has not carried for 30+ minutes (or the plan held/blocked); PENDING/NO-OP lines are fine.
+    A consumer's lockfile can only be as new as npm, so a lost publish was invisible to
+    stale_packages(): every consumer read "at npm latest" while npm itself was behind main."""
+    script = os.path.join(info["path"], "scripts", "check-npm-publish-lag.mjs")
+    if not os.path.isfile(script):
+        return []
+    rc, out, err = run(["node", script, "--no-fetch"], info["path"], timeout=300)
+    if rc == 0:
+        return []
+    keep = [l.strip() for l in out.splitlines() if " ERROR " in l or "UNMEASURED" in l or "REMEDY" in l]
+    return keep or ["check-npm-publish-lag exited %d: %s" % (rc, (err or out).strip()[-300:])]
+
+
 # `source` reads the whole file before running it. Plain `bash ./ship.sh` reads line by line, so
 # when its own sync pulls a new ship.sh the running copy breaks mid-file (matrx-frontend
 # 2026-10-10 19:23: "syntax error near unexpected token", nothing released).
@@ -748,6 +764,10 @@ def main(args=None):
             info["not_live"] = (release_liveness(info) + failed_release_workflows(info)) if info["fetch_ok"] else []
         except Exception as error:  # never let the check vanish silently
             info["not_live"] = ["release liveness check crashed: %s" % error]
+        try:
+            info["npm_lag"] = npm_publish_lag(info) if info["fetch_ok"] else []
+        except Exception as error:  # never let the check vanish silently
+            info["npm_lag"] = ["publish-lag check crashed: %s" % error]
 
     # ── 3. only now: what is open, and who edited each held file (one pass) ──────────────
     for info in infos:
@@ -799,11 +819,17 @@ def main(args=None):
     stale_after = [r for r in infos if r.get("stale_packages_after")]
     landing = [r for r in infos if r.get("needs_landing")]
     not_live = [r for r in infos if r.get("not_live")]
+    npm_lag = [r for r in infos if r.get("npm_lag")]
     say("")
     if not_live:
         say("RELEASES NOT LIVE — EVERYTHING ELSE STOPS: read the failing build log, fix the cause, ship, watch the new build until it is live")
         for r in not_live:
             for line in r["not_live"]:
+                say("  %s: %s" % (r["repo"], line))
+    if npm_lag:
+        say("PACKAGES NOT ON NPM — a package change that never reached npm is a release that is not live: publish it, then fix why the push run did not")
+        for r in npm_lag:
+            for line in r["npm_lag"]:
                 say("  %s: %s" % (r["repo"], line))
     for r in infos:
         for line in r.get("landed", []):
@@ -831,7 +857,7 @@ def main(args=None):
         for r in problems:
             say("  %s: %s  %s" % (r["repo"], r["status"], r.get("release_slot_blocker", r.get("log", r.get("fetch_error", "")))))
     say("done in %s. summary: %s" % (fmt(time.time() - t_all), os.path.join(out_dir, "summary.json")))
-    return 1 if (open_repos or problems or landing or stale_after or not_live) else 0
+    return 1 if (open_repos or problems or landing or stale_after or not_live or npm_lag) else 0
 
 
 if __name__ == "__main__":
