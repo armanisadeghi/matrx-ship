@@ -192,10 +192,20 @@ def npm_publish_lag(info):
     if not os.path.isfile(script):
         return []
     rc, out, err = run(["node", script, "--no-fetch"], info["path"], timeout=300)
-    if rc == 0:
-        return []
-    keep = [l.strip() for l in out.splitlines() if " ERROR " in l or "UNMEASURED" in l or "REMEDY" in l]
-    return keep or ["check-npm-publish-lag exited %d: %s" % (rc, (err or out).strip()[-300:])]
+    found = []
+    if rc != 0:
+        keep = [l.strip() for l in out.splitlines() if " ERROR " in l or "UNMEASURED" in l or "REMEDY" in l]
+        found += keep or ["check-npm-publish-lag exited %d: %s" % (rc, (err or out).strip()[-300:])]
+    # THE FAILED-PUBLISH CLASSES (2026-10-15, replaces the paid publish-watch workflow and its
+    # "NPM PUBLISH FAILING" issue): FAILING / VERIFY_FAILED / LATEST_BEHIND / NO_GITHEAD / UNBOUND /
+    # GATE_BLOCKED / STUCK / STALE, read locally from `gh` + the npm registry at no CI cost.
+    health = os.path.join(info["path"], "scripts", "check_ts_publish_health.mjs")
+    if os.path.isfile(health):
+        hrc, hout, herr = run(["node", health], info["path"], timeout=600)
+        if hrc != 0:
+            lines = [l.strip() for l in hout.splitlines() if l.startswith("[")]
+            found += lines or ["check_ts_publish_health exited %d: %s" % (hrc, (herr or hout).strip()[-300:])]
+    return found
 
 
 # `source` reads the whole file before running it. Plain `bash ./ship.sh` reads line by line, so
