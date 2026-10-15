@@ -95,7 +95,11 @@ def run_eslint(repo, rels):
 
 
 def run_ruff(repo, rels):
-    r = run_tool(["uv", "run", "--quiet", "ruff", "check", "--output-format", "json", *rels], repo, 60)
+    # --no-sync: `uv run` re-resolves/syncs the whole project env on every call (seconds when idle, minutes
+    # under lock contention with other agents). Prefer the venv's own ruff; fall back to uv --no-sync.
+    venv_ruff = os.path.join(repo, ".venv", "bin", "ruff")
+    cmd = [venv_ruff] if os.path.exists(venv_ruff) else ["uv", "run", "--no-sync", "--quiet", "ruff"]
+    r = run_tool([*cmd, "check", "--output-format", "json", *rels], repo, 60)
     if r is None:
         return []
     try:
@@ -191,13 +195,26 @@ def split(findings, touched, written=None, texts=None):
 
 # ---------------------------------------------------------------- inherited -> its author
 
+_BLAME_CACHE = {}
+
+
 def blame(repo, rel, line):
-    out = git(repo, "blame", "--porcelain", "-L", f"{line},{line}", "HEAD", "--", rel)
-    if not out:
-        return None
-    sha = out.split()[0]
-    t = re.search(r"^committer-time (\d+)", out, re.M)
-    return sha, int(t.group(1)) if t else 0
+    """(sha, committer-time) of a line. One `git blame` per FILE, not per finding: a file with 900
+    inherited errors used to cost 900 blames (minutes) on every commit that touched it."""
+    key = (repo, rel)
+    if key not in _BLAME_CACHE:
+        table, sha, times = {}, None, {}
+        for row in git(repo, "blame", "--porcelain", "HEAD", "--", rel).splitlines():
+            m = re.match(r"^([0-9a-f]{40}) \d+ (\d+)", row)
+            if m:
+                sha = m.group(1)
+                table[int(m.group(2))] = sha
+            elif row.startswith("committer-time ") and sha:
+                times[sha] = int(row.split()[1])
+        _BLAME_CACHE[key] = (table, times)
+    table, times = _BLAME_CACHE[key]
+    sha = table.get(line)
+    return (sha, times.get(sha, 0)) if sha else None
 
 
 def session_of_commit(repo, sha):
@@ -237,12 +254,22 @@ def load_sent():
         return {}
 
 
+# Mailing an inherited error's author is a courtesy, never a gate: it gets a time budget so a commit
+# is not held hostage by a file that carries hundreds of old errors.
+NOTIFY_BUDGET_SECONDS = 8
+
+
 def notify_inherited(repo, inherited, me):
     if not inherited:
         return []
     sent = load_sent()
     by_session = {}
+    who_cache = {}
+    deadline = time.time() + NOTIFY_BUDGET_SECONDS
     for f in inherited:
+        if time.time() > deadline:
+            print(f"lint-guard: notify budget ({NOTIFY_BUDGET_SECONDS}s) spent; remaining inherited errors are not mailed this run.", file=sys.stderr)
+            break
         b = blame(repo, f["file"], f["line"])
         if not b or set(b[0]) == {"0"}:
             continue  # uncommitted: someone's live edit; their own Stop hook owns it
@@ -252,7 +279,10 @@ def notify_inherited(repo, inherited, me):
         key = hashlib.sha1(f"{sha}|{f['file']}|{f['rule']}|{f['message']}".encode()).hexdigest()
         if key in sent:
             continue
-        who = session_of_commit(repo, sha) or session_by_edit_time(repo, f["file"], when)
+        ck = (sha, f["file"])
+        if ck not in who_cache:
+            who_cache[ck] = session_of_commit(repo, sha) or session_by_edit_time(repo, f["file"], when)
+        who = who_cache[ck]
         if not who or who[1] == me:
             continue
         by_session.setdefault(who, []).append((key, sha, f))
