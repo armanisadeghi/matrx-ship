@@ -4,7 +4,6 @@ import { useState, useCallback, useEffect } from "react";
 import { api, API } from "@/lib/api";
 import type {
   InstanceInfo,
-  SandboxInfo,
   TokenInfo,
   SystemInfo,
   BuildInfo,
@@ -16,7 +15,6 @@ export function useAdminData(authed: boolean) {
   const [role, setRole] = useState<string>("viewer");
 
   const [instances, setInstances] = useState<InstanceInfo[]>([]);
-  const [sandboxes, setSandboxes] = useState<SandboxInfo[]>([]);
   const [tokens, setTokens] = useState<TokenInfo[]>([]);
   const [systemInfo, setSystemInfo] = useState<SystemInfo | null>(null);
   const [buildInfo, setBuildInfo] = useState<BuildInfo | null>(null);
@@ -26,13 +24,6 @@ export function useAdminData(authed: boolean) {
     try {
       const data = await api<{ instances: InstanceInfo[] }>(API.INSTANCES);
       setInstances(data.instances || []);
-    } catch { /* ignore */ }
-  }, []);
-
-  const loadSandboxes = useCallback(async () => {
-    try {
-      const data = await api<{ sandboxes: SandboxInfo[] }>(API.SANDBOXES);
-      setSandboxes(data.sandboxes || []);
     } catch { /* ignore */ }
   }, []);
 
@@ -67,13 +58,12 @@ export function useAdminData(authed: boolean) {
   const loadAll = useCallback(async () => {
     await Promise.all([
       loadInstances(),
-      loadSandboxes(),
       loadTokens(),
       loadSystem(),
       loadBuildInfo(),
       loadBuildHistory(),
     ]);
-  }, [loadInstances, loadSandboxes, loadTokens, loadSystem, loadBuildInfo, loadBuildHistory]);
+  }, [loadInstances, loadTokens, loadSystem, loadBuildInfo, loadBuildHistory]);
 
   useEffect(() => {
     if (authed) {
@@ -87,13 +77,11 @@ export function useAdminData(authed: boolean) {
     role,
     setRole,
     instances,
-    sandboxes,
     tokens,
     systemInfo,
     buildInfo,
     buildHistory,
     loadInstances,
-    loadSandboxes,
     loadTokens,
     loadSystem,
     loadBuildInfo,

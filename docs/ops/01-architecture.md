@@ -8,7 +8,7 @@ The entire server infrastructure follows a strict four-layer hierarchy. Each lay
 Layer 0 — Traefik          (reverse proxy, routes all traffic)
 Layer 1 — Server Manager   (deploys & manages everything else)
 Layer 2 — Deploy Server    (manages the Server Manager itself)
-Layer 3 — App Instances    (Ship instances, agents, MCP servers)
+Layer 3 — App Instances    (Ship instances, MCP servers)
 ```
 
 ### Layer 0: Traefik
@@ -28,7 +28,6 @@ Layer 3 — App Instances    (Ship instances, agents, MCP servers)
 
 - Deploys, monitors, and manages every other service
 - Creates and removes Ship app instances with dedicated Postgres databases
-- Manages agent environments (Sysbox-based VM-like containers)
 - Provides MCP protocol endpoint for AI agent interactions
 - Exposes REST API and admin web UI
 - Container: `matrx-manager`
@@ -56,7 +55,6 @@ Layer 3 — App Instances    (Ship instances, agents, MCP servers)
 - Each Ship instance runs as a Next.js container with its own dedicated Postgres
 - Naming pattern: `ship-{name}` (app container), `ship-{name}-db` (database)
 - Managed entirely by the Server Manager — not directly
-- Agent environments run via Sysbox for VM-like isolation
 
 ---
 
@@ -83,8 +81,6 @@ Internet → Traefik (443/80) → proxy network → target container
 | Server Manager | 3000 | Via Traefik |
 | Deploy Server | 3000 | Via Traefik |
 | Ship Instances | 3000 | Via Traefik |
-| PostgreSQL (shared) | 5432 | Internal only |
-| pgAdmin | 80 | Via Traefik |
 | Instance Postgres | 5432 | Internal only (per-instance) |
 
 ### DNS / Traefik Routing
@@ -97,7 +93,6 @@ Traefik automatically routes based on the `Host()` rule in Docker labels:
 manager.dev.codematrx.com → matrx-manager:3000
 deploy.dev.codematrx.com  → deploy-server:3000
 {name}.dev.codematrx.com  → ship-{name}:3000
-pgadmin.dev.codematrx.com → pgadmin:80
 traefik.dev.codematrx.com → traefik:8080
 ```
 
@@ -154,9 +149,6 @@ labels:
 │   ├── traefik.yml
 │   ├── acme.json
 │   └── dynamic/
-├── postgres/             # Shared PostgreSQL
-│   ├── docker-compose.yml
-│   └── data/
 ├── apps/
 │   ├── server-manager/   # Server Manager deployment
 │   │   ├── docker-compose.yml
@@ -165,9 +157,6 @@ labels:
 │   └── deploy/           # Deploy Server deployment
 │       ├── docker-compose.yml
 │       └── .env
-├── agent-envs/           # Agent environments
-│   ├── docker-compose.yml
-│   └── images/
 ├── instances/            # App instance data (created dynamically)
 │   └── {name}/
 │       ├── docker-compose.yml

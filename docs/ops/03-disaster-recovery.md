@@ -7,8 +7,7 @@ When things go wrong, fix in this order:
 1. **Traefik** — without it, nothing is accessible
 2. **Server Manager** — without it, nothing can be managed
 3. **Deploy Server** — backup management path
-4. **PostgreSQL** — app data depends on it
-5. **App Instances** — individual apps
+4. **App Instances** — individual apps
 
 ---
 
@@ -100,25 +99,13 @@ curl -s http://localhost:8080/api/http/services | jq '.[] | {name: .name, status
 
 ### Diagnosis
 ```bash
-# Check shared Postgres
-docker ps --filter "name=matrx-postgres"
-docker exec matrx-postgres pg_isready
-
 # Check instance-specific Postgres
 docker ps --filter "name=ship-{name}-db"
 docker exec ship-{name}-db pg_isready -U postgres
-
-# Check database accessibility
-docker exec matrx-postgres psql -U postgres -c "\conninfo"
 ```
 
 ### Resolution
-1. **If Postgres is down:**
-   ```bash
-   cd /srv/postgres && docker compose up -d
-   ```
-
-2. **If instance DB is down:**
+1. **If instance DB is down:**
    ```bash
    # Restart the instance database
    docker restart ship-{name}-db
@@ -128,7 +115,7 @@ docker exec matrx-postgres psql -U postgres -c "\conninfo"
      https://manager.dev.codematrx.com/api/instances/{name}/restart
    ```
 
-3. **If data is corrupted:**
+2. **If data is corrupted:**
    ```bash
    # Stop the database
    docker stop ship-{name}-db
@@ -234,8 +221,8 @@ This is the nuclear option. Use when the VPS is unrecoverable.
    aws s3 ls s3://your-bucket/backups/
    aws s3 cp s3://your-bucket/backups/latest.sql /tmp/restore.sql
    
-   # Restore
-   docker exec -i matrx-postgres psql -U postgres < /tmp/restore.sql
+   # Restore into the instance database
+   docker exec -i ship-{name}-db psql -U postgres < /tmp/restore.sql
    ```
 
 5. **Verify all services:**

@@ -56,17 +56,6 @@ button instead of hand-recreating the container.
 
 ---
 
-## PostgreSQL (`/srv/postgres/.env`)
-
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `POSTGRES_USER` | Yes | Superuser username (default: `postgres`) |
-| `POSTGRES_PASSWORD` | Yes | Superuser password |
-| `PGADMIN_DEFAULT_EMAIL` | Yes | pgAdmin login email |
-| `PGADMIN_DEFAULT_PASSWORD` | Yes | pgAdmin login password |
-
----
-
 ## Ship App Instances (per instance)
 
 Each Ship instance inherits these from the Server Manager's deployment template:
@@ -93,9 +82,6 @@ These are required only during initial server provisioning:
 | `SERVER_IP` | Yes | Server's public IP address |
 | `DOMAIN_SUFFIX` | Yes | Base domain (e.g., `dev.codematrx.com`) |
 | `ACME_EMAIL` | Yes | Let's Encrypt email |
-| `POSTGRES_PASSWORD` | Yes | Shared Postgres password |
-| `PGADMIN_EMAIL` | Yes | pgAdmin admin email |
-| `PGADMIN_PASSWORD` | Yes | pgAdmin admin password |
 | `MANAGER_BEARER_TOKEN` | Yes | Server Manager auth token |
 | `DEPLOY_TOKEN` | Yes | Deploy Server auth token |
 | `GITHUB_TOKEN` | No | GitHub PAT for private repos |

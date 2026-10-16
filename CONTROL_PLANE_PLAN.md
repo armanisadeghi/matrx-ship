@@ -50,7 +50,7 @@ Maximum power + strong audit + easy revocation, **no approval gates** (matches o
 
 - **Cred:** `matrx-admin` (AdministratorAccess + SSM) in `/srv/projects/sec/aws_matrx-admin_accessKeys.csv` — works; SSM reaches both EC2 boxes. Host has boto3 1.42, no aws-cli. Manager (Node) has no AWS SDK yet.
 - **EC2 (acct 872515272894, us-east-1):** `i-084f757c1e47d4efb` matrx-sandbox-host-dev (EC2 orchestrator, systemd; slim sandboxes run here); `i-0241f4fee60fb02f6` matrx-python-server (aidream backend, docker; env from `/etc/aidream/app.env`).
-- **Mgmt containers:** traefik, postgres, pgadmin, matrx-manager, matrx-deploy, matrx-orchestrator, agent-1. ~13 Deployment stacks. Sandboxes: `sbx-*` slim + deprecated `sandbox-1..5`.
+- **Mgmt containers:** traefik, matrx-manager, matrx-deploy, matrx-orchestrator. ~13 Deployment stacks. Sandboxes: `sbx-*` slim. (Standalone postgres/pgadmin, `agent-1` and the `sandbox-1..5` starter pool were retired 2026-10-16.)
 
 ## Phasing
 

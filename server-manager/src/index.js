@@ -302,8 +302,6 @@ const SAFE_ARG_RE = /^[A-Za-z0-9 _.=:/@,+-]*$/;
 function isSafeArg(s) {
   return typeof s === "string" && s.length <= 512 && SAFE_ARG_RE.test(s);
 }
-// A Postgres database/identifier name.
-const PG_IDENT_RE = /^[A-Za-z0-9_-]+$/;
 // Escape a string for safe literal use inside a `new RegExp(...)`.
 function escapeRegExp(s) {
   return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -1405,26 +1403,6 @@ function createServer(ctx = {}) {
     }
   );
 
-  // ── DATABASE TOOLS ──────────────────────────────────────────────────────
-  server.tool("postgres_query", "Execute a read-only SQL query.",
-    { query: z.string(), database: z.string().optional() },
-    async ({ query, database }) => {
-      const trimmed = query.trim().toUpperCase();
-      if (!["SELECT", "SHOW", "EXPLAIN", "\\D"].some((p) => trimmed.startsWith(p)))
-        return textResult({ error: "Only read-only queries allowed." });
-      const db = database || "matrx";
-      if (!PG_IDENT_RE.test(db)) return textResult({ error: "Invalid database name" });
-      // argv form: the query is a single `-c` argument, never concatenated into
-      // a shell string, so it can't break out regardless of its contents.
-      try {
-        const out = execFileSync("docker", ["exec", "postgres", "psql", "-U", "matrx", "-d", db, "-c", query], { encoding: "utf-8", timeout: 15000, maxBuffer: 10 * 1024 * 1024 });
-        return textResult({ success: true, output: out.trim() });
-      } catch (e) {
-        return textResult({ success: false, output: e.stdout?.trim() || "", error: e.stderr?.trim() || e.message });
-      }
-    }
-  );
-
   // ── APP DEPLOYMENT TOOLS ────────────────────────────────────────────────
   server.tool("app_create",
     "Create a fully isolated matrx-ship instance with its own PostgreSQL and Traefik subdomain.",
@@ -2383,167 +2361,8 @@ app.get("/api/docs", authMiddleware, async (req, res) => {
   res.json({ docs });
 });
 
-// ── Sandboxes ──────────────────────────────────────────────────────────────
-function listSandboxes() {
-  try {
-    const raw = execSync(
-      `docker ps -a --filter "name=sandbox-" --format '{{json .}}'`,
-      { encoding: "utf-8", timeout: 10000 }
-    ).trim();
-    if (!raw) return [];
-    return raw.split("\n").filter(Boolean).map((line) => {
-      const c = JSON.parse(line);
-      // Only include actual sandbox instances (sandbox-1, sandbox-2, etc.)
-      if (!/^sandbox-\d+$/.test(c.Names)) return null;
-      const name = c.Names;
-      const num = name.replace("sandbox-", "");
-      return {
-        name,
-        id: c.ID,
-        status: c.Status,
-        state: c.State,  // running, exited, etc
-        image: c.Image,
-        created: c.CreatedAt,
-        url: `https://${name}.${DOMAIN_SUFFIX}`,
-        ports: c.Ports,
-      };
-    }).filter(Boolean);
-  } catch { return []; }
-}
-
-function getSandboxDetail(name) {
-  try {
-    const raw = execSync(
-      `docker inspect ${name} --format '{{json .}}'`,
-      { encoding: "utf-8", timeout: 10000 }
-    );
-    const c = JSON.parse(raw);
-    const env = {};
-    (c.Config?.Env || []).forEach((e) => {
-      const [k, ...v] = e.split("=");
-      env[k] = v.join("=");
-    });
-    // Get stats
-    let stats = null;
-    try {
-      const s = execSync(
-        `docker stats ${name} --no-stream --format '{{json .}}'`,
-        { encoding: "utf-8", timeout: 5000 }
-      );
-      stats = JSON.parse(s);
-    } catch { }
-
-    // Get logs
-    let logs = "";
-    try {
-      logs = execSync(`docker logs ${name} --tail 100 2>&1`, { encoding: "utf-8", timeout: 5000 });
-    } catch { }
-
-    return {
-      name,
-      url: `https://${name}.${DOMAIN_SUFFIX}`,
-      state: c.State?.Status || "unknown",
-      started_at: c.State?.StartedAt,
-      created: c.Created,
-      image: c.Config?.Image,
-      sandbox_id: env.SANDBOX_ID || "",
-      sandbox_mode: env.SANDBOX_MODE || "",
-      env,
-      stats: stats ? {
-        cpu: stats.CPUPerc,
-        mem: stats.MemUsage,
-        mem_pct: stats.MemPerc,
-        net: stats.NetIO,
-        block: stats.BlockIO,
-        pids: stats.PIDs,
-      } : null,
-      health: c.State?.Health?.Status || null,
-      restart_count: c.RestartCount,
-      logs,
-    };
-  } catch (e) {
-    return { error: e.message };
-  }
-}
-
-app.get("/api/sandboxes", authMiddleware, async (_req, res) => {
-  const sandboxes = listSandboxes();
-  res.json({ sandboxes, count: sandboxes.length });
-});
-
-app.get("/api/sandboxes/:name", authMiddleware, async (req, res) => {
-  const name = req.params.name;
-  if (!/^sandbox-\d+$/.test(name)) return res.status(400).json({ error: "Invalid sandbox name" });
-  const detail = getSandboxDetail(name);
-  if (detail.error) return res.status(404).json(detail);
-  res.json(detail);
-});
-
-app.get("/api/sandboxes/:name/logs", authMiddleware, async (req, res) => {
-  const name = req.params.name;
-  if (!/^sandbox-\d+$/.test(name)) return res.status(400).json({ error: "Invalid sandbox name" });
-  // Coerce tail to a bounded integer — it was interpolated unquoted, so a value
-  // like `200 && docker rmi …` would have run as a second command.
-  const tail = Math.min(Math.max(parseInt(req.query.tail, 10) || 200, 1), 10000);
-  try {
-    const output = execSync(`docker logs ${name} --tail ${tail} 2>&1`, { encoding: "utf-8", timeout: 10000 });
-    res.json({ output });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-app.post("/api/sandboxes/:name/restart", authMiddleware, requireRole("admin", "deployer"), async (req, res) => {
-  const name = req.params.name;
-  if (!/^sandbox-\d+$/.test(name)) return res.status(400).json({ error: "Invalid sandbox name" });
-  try {
-    execSync(`docker restart ${name}`, { timeout: 30000 });
-    res.json({ success: true, message: `Restarted ${name}` });
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
-
-app.post("/api/sandboxes/:name/stop", authMiddleware, requireRole("admin"), async (req, res) => {
-  const name = req.params.name;
-  if (!/^sandbox-\d+$/.test(name)) return res.status(400).json({ error: "Invalid sandbox name" });
-  try {
-    execSync(`docker stop ${name}`, { timeout: 30000 });
-    res.json({ success: true, message: `Stopped ${name}` });
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
-
-app.post("/api/sandboxes/:name/start", authMiddleware, requireRole("admin", "deployer"), async (req, res) => {
-  const name = req.params.name;
-  if (!/^sandbox-\d+$/.test(name)) return res.status(400).json({ error: "Invalid sandbox name" });
-  try {
-    execSync(`docker start ${name}`, { timeout: 30000 });
-    res.json({ success: true, message: `Started ${name}` });
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
-
-app.post("/api/sandboxes/:name/exec", authMiddleware, requireRole("admin", "deployer"), async (req, res) => {
-  const name = req.params.name;
-  const { command } = req.body;
-  if (!/^sandbox-\d+$/.test(name)) return res.status(400).json({ error: "Invalid sandbox name" });
-  if (!command) return res.status(400).json({ error: "command required" });
-  // argv-style spawn — no shell-string concatenation. The previous form
-  // built `bash -c "${command.replace(/"/g, '\\"')}"`, which only escaped
-  // double-quotes — backticks, $(...), backslashes still let an admin
-  // (or anything that gets the admin token) break out. With execFileSync
-  // every element of argv is passed as a separate process argument and
-  // the shell only interprets `command` itself, not the surrounding wrap.
-  try {
-    const output = execFileSync(
-      "docker",
-      ["exec", "-u", "agent", name, "bash", "-c", command],
-      { encoding: "utf-8", timeout: 30000 },
-    );
-    res.json({ output });
-  } catch (e) { res.status(500).json({ output: e.stdout || "", error: e.stderr || e.message }); }
-});
-
 // ─── Orchestrator-spawned sandboxes (sbx-XXX) ──────────────────────────────
-// The static sandbox-N pool above pre-dates the orchestrator and is being
-// retired. The /api/orchestrator-sandboxes/* surface below talks to the
+// The /api/orchestrator-sandboxes/* surface below talks to the
 // hosted matrx-orchestrator (`https://orchestrator.dev.codematrx.com` or
 // the URL in MATRX_HOSTED_ORCHESTRATOR_URL) so the Server Manager admin UI
 // can show every dynamically-spawned aidream sandbox + its diagnostics +
@@ -4839,14 +4658,10 @@ const KIND_CATEGORY = {
   host: { category: "server", categoryLabel: "Servers", order: 0 },
   "control-plane": { category: "control-plane", categoryLabel: "Control plane", order: 1 },
   proxy: { category: "infrastructure", categoryLabel: "Infrastructure", order: 2 },
-  database: { category: "infrastructure", categoryLabel: "Infrastructure", order: 2 },
-  "db-admin": { category: "infrastructure", categoryLabel: "Infrastructure", order: 2 },
   orchestrator: { category: "sandbox-system", categoryLabel: "Sandbox system", order: 3 },
   sandbox: { category: "sandbox", categoryLabel: "Sandboxes", order: 4 },
-  "sandbox-legacy": { category: "sandbox", categoryLabel: "Sandboxes", order: 4 },
   "ship-instance": { category: "app", categoryLabel: "App deployments", order: 5 },
   "instance-db": { category: "database", categoryLabel: "Databases", order: 6 },
-  "agent-env": { category: "agent-env", categoryLabel: "Agent environments", order: 7 },
   unknown: { category: "other", categoryLabel: "Other", order: 9 },
 };
 function categoryFor(kind) { return KIND_CATEGORY[kind] || KIND_CATEGORY.unknown; }
@@ -4872,15 +4687,11 @@ function describeContainer(name, image, tmpl, warm, displayNames) {
   const display = (n) => displayNames[n] || n;
   const img = image || "";
   if (name === "traefik") return { kind: "proxy", title: "Traefik reverse proxy", description: "Routes ALL HTTPS traffic for *.dev.codematrx.com and manages TLS certs. Breaking it takes every site offline.", danger: true };
-  if (name === "postgres") return { kind: "database", title: "Shared Postgres (pgvector)", description: "The main shared PostgreSQL database. Holds shared application data across projects.", danger: true };
-  if (name === "pgadmin") return { kind: "db-admin", title: "pgAdmin", description: "Web UI for administering the Postgres databases.", danger: false };
   if (name === "matrx-manager") return { kind: "control-plane", title: "Server Manager — THIS control plane", description: "The brain of the host: manages every container, owns the deployments registry, holds the Docker socket. Access here ≈ control of the entire server.", danger: true };
   if (name === "matrx-deploy") return { kind: "control-plane", title: "Deploy Server (recovery lifeline)", description: "The safety net that can rebuild the Server Manager if it breaks. Keep it pristine.", danger: true };
   if (name === "matrx-orchestrator") return { kind: "orchestrator", title: "Sandbox Orchestrator (hosted tier)", description: "Spawns and manages the ephemeral sandbox containers that agents run in.", danger: true };
-  if (name.startsWith("agent-") && img.includes("agent-envs")) return { kind: "agent-env", title: "Agent VM (sysbox)", description: "An isolated sysbox-based VM for agents — shell only, not wired into the app stack.", danger: false };
   if (name.startsWith("db-")) return { kind: "instance-db", title: `Database — ${display(name.slice(3))}`, description: `The PostgreSQL database for the "${display(name.slice(3))}" deployment. Contains that one app's data.`, danger: true };
   if (img.startsWith("matrx-sandbox") || tmpl) return { kind: "sandbox", title: warm ? "Sandbox (warm pool, idle)" : "Sandbox container", description: `An ephemeral agent sandbox${tmpl ? ` (template: ${tmpl})` : ""}.${warm ? " Unclaimed — waiting in the warm pool." : ""} A scratch machine, not infrastructure — safe to experiment in.`, danger: false };
-  if (/^sandbox-\d+$/.test(name)) return { kind: "sandbox-legacy", title: "Starter-pool sandbox (deprecated)", description: "An old static sandbox (sandbox-1..5) that predates the orchestrator. Being retired.", danger: false };
   if (img === "matrx-ship:latest") return { kind: "ship-instance", title: `Ship app — ${display(name)}`, description: `A per-project Matrx Ship instance (version tracking + admin portal) for "${display(name)}", served at ${name}.dev.codematrx.com.`, danger: false };
   return { kind: "unknown", title: name, description: `Unrecognized container (image: ${img || "unknown"}).`, danger: false };
 }

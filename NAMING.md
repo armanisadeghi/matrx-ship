@@ -94,8 +94,7 @@ What you see in `docker ps`, and what each pattern means:
 | `matrx-deploy` | The Deploy Server |
 | `matrx-orchestrator` | The Sandbox Orchestrator (hosted Tier) |
 | `sbx-<12-hex>` (e.g. `sbx-14a6b8a17189`) | A **Sandbox** (orchestrator-spawned) |
-| `sandbox-1` … `sandbox-5` | The deprecated static starter pool |
-| `traefik`, `postgres`, `pgadmin`, `agent-1` | Shared infra |
+| `traefik` | Shared infra |
 
 ---
 

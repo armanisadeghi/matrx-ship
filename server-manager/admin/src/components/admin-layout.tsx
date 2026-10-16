@@ -4,7 +4,6 @@ import { useState } from "react";
 import {
   Server,
   Layers,
-  Terminal,
   Key,
   History,
   Monitor,
@@ -24,7 +23,6 @@ import { ThemeToggle } from "@/components/theme-toggle";
 
 export type AdminView =
   | "instances"
-  | "sandboxes"
   | "tokens"
   | "builds"
   | "system"
@@ -48,7 +46,6 @@ const navGroups: NavGroup[] = [
     label: "Main",
     items: [
       { id: "instances", label: "Instances", icon: Layers },
-      { id: "sandboxes", label: "Sandboxes", icon: Terminal },
     ],
   },
   {

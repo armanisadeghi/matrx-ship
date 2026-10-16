@@ -10,7 +10,6 @@ export default function InstancesPage() {
   const data = useAdminData(authed);
   const actions = useAdminActions({
     loadInstances: data.loadInstances,
-    loadSandboxes: data.loadSandboxes,
     loadTokens: data.loadTokens,
     loadBuildInfo: data.loadBuildInfo,
     loadAll: data.loadAll,

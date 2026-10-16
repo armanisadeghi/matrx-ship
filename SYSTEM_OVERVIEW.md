@@ -309,11 +309,10 @@ A comprehensive shell script that automates full server provisioning:
 3. Docker Compose v2 setup
 4. Docker network creation (`proxy` bridge network)
 5. Traefik reverse proxy with automatic HTTPS via Let's Encrypt
-6. PostgreSQL 16 with pgAdmin web interface
-7. Server Manager container deployment
-8. Deploy Server container deployment
-9. Database initialization and migrations
-10. SSL certificate provisioning
+6. Server Manager container deployment
+7. Deploy Server container deployment
+8. Database initialization and migrations
+9. SSL certificate provisioning
 
 **Usage:**
 ```bash
@@ -331,22 +330,6 @@ sudo bash infrastructure/bootstrap.sh
 - Automatic HTTPS for all containers via Docker labels
 - HTTP-to-HTTPS redirect on all traffic
 
-### PostgreSQL (`infrastructure/postgres/`)
-
-- `docker-compose.yml` -- PostgreSQL 16 + pgAdmin service definitions
-- `init/01-extensions.sql` -- Database extensions loaded on initialization
-- Shared database engine used by all Ship instances (each gets its own database)
-- pgAdmin web interface for database administration
-
-### Agent Environments (`infrastructure/agent-envs/`)
-
-Docker Compose templates for spinning up isolated AI agent containers:
-
-- Uses `sysbox-runc` runtime for nested Docker-in-Docker support
-- Configurable agent containers (agent-1, agent-2, etc.)
-- Resource limits: 4 CPUs, 8GB RAM per agent
-- Traefik labels for web terminal access via ttyd
-- Docker Compose profiles for selective startup
 
 ### Network (`infrastructure/network/`)
 
@@ -605,8 +588,6 @@ matrx-ship/
 │   ├── bootstrap.sh               # Full server provisioning
 │   ├── teardown.sh                # Server cleanup
 │   ├── traefik/                   # Reverse proxy templates
-│   ├── postgres/                  # Database templates
-│   ├── agent-envs/                # AI agent environment templates
 │   ├── network/                   # Docker network setup
 │   └── scripts/                   # Certificate and utility scripts
 ├── drizzle/                       # Database migrations

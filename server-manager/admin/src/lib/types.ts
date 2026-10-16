@@ -10,14 +10,6 @@ export interface InstanceInfo {
   db_status?: string;
 }
 
-export interface SandboxInfo {
-  name: string;
-  status: string;
-  sandbox_id: string;
-  image: string;
-  terminal_url?: string;
-}
-
 export interface TokenInfo {
   id: string;
   label: string;

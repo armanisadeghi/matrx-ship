@@ -48,15 +48,13 @@ export function InfraTab({ api, system }: Props) {
     })
     .filter((c) => c.name);
 
-  const coreInfra = infraContainers.filter((c) => ["traefik", "postgres", "pgadmin"].includes(c.name));
+  const coreInfra = infraContainers.filter((c) => ["traefik"].includes(c.name));
   const controlPlane = infraContainers.filter((c) => ["matrx-manager", "matrx-deploy"].includes(c.name) || c.name?.includes("mcp"));
-  const agents = infraContainers.filter((c) => c.name?.startsWith("agent-"));
-  const appInstances = infraContainers.filter((c) => !coreInfra.find((i) => i.name === c.name) && !controlPlane.find((i) => i.name === c.name) && !agents.find((i) => i.name === c.name) && !c.name?.startsWith("db-"));
+  const appInstances = infraContainers.filter((c) => !coreInfra.find((i) => i.name === c.name) && !controlPlane.find((i) => i.name === c.name) && !c.name?.startsWith("db-"));
 
   const groups = [
     { title: "Core Infrastructure", icon: Globe, items: coreInfra },
     { title: "Control Plane", icon: Monitor, items: controlPlane },
-    { title: "Agent Environments", icon: Server, items: agents },
     { title: "App Instances", icon: Database, items: appInstances },
   ];
 

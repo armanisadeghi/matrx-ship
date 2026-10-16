@@ -13,9 +13,9 @@ UI is being refactored toward.
 |---|---|---|
 | **Server** | A machine with full shell access: this `/srv` host, or an EC2 box. | ~~instance~~ |
 | **App** (a.k.a. *Deployment*) | A deployed project — a `matrx-ship:latest` container at `<name>.dev.codematrx.com`. | ~~instance~~ |
-| **Database** | A project's Postgres (`db-<name>`) or the shared `postgres`. | |
-| **Sandbox** | An ephemeral agent scratch container (`sbx-…`, or the deprecated `sandbox-1..5`). | ~~instance~~ |
-| **Service** | A piece of infrastructure: Manager, Deploy, Orchestrator, Traefik, pgAdmin. | |
+| **Database** | A project's Postgres (`db-<name>`). | |
+| **Sandbox** | An ephemeral agent scratch container (`sbx-…`). | ~~instance~~ |
+| **Service** | A piece of infrastructure: Manager, Deploy, Orchestrator, Traefik. | |
 | **Orchestrator** | The service that spawns Sandboxes. | ~~the sandbox~~ |
 | **Image / Template** | A build artifact (`matrx-ship:latest`, `matrx-sandbox:slim`). | |
 
@@ -37,10 +37,9 @@ LAYER 1 — SERVERS (machines we have full access to)
         ▼
 LAYER 2 — WHAT RUNS ON A SERVER (for /srv, grouped by what it is)
   • Control plane     Server Manager, Deploy Server
-  • Infrastructure    Traefik, Postgres, pgAdmin
+  • Infrastructure    Traefik
   • Sandbox system    Orchestrator → its Sandboxes
   • Apps              the per-project deployments (+ each one's Database)
-  • Agent envs        agent VMs
         │
         ▼
 LAYER 3 — ONE ITEM (an App, a Sandbox, a Database, a Service)
@@ -60,12 +59,11 @@ is named the same everywhere.
 |---|---|
 | Servers | the host + EC2 boxes |
 | Control plane | `matrx-manager`, `matrx-deploy` |
-| Infrastructure | `traefik`, `postgres`, `pgadmin` |
+| Infrastructure | `traefik` |
 | Sandbox system | `matrx-orchestrator` |
-| Sandboxes | `sbx-…`, `sandbox-1..5` (deprecated) |
+| Sandboxes | `sbx-…` |
 | App deployments | the `matrx-ship:latest` apps |
 | Databases | `db-<name>` |
-| Agent environments | `agent-1` |
 
 ---
 

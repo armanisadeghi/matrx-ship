@@ -187,7 +187,7 @@ The drift audit found one critical unversioned config file: `/srv/apps/sandbox-o
 
 ### 4.1 Catalog all `.env` and `.credentials` files
 
-A startup task that walks `/srv/apps/*/`, `/srv/traefik/`, `/srv/postgres/`, `/srv/agent-envs/`, `/srv/.credentials` and reports every config file the Manager isn't currently aware of. Add as a Manager startup probe; surface in `/admin/configs`.
+A startup task that walks `/srv/apps/*/`, `/srv/traefik/`, `/srv/.credentials` and reports every config file the Manager isn't currently aware of. Add as a Manager startup probe; surface in `/admin/configs`.
 
 For each file found:
 - Compare against any matching `.env.example` in the source repo.
@@ -315,8 +315,8 @@ This stays out of scope for the immediate refactor — it's a target architectur
 Things that came up in the analysis but I deliberately don't think the UI should grow for them:
 
 - **Emergency shell access from UI.** The MCP tool `shell_exec` exists for agent use, but the admin UI shouldn't expose a generic "run this command on the host" textbox. That's exactly the foot-gun this whole plan exists to remove. SSH for emergencies is fine.
-- **Replacing the static starter pool (`sandbox-1`…`sandbox-5`).** They're documented as deprecated and will retire when the dynamic flow is fully adopted. No UI work for them — just a docs callout.
-- **Schema migrations against arbitrary Postgres DBs.** The Manager already has `app_backup` / `app_restore` / read-only `postgres_query` for instance DBs. Migrations against the shared cld_files / Supabase DB stay manual via `psql` — that's a database-engineering task, not infra ops.
+- **Static starter pool (`sandbox-1`…`sandbox-5`).** Retired 2026-10-16; its Manager endpoints and admin pages are deleted.
+- **Schema migrations against arbitrary Postgres DBs.** The Manager already has `app_backup` / `app_restore` for instance DBs. Migrations against the shared cld_files / Supabase DB stay manual via `psql` — that's a database-engineering task, not infra ops.
 - **Bootstrapping second-tier services** (NocoDB, Directus templates that exist in [infrastructure/](infrastructure/) but aren't deployed). They were exploratory. Drop the templates from the repo OR document them as on-demand opt-in deployments. Not a refactor task.
 
 ---
@@ -364,7 +364,7 @@ These are the agent findings condensed. If anything in the plan looks wrong, thi
 
 | Item | Status | Plan phase |
 |---|---|---|
-| Traefik / Postgres / agent-envs templates | ✅ in repo, match live | — |
+| Traefik template | ✅ in repo, matches live | — |
 | `deployments.json` / `tokens.json` / `build-history.json` | ✅ Manager-managed | — |
 | `/srv/apps/sandbox-orchestrator/.env` | ❌ host-only, unversioned | Phase 4 |
 | `/srv/.credentials` | ❌ host-only, unversioned, not backed up | Phase 4 (encrypted S3 backup) |

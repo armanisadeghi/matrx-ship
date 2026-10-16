@@ -55,11 +55,6 @@ source "$ENV_FILE"
 REQUIRED_VARS=(
   DOMAIN
   TRAEFIK_DASHBOARD_AUTH
-  POSTGRES_USER
-  POSTGRES_PASSWORD
-  POSTGRES_DB
-  PGADMIN_EMAIL
-  PGADMIN_PASSWORD
   MANAGER_BEARER_TOKEN
   AWS_ACCESS_KEY_ID
   AWS_SECRET_ACCESS_KEY
@@ -162,7 +157,7 @@ bash "${SCRIPT_DIR}/network/setup.sh"
 # =============================================================================
 step 7 "Creating directory structure"
 
-mkdir -p /srv/{traefik/acme,traefik/dynamic,postgres/data,postgres/init,agent-envs/images,apps/backups,projects}
+mkdir -p /srv/{traefik/acme,traefik/dynamic,apps/backups,projects}
 
 # =============================================================================
 # Step 8: Clone source repos
@@ -210,23 +205,6 @@ chmod 600 /srv/traefik/.env
 touch /srv/traefik/acme/acme.json
 chmod 600 /srv/traefik/acme/acme.json
 
-# PostgreSQL
-cp "${SCRIPT_DIR}/postgres/docker-compose.yml" /srv/postgres/docker-compose.yml
-cp "${SCRIPT_DIR}/postgres/init/01-extensions.sql" /srv/postgres/init/01-extensions.sql
-cat > /srv/postgres/.env << EOF
-POSTGRES_USER=${POSTGRES_USER}
-POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-POSTGRES_DB=${POSTGRES_DB}
-PGADMIN_EMAIL=${PGADMIN_EMAIL}
-PGADMIN_PASSWORD=${PGADMIN_PASSWORD}
-EOF
-chmod 600 /srv/postgres/.env
-
-# Agent environments
-cp "${SCRIPT_DIR}/agent-envs/docker-compose.yml" /srv/agent-envs/docker-compose.yml
-mkdir -p /srv/agent-envs/images
-cp "${SCRIPT_DIR}/agent-envs/images/Dockerfile.agent" /srv/agent-envs/images/Dockerfile.agent
-
 log "Infrastructure configs deployed"
 
 # =============================================================================
@@ -242,22 +220,6 @@ else
   err "Traefik failed to start — check: docker logs traefik"
   exit 1
 fi
-
-# =============================================================================
-# Step 11: Start PostgreSQL
-# =============================================================================
-step 11 "Starting PostgreSQL + pgAdmin"
-
-cd /srv/postgres && docker compose up -d
-log "Waiting for PostgreSQL to be healthy..."
-for i in $(seq 1 30); do
-  if docker exec postgres pg_isready -U "${POSTGRES_USER}" >/dev/null 2>&1; then
-    log "PostgreSQL is healthy"
-    break
-  fi
-  [ "$i" -eq 30 ] && { err "PostgreSQL failed health check after 30 attempts"; exit 1; }
-  sleep 2
-done
 
 # =============================================================================
 # Step 12: Build matrx-ship Docker image
@@ -400,15 +362,6 @@ cat > /srv/.credentials << EOF
 # Generated: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
 # chmod 600 — do not commit to source control
 
-[PostgreSQL]
-User: ${POSTGRES_USER}
-Password: ${POSTGRES_PASSWORD}
-Database: ${POSTGRES_DB}
-
-[pgAdmin]
-Email: ${PGADMIN_EMAIL}
-Password: ${PGADMIN_PASSWORD}
-
 [Server Manager]
 URL: https://manager.${DOMAIN}
 Bearer Token: ${MANAGER_BEARER_TOKEN}
@@ -444,8 +397,6 @@ check_service() {
 }
 
 check_service "Traefik" "traefik"
-check_service "PostgreSQL" "postgres"
-check_service "pgAdmin" "pgadmin"
 check_service "Server Manager" "matrx-manager"
 check_service "Deploy App" "matrx-deploy"
 
@@ -468,7 +419,6 @@ echo ""
 echo "  Server Manager: https://manager.${DOMAIN}/admin"
 echo "  Deploy App:     https://deploy.${DOMAIN}"
 echo "  Traefik:        https://traefik.${DOMAIN}"
-echo "  pgAdmin:        https://pg.${DOMAIN}"
 echo ""
 echo "  Credentials:    /srv/.credentials"
 echo ""

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useMemo } from "react";
-import { Server, Box, Database, Network, Layers, Boxes, Cpu, Bot, AlertTriangle } from "lucide-react";
+import { Server, Box, Database, Network, Layers, Boxes, Cpu, AlertTriangle } from "lucide-react";
 import { Badge } from "@matrx/admin-ui/ui/badge";
 import { Card, CardContent } from "@matrx/admin-ui/ui/card";
 import { PageShell } from "@matrx/admin-ui/components/page-shell";
@@ -24,7 +24,6 @@ function CatIcon({ category }: { category: string }) {
     case "sandbox": return <Box className={c} />;
     case "app": return <Layers className={c} />;
     case "database": return <Database className={c} />;
-    case "agent-env": return <Bot className={c} />;
     default: return <Box className={c} />;
   }
 }

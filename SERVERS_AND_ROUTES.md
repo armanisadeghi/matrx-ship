@@ -62,10 +62,7 @@ proof. The August alarm was late discovery of the July rebuild, not an active in
 | `deploy.dev.codematrx.com` | **Deploy Server** (`matrx-deploy`) | The recovery lifeline — rebuilds the Manager if it breaks. |
 | `orchestrator.dev.codematrx.com` | **Sandbox Orchestrator** (`matrx-orchestrator`) | Spawns/manages the hosted-tier agent sandboxes. |
 | `traefik.dev.codematrx.com` | **Traefik** (`traefik`) | Reverse proxy — routes ALL these URLs + manages TLS certs. |
-| `pg.dev.codematrx.com` | **pgAdmin** (`pgadmin`) | Web UI for the databases. |
-| *(no public URL)* | **Shared Postgres** (`postgres`, pgvector) | The main shared database. |
 | *(no public URL — 127.0.0.1:5499 ONLY)* | **Replay Mirror** (`matrx-replay-mirror`, `pgvector/pgvector:pg17`) | A full writable **mirror of Matrx Main** for real-execution replay (Dynamic Agent Graph D-25 / C-22). Replay executes REAL tool calls; DB writes land here instead of production. 🚨 **Contains a complete copy of production data (incl. `auth.users`, `users.user_secrets`) — it is bound to loopback only and must NEVER be published or Traefik-routed.** Volume `matrx-replay-mirror-data`; config + tooling in `/srv/matrx-replay-mirror/` (root 700; `.env.source`/`.env.mirror` root 600). Refresh: `/srv/matrx-replay-mirror/run-refresh.sh` (drops and rebuilds the DB; freshness stamped in `mirror.sync_info`). Contract: `aidream/db/mirror/FEATURE.md`. Placed here rather than on `matrx-main` because that host runs tight on storage. |
-| `agent-1.dev.codematrx.com` | **Agent VM** (`agent-1`) | A sysbox isolated VM environment (shell-only). |
 
 ---
 
@@ -99,7 +96,6 @@ Each one also has a private `db-<name>` Postgres container (no public URL).
 |---|---|
 | via `orchestrator.dev.codematrx.com` → `sbx-*` containers | **Hosted tier** — dynamically spawned, per-user volumes. The real flow. |
 | `https://sandbox-orchestrator.matrxserver.com` (EC2 box) | **EC2 tier** — active orchestrator and retained user sandboxes; authenticated public HTTPS/WSS, with a separate private ECS route. |
-| `sandbox-1.dev.codematrx.com` … `sandbox-5` | **Starter pool** (deprecated) — 5 static web-terminal sandboxes, predate the orchestrator. Being retired. |
 
 ---
 

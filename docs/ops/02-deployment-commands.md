@@ -7,8 +7,6 @@
 | Traefik | `cd /srv/traefik && docker compose up -d` | `docker inspect traefik --format '{{.State.Health.Status}}'` |
 | Server Manager | `cd /srv/apps/server-manager && docker compose up -d --build` | `curl -s https://manager.dev.codematrx.com/health` |
 | Deploy Server | `cd /srv/apps/deploy && docker compose up -d --build` | `curl -s https://deploy.dev.codematrx.com/api/health` |
-| PostgreSQL | `cd /srv/postgres && docker compose up -d` | `docker exec matrx-postgres pg_isready` |
-| pgAdmin | `cd /srv/postgres && docker compose up -d pgadmin` | `curl -s https://pgadmin.dev.codematrx.com` |
 | Ship Instance | Via Server Manager API or admin UI | `curl -s https://{name}.dev.codematrx.com` |
 
 ---
@@ -154,45 +152,7 @@ docker logs ship-myapp-db --tail 100 -f
 
 ---
 
-## PostgreSQL (Shared)
-
-### Restart
-```bash
-cd /srv/postgres
-docker compose restart postgres
-```
-
-### Check Status
-```bash
-docker exec matrx-postgres pg_isready
-docker exec matrx-postgres psql -U postgres -c "SELECT version();"
-```
-
-### List Databases
-```bash
-docker exec matrx-postgres psql -U postgres -c "\l"
-```
-
-### Backup
-```bash
-docker exec matrx-postgres pg_dumpall -U postgres > /srv/backups/postgres-$(date +%Y%m%d-%H%M%S).sql
-```
-
----
-
-## Agent Environments
-
-### Rebuild Agent Images
-```bash
-cd /srv/agent-envs
-docker compose build
-docker compose up -d
-```
-
-### List Running Agents
-```bash
-docker ps --filter "name=agent-" --format "table {{.Names}}\t{{.Status}}"
-```
+> The standalone shared Postgres, pgAdmin and `agent-1` were retired 2026-10-16; per-instance databases are managed through the Server Manager.
 
 ---
 

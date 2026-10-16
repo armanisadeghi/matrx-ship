@@ -37,18 +37,6 @@ for dir in /srv/apps/*/; do
   fi
 done
 
-# Stop agent environments
-log "Stopping agent environments..."
-if [ -f /srv/agent-envs/docker-compose.yml ]; then
-  (cd /srv/agent-envs && docker compose --profile all down) || warn "Failed to stop agents"
-fi
-
-# Stop PostgreSQL
-log "Stopping PostgreSQL..."
-if [ -f /srv/postgres/docker-compose.yml ]; then
-  (cd /srv/postgres && docker compose down) || warn "Failed to stop Postgres"
-fi
-
 # Stop Traefik (last — it's the network gateway)
 log "Stopping Traefik..."
 if [ -f /srv/traefik/docker-compose.yml ]; then

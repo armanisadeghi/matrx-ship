@@ -206,7 +206,6 @@ docker ps --format "table {{.Names}}\t{{.Status}}" | sort
 If containers didn't restart:
 ```bash
 cd /srv/traefik && docker compose up -d
-cd /srv/postgres && docker compose up -d
 cd /srv/apps/server-manager && docker compose up -d
 cd /srv/apps/deploy && docker compose up -d
 # Ship instances will be started by the Server Manager on startup
@@ -218,9 +217,6 @@ cd /srv/apps/deploy && docker compose up -d
 
 ### One-Time Full Backup
 ```bash
-# Backup shared Postgres
-docker exec matrx-postgres pg_dumpall -U postgres > /srv/backups/shared-$(date +%Y%m%d).sql
-
 # Backup each instance DB
 for db_container in $(docker ps --filter "name=-db" --format "{{.Names}}"); do
   instance_name=$(echo $db_container | sed 's/ship-//' | sed 's/-db//')
@@ -234,10 +230,10 @@ aws s3 sync /srv/backups/ s3://$AWS_S3_BUCKET/backups/$(date +%Y%m%d)/
 ### Restore from Backup
 ```bash
 # Download from S3
-aws s3 cp s3://$AWS_S3_BUCKET/backups/20260101/shared-20260101.sql /tmp/restore.sql
+aws s3 cp s3://$AWS_S3_BUCKET/backups/20260101/{name}-20260101.sql /tmp/restore.sql
 
-# Restore
-docker exec -i matrx-postgres psql -U postgres < /tmp/restore.sql
+# Restore into the instance database
+docker exec -i ship-{name}-db psql -U postgres < /tmp/restore.sql
 ```
 
 ---

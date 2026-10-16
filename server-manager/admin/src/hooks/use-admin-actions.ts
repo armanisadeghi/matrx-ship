@@ -8,7 +8,6 @@ import { api, apiText, API } from "@/lib/api";
 
 interface UseAdminActionsOpts {
   loadInstances: () => Promise<void>;
-  loadSandboxes: () => Promise<void>;
   loadTokens: () => Promise<void>;
   loadBuildInfo: () => Promise<void>;
   loadAll: () => Promise<void>;
@@ -16,7 +15,6 @@ interface UseAdminActionsOpts {
 
 export function useAdminActions({
   loadInstances,
-  loadSandboxes,
   loadTokens,
   loadBuildInfo,
   loadAll,
@@ -35,10 +33,6 @@ export function useAdminActions({
   const [instanceCompose, setInstanceCompose] = useState<string>("");
   const [instanceBackups, setInstanceBackups] = useState<Array<{ file: string; size: string; created: string }>>([]);
 
-  // Sandbox detail state
-  const [sandboxDetail, setSandboxDetail] = useState<Record<string, unknown> | null>(null);
-  const [sandboxLogs, setSandboxLogs] = useState<string>("");
-
   const loadInstanceDetail = useCallback(async (name: string) => {
     try {
       const data = await api(API.INSTANCE(name));
@@ -55,15 +49,6 @@ export function useAdminActions({
       } catch { setInstanceBackups([]); }
     } catch (e) {
       toast.error(`Failed to load instance: ${(e as Error).message}`);
-    }
-  }, []);
-
-  const loadSandboxDetail = useCallback(async (name: string) => {
-    try {
-      const data = await api(API.SANDBOX(name));
-      setSandboxDetail(data);
-    } catch (e) {
-      toast.error(`Failed to load sandbox: ${(e as Error).message}`);
     }
   }, []);
 
@@ -326,26 +311,6 @@ export function useAdminActions({
     }
   }
 
-  async function handleSandboxAction(name: string, action: string) {
-    const toastId = toast.loading(`${action}ing ${name}...`);
-    try {
-      await api(API.SANDBOX_ACTION(name, action), { method: "POST" });
-      toast.success(`${action} completed`, { id: toastId });
-      loadSandboxes();
-    } catch (e) {
-      toast.error(`Failed: ${(e as Error).message}`, { id: toastId });
-    }
-  }
-
-  async function handleLoadSandboxLogs(name: string) {
-    try {
-      const data = await api<{ logs: string }>(API.SANDBOX_LOGS(name));
-      setSandboxLogs(data.logs || "No logs");
-    } catch {
-      setSandboxLogs("Failed to load logs");
-    }
-  }
-
   async function handleCleanup() {
     const toastId = toast.loading("Running image cleanup...");
     try {
@@ -375,11 +340,6 @@ export function useAdminActions({
     instanceBackups,
     loadInstanceDetail,
 
-    // Sandbox detail state
-    sandboxDetail,
-    sandboxLogs,
-    loadSandboxDetail,
-
     // Actions
     handleDeploy,
     handleRollback,
@@ -392,8 +352,6 @@ export function useAdminActions({
     handleCreateBackup,
     handleCreateToken,
     handleDeleteToken,
-    handleSandboxAction,
-    handleLoadSandboxLogs,
     handleCleanup,
   };
 }
