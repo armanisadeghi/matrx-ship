@@ -14,7 +14,6 @@ export const API = {
   INSTANCE_LOGS: (name: string) => `/api/instances/${name}/logs`,
   INSTANCE_BACKUP: (name: string) => `/api/instances/${name}/backup`,
   INSTANCE_ACTION: (name: string, action: string) => `/api/instances/${name}/${action}`,
-  SANDBOXES: "/api/sandboxes",
   TOKENS: "/api/tokens",
   TOKEN: (id: string) => `/api/tokens/${id}`,
   SECRETS: "/api/secrets",
