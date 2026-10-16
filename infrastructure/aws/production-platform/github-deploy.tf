@@ -81,6 +81,20 @@ data "aws_iam_policy_document" "aidream_github_deploy" {
     ]
   }
 
+  # Read-only: every release checks that a crashed API copy leaves load-balancer
+  # rotation within seconds (aidream scripts/check_alb_target_groups_applied.py
+  # --floor). On 2026-10-16 the 10s x 2 health check sat committed and unapplied
+  # for 16h; a segfault then black-holed 74s of traffic. Describe* has no
+  # resource-level scoping in IAM, hence "*".
+  statement {
+    sid = "ReadLoadBalancerTargetGroups"
+    actions = [
+      "elasticloadbalancing:DescribeTargetGroups",
+      "elasticloadbalancing:DescribeTargetGroupAttributes",
+    ]
+    resources = ["*"]
+  }
+
   statement {
     sid     = "PassECSTaskRoles"
     actions = ["iam:PassRole"]
