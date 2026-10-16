@@ -532,6 +532,14 @@ data "aws_iam_policy_document" "cloud_computer_fleet_roles" {
     }
   }
   statement {
+    # GetRole on a role that does not exist yet (the first wake) is authorized
+    # against role/<name> WITHOUT its path, so the path-scoped ARN never matches
+    # and the first launch is denied. Read-only, by our name prefix.
+    sid       = "LookUpPerUserRoleBeforeItExists"
+    actions   = ["iam:GetRole"]
+    resources = ["arn:aws:iam::${var.aws_account_id}:role/matrx-cc-u-*"]
+  }
+  statement {
     sid = "ManagePerUserRoles"
     actions = [
       "iam:GetRole",
