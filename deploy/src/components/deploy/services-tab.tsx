@@ -2,7 +2,7 @@
 
 import {
   ExternalLink, ShieldCheck, Rocket, Globe,
-  Database, Container, Server, Terminal, Cpu,
+  Container, Server, Cpu,
 } from "lucide-react";
 import { Badge } from "@matrx/admin-ui/ui/badge";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@matrx/admin-ui/ui/card";
@@ -108,15 +108,6 @@ export function ServicesTab({ buildInfo }: ServicesTabProps) {
     },
   ];
 
-  const databaseTools: ServiceRow[] = [
-    {
-      name: "pgAdmin",
-      url: "https://pg.dev.codematrx.com",
-      description: "PostgreSQL web admin for the central database",
-      icon: <Database className="size-4 text-blue-600" />,
-    },
-  ];
-
   const shipInstances: ServiceRow[] = (buildInfo?.instances || []).map((inst) => ({
     name: inst.display_name,
     url: `https://${inst.name}.dev.codematrx.com`,
@@ -125,26 +116,12 @@ export function ServicesTab({ buildInfo }: ServicesTabProps) {
     status: inst.status === "running" ? "running" as const : "stopped" as const,
   }));
 
-  const sandboxes: ServiceRow[] = [1, 2, 3, 4, 5].map((n) => ({
-    name: `Sandbox ${n}`,
-    url: `https://sandbox-${n}.dev.codematrx.com`,
-    description: "Web-based development sandbox (ttyd terminal)",
-    icon: <Terminal className="size-4 text-emerald-500" />,
-  }));
-
   const otherServices: ServiceRow[] = [
     {
       name: "MCP Example Server",
       url: "https://mcp-example.dev.codematrx.com",
       description: "Example MCP server (Streamable HTTP) — POST /mcp with bearer token",
       icon: <Cpu className="size-4 text-amber-500" />,
-    },
-    {
-      name: "Agent 1",
-      url: "https://agent-1.dev.codematrx.com",
-      description: "Sysbox agent container — SSH access only, no web UI",
-      icon: <Terminal className="size-4 text-red-400" />,
-      status: "ssh-only" as const,
     },
   ];
 
@@ -160,13 +137,6 @@ export function ServicesTab({ buildInfo }: ServicesTabProps) {
         services={managementTools}
       />
 
-      <ServiceTable
-        title="Database"
-        description="Database management and access"
-        icon={<Database className="size-4" />}
-        services={databaseTools}
-      />
-
       {shipInstances.length > 0 && (
         <ServiceTable
           title="Ship Instances"
@@ -175,13 +145,6 @@ export function ServicesTab({ buildInfo }: ServicesTabProps) {
           services={shipInstances}
         />
       )}
-
-      <ServiceTable
-        title="Dev Sandboxes"
-        description="Isolated development environments"
-        icon={<Terminal className="size-4" />}
-        services={sandboxes}
-      />
 
       <ServiceTable
         title="Other Services"

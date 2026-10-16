@@ -27,15 +27,6 @@ export async function GET(req: NextRequest) {
     `docker ps --format '{{.Names}}' | xargs -I{} docker inspect {} --format '{{.Name}} {{range $k,$v := .Config.Labels}}{{if eq (index (split $k ".") 0) "traefik"}}{{$k}}={{$v}} {{end}}{{end}}' 2>/dev/null`,
   );
 
-  // PostgreSQL
-  const postgres = getContainerStatus("postgres");
-  const pgadmin = getContainerStatus("pgadmin");
-  const pgSize = exec(`docker exec postgres psql -U matrx -d matrx -tc "SELECT pg_size_pretty(pg_database_size('matrx'))" 2>/dev/null`);
-  const pgConnections = exec(`docker exec postgres psql -U matrx -d matrx -tc "SELECT count(*) FROM pg_stat_activity" 2>/dev/null`);
-
-  // Agents
-  const agent1 = getContainerStatus("agent-1");
-  const agent2 = getContainerStatus("agent-2");
 
   // Docker system
   const dockerInfo = exec("docker info --format '{{.ContainersRunning}} running, {{.ContainersPaused}} paused, {{.ContainersStopped}} stopped, {{.Images}} images'");
@@ -46,13 +37,6 @@ export async function GET(req: NextRequest) {
       ...traefik,
       routes_raw: traefikRoutes.output || "",
     },
-    postgres: {
-      ...postgres,
-      size: pgSize.output?.trim() || "unknown",
-      connections: pgConnections.output?.trim() || "unknown",
-    },
-    pgadmin,
-    agents: [agent1, agent2],
     docker: {
       summary: dockerInfo.output || "unknown",
       disk_usage: diskUsage.output || "unknown",

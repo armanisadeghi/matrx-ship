@@ -14,9 +14,6 @@ import { useAuth } from "@/lib/auth-context";
 
 interface InfraStatus {
   traefik: { name: string; status: string; health: string | null; routes_raw: string };
-  postgres: { name: string; status: string; health: string | null; size: string; connections: string };
-  pgadmin: { name: string; status: string; health: string | null };
-  agents: { name: string; status: string; health: string | null }[];
   docker: { summary: string; disk_usage: string };
 }
 
@@ -77,21 +74,6 @@ export default function InfrastructurePage() {
       icon: <Globe className="size-4 text-green-500" />,
     },
     {
-      name: "PostgreSQL",
-      type: "Database",
-      status: infra?.postgres?.status || "unknown",
-      details: infra?.postgres ? `Size: ${infra.postgres.size} | Connections: ${infra.postgres.connections}` : "Central PostgreSQL database",
-      icon: <Database className="size-4 text-blue-600" />,
-    },
-    {
-      name: "pgAdmin",
-      type: "Database UI",
-      status: infra?.pgadmin?.status || "unknown",
-      details: "Web-based PostgreSQL administration",
-      url: "https://pg.dev.codematrx.com",
-      icon: <Database className="size-4 text-blue-400" />,
-    },
-    {
       name: "Directus",
       type: "CMS / Admin",
       status: "running",
@@ -107,13 +89,6 @@ export default function InfrastructurePage() {
       url: "https://nocodb.app.matrxserver.com",
       icon: <TableProperties className="size-4 text-indigo-500" />,
     },
-    ...(infra?.agents || []).map((agent) => ({
-      name: agent.name,
-      type: "Agent",
-      status: agent.status || "not found",
-      details: "Sysbox agent container for isolated development",
-      icon: <Cpu className="size-4 text-amber-500" />,
-    })),
   ];
 
   return (
