@@ -59,7 +59,7 @@ A Template is what a user/agent picks when spawning a Sandbox. Each maps to one 
 | **slim** | `matrx-sandbox:slim` | Lightweight coding box. | Depends on tier and lifecycle configuration; do not infer durability from the template name. | **yes** — orchestrator spawns from it |
 | **aidream** | `matrx-sandbox:aidream` | Full AI Dream box — runs the agent loop inside the container with runtime-injected configuration. Hosted-only; EC2 creation rejects it. | per-user Docker volume | **yes** |
 | **core** | `matrx-sandbox:core` | Base image. A **build dependency** of `:aidream`; not spawned directly. | n/a | no (build-only) |
-| **local** | `matrx-sandbox:local` | The deprecated static starter-pool image (`sandbox-1`…`5`). | per-slot volume | no (legacy) |
+| **local** | `matrx-sandbox:local` | Legacy image alias kept as a required release alias; the starter pool that ran on it was retired 2026-10-16. | n/a | no |
 
 "Required" means the Orchestrator actually spawns Sandboxes from it, so its absence breaks spawning (the 2026-04-30 incident). `core`/`local` being absent is not an alarm. The Manager's image-health banner keys on `missing_required` for exactly this reason.
 
