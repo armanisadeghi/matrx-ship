@@ -475,9 +475,15 @@ data "aws_iam_policy_document" "cloud_computer_fleet" {
   }
 
   statement {
-    sid       = "ReadHomeAccessPoints"
-    actions   = ["elasticfilesystem:DescribeAccessPoints"]
-    resources = [aws_efs_file_system.cloud_computer_homes.arn]
+    sid     = "ReadHomeAccessPoints"
+    actions = ["elasticfilesystem:DescribeAccessPoints"]
+    # Listing by file system is authorized on the file system; describing one
+    # point by AccessPointId (the wait-until-available loop) is authorized on
+    # the access point itself.
+    resources = [
+      aws_efs_file_system.cloud_computer_homes.arn,
+      "arn:aws:elasticfilesystem:${var.aws_region}:${var.aws_account_id}:access-point/*",
+    ]
   }
 
   statement {
