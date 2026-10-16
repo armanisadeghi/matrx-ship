@@ -259,6 +259,19 @@ release_outcome_serving() { echo main-id; }
         self.assertGreater(events.index(("ship", "matrx-extend")), wait)
         self.assertEqual(len(events), 5)
 
+    def test_publish_wait_ignores_runs_started_by_later_pushes(self):
+        t = [1_000_000.0]
+        def fake_run(cmd, cwd, timeout=120):
+            iso = lambda x: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(x))
+            # one run from the source's push (done) and one from a later push (still going)
+            return 0, json.dumps([{"databaseId": 1, "status": "completed", "createdAt": iso(t[0] - 60)},
+                                  {"databaseId": 2, "status": "in_progress", "createdAt": iso(t[0] + 300)}]), ""
+        def fake_sleep(s):
+            t[0] += s
+        with patch.object(ship_all, "run", side_effect=fake_run):
+            line = ship_all.wait_for_publish_runs(t[0] - 120, now=lambda: t[0], sleep=fake_sleep)
+        self.assertIn("finished", line)
+
     def test_off_train_repo_never_checks_a_release_slot_or_releases(self):
         info = {"repo": "matrx-local", "path": "/unused/matrx-local", "dirty": 0, "ahead": 0, "behind": 0,
                 "origin_before": ""}

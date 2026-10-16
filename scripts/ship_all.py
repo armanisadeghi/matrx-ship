@@ -229,7 +229,9 @@ def wait_for_publish_runs(since, now=time.time, sleep=time.sleep):
         for r in json.loads(out or "[]"):
             created = datetime.datetime.strptime(r["createdAt"], "%Y-%m-%dT%H:%M:%SZ").replace(
                 tzinfo=datetime.timezone.utc).timestamp()
-            if created >= since - 5 and r["status"] != "completed":
+            # Only the runs the source's ship started: later pushes by other developers start new
+            # runs every minute, and waiting on those never ends (2026-10-16: 12 min, 3 active).
+            if since - 5 <= created <= t0 + PUBLISH_APPEAR_SECONDS and r["status"] != "completed":
                 active.append(r["databaseId"])
         seen.update(active)
         if not active:
@@ -719,7 +721,8 @@ def _ship_locked(info, out_dir, stamp):
     say("… %-26s running (started %s)" % (name, started))
     lines = []
     with open(log, "w") as f:
-        proc = subprocess.Popen(ship_cmd(info, "ship-all %s" % stamp), cwd=repo,
+        env = dict(os.environ, **({"MATRX_PUBLISH_TRAIN_WAITED": "1"} if info.get("after_publish_wait") else {}))
+        proc = subprocess.Popen(ship_cmd(info, "ship-all %s" % stamp), cwd=repo, env=env,
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                 text=True, errors="replace", bufsize=1)
         for line in proc.stdout:
@@ -822,12 +825,14 @@ def main(args=None):
         wave1 = [i for i in to_ship if i["repo"] == PACKAGE_SOURCE or i["repo"] not in consumers]
         wave2 = [i for i in to_ship if i not in wave1]
         source = next((i for i in wave1 if i["repo"] == PACKAGE_SOURCE), None)
+        waited = False
         say("▶ wave 1: shipping %d repo(s) (package source + non-consumers), up to %d at a time…"
             % (len(wave1), jobs))
         with ThreadPoolExecutor(max_workers=jobs) as pool:
             list(pool.map(lambda i: ship(i, out_dir, stamp), wave1))
         if source and source_pushed(source):
             say("▶ " + wait_for_publish_runs(source["ship_started"]))
+            waited = True
             skipped = [i for i in infos if i["repo"] in consumers and i not in wave2
                        and i["status"] == "skipped (in sync)"]
             with ThreadPoolExecutor(max_workers=8) as pool:
@@ -836,6 +841,8 @@ def main(args=None):
                 if stale:
                     info["stale_packages"], info["status"] = stale, "to ship"
                     wave2.append(info)
+        for info in wave2:
+            info["after_publish_wait"] = waited   # sync-main skips its own wait for the same runs
         if wave2:
             say("▶ wave 2: shipping %d package consumer(s), up to %d at a time…" % (len(wave2), jobs))
             with ThreadPoolExecutor(max_workers=jobs) as pool:
