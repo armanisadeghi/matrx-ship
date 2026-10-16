@@ -170,6 +170,15 @@ resource "aws_lb_target_group" "aidream" {
 
   deregistration_delay = 120
 
+  # A COPY THAT DIES LEAVES ROTATION IN SECONDS (2026-10-15). An api copy that
+  # crashed (exit 139) kept receiving ~half of all traffic for ~60s — 268 and 192
+  # failed connections at 02:36Z and 03:40Z — because the only exit was the
+  # health check (30s x 3). Anomaly mitigation shifts traffic off a target whose
+  # error rate jumps, within seconds and without waiting for a health check; it
+  # requires weighted_random (no stickiness or slow start is used here).
+  load_balancing_algorithm_type     = "weighted_random"
+  load_balancing_anomaly_mitigation = "on"
+
   # /health/serving, never /health/ready: /ready re-pings the shared database,
   # so a database outage fails it on every target at once and ECS replaces the
   # whole fleet (2026-09-25 07:34 PT — server 502 until 07:45:50, seven minutes
@@ -179,11 +188,14 @@ resource "aws_lb_target_group" "aidream" {
   # an older image answers it 404 and the target group would fail every task.
   # Guard: aidream/services/runtime/tests/test_deploy_drain.py
   health_check {
+    # 10s x 2 = a dead copy is out in ~20s, not up to 90s. The 5s timeout still
+    # clears the worst event-loop stall seen (3.2s, GC); if every target fails at
+    # once the load balancer fails OPEN and keeps routing to all of them.
     enabled             = true
     healthy_threshold   = 2
-    unhealthy_threshold = 3
-    interval            = 30
-    timeout             = 10
+    unhealthy_threshold = 2
+    interval            = 10
+    timeout             = 5
     path                = "/health/serving"
     protocol            = "HTTP"
     matcher             = "200-399"
