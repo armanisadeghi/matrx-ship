@@ -2,7 +2,9 @@
 
 This Terraform root owns the production application platform in AWS account `872515272894`,
 region `us-east-1`. AI Dream, the workflow worker, the Admin Dashboard, Workflow Studio, and
-dedicated per-session browser allocations run here. Coolify retains only the explicitly declared
+dedicated per-session browser allocations run here, and per-user Cloud Computer machines (`cloud-computer.tf`: own
+ECR repository, task family, security groups, EFS homes file system with one access point per user
+created at runtime by AI Dream). Coolify retains only the explicitly declared
 residual plane.
 
 The foundation provides two-AZ private Fargate networking, redundant NAT gateways, private
