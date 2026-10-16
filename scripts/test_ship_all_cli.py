@@ -221,6 +221,44 @@ release_outcome_serving() { echo main-id; }
             self.assertIn("synced ['--skip-matrx-packages']", out.stdout)
             self.assertIn("ship.sh: sync exit 0, release exit 0 (sync only)", out.stdout)
 
+    def test_package_consumers_ship_only_after_the_source_and_its_publish_runs(self):
+        # THE PACKAGE ORDER (2026-10-16): matrx-frontend read npm four minutes before aidream pushed.
+        events = []
+        def info(name, dirty):
+            return {"repo": name, "path": "/x/" + name, "branch": "main", "has_ship": True, "fetch_ok": True,
+                    "dirty": dirty, "ahead": 0, "behind": 0, "stale_packages": [], "origin_before": "a",
+                    "local_branches": [], "extra_worktrees": [], "remote_branches": [], "open_prs": []}
+        infos = {n: info(n, d) for n, d in (("aidream", 3), ("matrx-frontend", 2), ("matrx-extend", 0),
+                                            ("common-docs", 1))}
+        def fake_ship(i, out_dir, stamp):
+            events.append(("ship", i["repo"]))
+            i["ship_started"], i["status"] = time.time(), "shipped"
+        with tempfile.TemporaryDirectory() as code, tempfile.TemporaryDirectory() as out_root:
+            for n in infos:
+                Path(code, n, ".git").mkdir(parents=True)
+            with patch.object(ship_all, "CODE", code), patch.object(ship_all, "OUT_ROOT", out_root), \
+                 patch.object(ship_all, "inspect", side_effect=lambda p: infos[Path(p).name]), \
+                 patch.object(ship_all, "ship", side_effect=fake_ship), \
+                 patch.object(ship_all, "is_consumer", side_effect=lambda p: Path(p).name in ("matrx-frontend", "matrx-extend")), \
+                 patch.object(ship_all, "source_pushed", return_value=True), \
+                 patch.object(ship_all, "wait_for_publish_runs", side_effect=lambda since: events.append(("wait",)) or "waited"), \
+                 patch.object(ship_all, "stale_packages", side_effect=lambda p: ["."] if p.endswith("matrx-extend") else []), \
+                 patch.object(ship_all, "land_github_work"), \
+                 patch.object(ship_all, "release_liveness", return_value=[]), \
+                 patch.object(ship_all, "failed_release_workflows", return_value=[]), \
+                 patch.object(ship_all, "npm_publish_lag", return_value=[]), \
+                 patch.object(ship_all, "open_items", return_value=[]), \
+                 patch.object(ship_all, "held_files", return_value=[]), \
+                 patch.object(ship_all, "say"):
+                ship_all.main([])
+        wait = events.index(("wait",))
+        self.assertLess(events.index(("ship", "aidream")), wait)
+        self.assertLess(events.index(("ship", "common-docs")), wait)
+        self.assertGreater(events.index(("ship", "matrx-frontend")), wait)
+        # in sync before aidream published, behind after: shipped once, in wave 2
+        self.assertGreater(events.index(("ship", "matrx-extend")), wait)
+        self.assertEqual(len(events), 5)
+
     def test_off_train_repo_never_checks_a_release_slot_or_releases(self):
         info = {"repo": "matrx-local", "path": "/unused/matrx-local", "dirty": 0, "ahead": 0, "behind": 0,
                 "origin_before": ""}

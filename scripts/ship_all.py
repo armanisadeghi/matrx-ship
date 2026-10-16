@@ -16,7 +16,9 @@ For every git repository directly under the code folder (the parent of matrx-shi
      ONE pass over the transcripts, the conversations (Claude Code / Codex) that edited each held
      file. Nothing slow ever runs before or between releases.
 
-Repos are checked in parallel and shipped in parallel (--jobs, default 4). Every ship prints a
+Repos are checked in parallel and shipped in parallel (--jobs, default 4), in two waves: aidream
+(the @ai-matrx package source) and non-consumers first; every package consumer only after the
+publish runs aidream's push started have finished (THE PACKAGE ORDER, main()). Every ship prints a
 START line, streams its output live prefixed with the repo name, and an END line with its time.
 
 Output
@@ -180,6 +182,62 @@ def stale_packages(repo):
         if rc != 0:
             stale.append(os.path.relpath(folder, repo))
     return stale
+
+
+PACKAGE_SOURCE = "aidream"                       # the one repo that publishes @ai-matrx packages
+PUBLISH_REPO = "AI-Matrix-Engine/aidream"
+PUBLISH_WORKFLOW_FILE = "publish-npm-package.yml"
+PUBLISH_WAIT_MAX_SECONDS = 12 * 60   # agent-chosen 2026-10-16: one publish run took 1-10 min. Review 2026-11-16.
+PUBLISH_APPEAR_SECONDS = 30          # a push-triggered run shows in `gh run list` within seconds
+
+
+def is_consumer(repo):
+    """A repo with any folder (root or one level down) that adopts @ai-matrx packages."""
+    for manifest in [os.path.join(repo, "package.json")] + [
+            os.path.join(repo, d, "package.json") for d in os.listdir(repo)]:
+        try:
+            with open(manifest) as f:
+                if "sync:matrx-packages" in (json.load(f).get("scripts") or {}):
+                    return True
+        except (OSError, ValueError):
+            continue
+    return False
+
+
+def source_pushed(info):
+    """True when the package source's ship moved GitHub's main (so a publish train may be running)."""
+    if info.get("ship_started") is None:
+        return False
+    git(info["path"], "fetch", "-q", "origin", timeout=90)
+    _, now, _ = git(info["path"], "rev-parse", "-q", "--verify", "origin/main")
+    return bool(now.strip()) and now.strip() != info.get("origin_before")
+
+
+def wait_for_publish_runs(since, now=time.time, sleep=time.sleep):
+    """Block until every npm publish run created since `since` has finished, at most
+    PUBLISH_WAIT_MAX_SECONDS. Returns one line for the report. Never fails the round: a run still
+    going when the wait ends is picked up by the consumers' next sync."""
+    t0 = now()
+    sleep(PUBLISH_APPEAR_SECONDS)
+    seen = set()
+    while True:
+        rc, out, err = run(["gh", "run", "list", "-R", PUBLISH_REPO, "--workflow", PUBLISH_WORKFLOW_FILE,
+                            "-L", "50", "--json", "databaseId,status,createdAt"], CODE, timeout=60)
+        if rc != 0:
+            return "publish runs NOT MEASURED (gh run list failed: %s); consumers ship now" % (err or out).strip()[-200:]
+        active = []
+        for r in json.loads(out or "[]"):
+            created = datetime.datetime.strptime(r["createdAt"], "%Y-%m-%dT%H:%M:%SZ").replace(
+                tzinfo=datetime.timezone.utc).timestamp()
+            if created >= since - 5 and r["status"] != "completed":
+                active.append(r["databaseId"])
+        seen.update(active)
+        if not active:
+            return "publish runs: %d finished in %s; consumers ship against npm now" % (len(seen), fmt(now() - t0))
+        if now() - t0 >= PUBLISH_WAIT_MAX_SECONDS:
+            return ("PUBLISH RUNS STILL GOING after %d min (%d active); consumers ship against what npm "
+                    "serves now, the next round adopts the rest" % (PUBLISH_WAIT_MAX_SECONDS // 60, len(active)))
+        sleep(20)
 
 
 def npm_publish_lag(info):
@@ -657,6 +715,7 @@ def _ship_locked(info, out_dir, stamp):
         return info
     log = os.path.join(out_dir, name + ".log")
     t0, started = time.time(), clock()
+    info["ship_started"] = t0
     say("… %-26s running (started %s)" % (name, started))
     lines = []
     with open(log, "w") as f:
@@ -750,12 +809,37 @@ def main(args=None):
     say("■ checked in %s: %d %s, %d skipped" % (fmt(time.time() - t0), len(to_ship), "would ship" if dry else "to ship",
                                                     len(infos) - len(to_ship)))
 
-    # ── 2. ship, several at once ──────────────────────────────────────────────────────────
+    # ── 2. ship in TWO WAVES: the package source first, its consumers after npm serves it ────
+    # THE PACKAGE ORDER (2026-10-16). Every repo used to ship at once, so matrx-frontend read npm
+    # (06:08) four minutes BEFORE aidream even pushed its package changes (06:12): the web build ran
+    # on the previous packages and the next round rebuilt it for the new ones — two builds for one
+    # change. Wave 1 is aidream plus every repo that consumes no @ai-matrx package; wave 2 waits for
+    # the publish runs aidream's push started, re-measures the consumers that looked in sync, and
+    # ships every consumer once, against what npm now serves.
     if to_ship and not dry:
         t0 = time.time()
-        say("▶ shipping %d repo(s), up to %d at a time…" % (len(to_ship), jobs))
+        consumers = {i["repo"] for i in infos if is_consumer(i["path"])}
+        wave1 = [i for i in to_ship if i["repo"] == PACKAGE_SOURCE or i["repo"] not in consumers]
+        wave2 = [i for i in to_ship if i not in wave1]
+        source = next((i for i in wave1 if i["repo"] == PACKAGE_SOURCE), None)
+        say("▶ wave 1: shipping %d repo(s) (package source + non-consumers), up to %d at a time…"
+            % (len(wave1), jobs))
         with ThreadPoolExecutor(max_workers=jobs) as pool:
-            list(pool.map(lambda i: ship(i, out_dir, stamp), to_ship))
+            list(pool.map(lambda i: ship(i, out_dir, stamp), wave1))
+        if source and source_pushed(source):
+            say("▶ " + wait_for_publish_runs(source["ship_started"]))
+            skipped = [i for i in infos if i["repo"] in consumers and i not in wave2
+                       and i["status"] == "skipped (in sync)"]
+            with ThreadPoolExecutor(max_workers=8) as pool:
+                fresh = list(pool.map(lambda i: (i, stale_packages(i["path"])), skipped))
+            for info, stale in fresh:
+                if stale:
+                    info["stale_packages"], info["status"] = stale, "to ship"
+                    wave2.append(info)
+        if wave2:
+            say("▶ wave 2: shipping %d package consumer(s), up to %d at a time…" % (len(wave2), jobs))
+            with ThreadPoolExecutor(max_workers=jobs) as pool:
+                list(pool.map(lambda i: ship(i, out_dir, stamp), wave2))
         say("■ all shipping finished in %s" % fmt(time.time() - t0))
 
     # ── 3b. land GitHub-side work and re-measure packages (the "after" truth) ─────────────
