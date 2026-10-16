@@ -1,4 +1,12 @@
-# Cloud Browser cold start: SOCI lazy loading for the browser worker image.
+# Cloud Browser / Cloud Computer cold start: SOCI lazy loading for the
+# matrx-browser-worker and matrx-cloud-computer images.
+#
+# 2026-10-15 UPDATE: the factory now builds SOCI Index Manifest **v2** (AWS
+# allows only v2 for new SOCI users). `soci convert` re-publishes each pushed
+# image tag as an OCI image index = [original manifest, SOCI v2 index]; the
+# image tag keeps working unchanged, its digest changes, the layers do not. The
+# text below describes the original v1 design and the measurements behind it.
+
 #
 # Measured 2026-09-17: every dedicated Fargate browser task spent 62-64 s in
 # pullStartedAt -> pullStoppedAt on the 1.807 GB, 18-layer
@@ -20,7 +28,7 @@
 # the absence of an index must scream on its own.
 
 variable "browser_worker_soci_versions" {
-  description = "Pinned toolchain for the browser-worker SOCI index builder. soci >= 0.15 still produces Index Manifest v1 (`soci create` + `soci push`), which is the only form Fargate 1.4.0 lazy-loads; `soci convert` (v2) produces a different image and would NOT be picked up."
+  description = "Pinned toolchain for the browser-worker SOCI index builder. soci >= 0.15 provides `soci convert`, which produces SOCI Index Manifest v2 (the only form AWS allows for new SOCI users)."
   type = object({
     soci       = string
     containerd = string
@@ -43,6 +51,7 @@ locals {
   browser_worker_soci_project    = "${local.name_prefix}-browser-worker-soci-index"
   browser_worker_soci_namespace  = "Matrx/CloudBrowser"
   browser_worker_soci_repository = data.aws_ecr_repository.browser_worker.name
+  cloud_computer_soci_repository = aws_ecr_repository.cloud_computer.name
 }
 
 resource "aws_cloudwatch_log_group" "browser_worker_soci" {
@@ -80,7 +89,7 @@ data "aws_iam_policy_document" "browser_worker_soci" {
   }
 
   statement {
-    sid = "ReadAndWriteOnlyTheBrowserWorkerRepository"
+    sid = "ReadAndWriteOnlyTheIndexedRepositories"
     actions = [
       "ecr:BatchCheckLayerAvailability",
       "ecr:BatchGetImage",
@@ -92,7 +101,10 @@ data "aws_iam_policy_document" "browser_worker_soci" {
       "ecr:PutImage",
       "ecr:UploadLayerPart",
     ]
-    resources = [data.aws_ecr_repository.browser_worker.arn]
+    resources = [
+      data.aws_ecr_repository.browser_worker.arn,
+      aws_ecr_repository.cloud_computer.arn,
+    ]
   }
 
   statement {
@@ -165,12 +177,17 @@ resource "aws_codebuild_project" "browser_worker_soci" {
       value = var.browser_worker_soci_versions.containerd
     }
 
-    # Overridden per invocation by the EventBridge input transformer. The
-    # default is the mutable `latest` tag so an operator can start the project
-    # by hand with no overrides and still index the live image.
+    # Overridden per invocation by the EventBridge input transformer (digest,
+    # repository and tag of the pushed image). By hand, override all three:
+    # IMAGE_DIGEST=sha256:..., REPOSITORY_NAME=<repo>, IMAGE_TAG=<release tag>.
     environment_variable {
       name  = "IMAGE_DIGEST"
-      value = "latest"
+      value = "none"
+    }
+
+    environment_variable {
+      name  = "IMAGE_TAG"
+      value = ""
     }
   }
 
@@ -195,62 +212,44 @@ resource "aws_codebuild_project" "browser_worker_soci" {
             - curl -fsSL "https://github.com/containerd/containerd/releases/download/v$CONTAINERD_VERSION/containerd-$CONTAINERD_VERSION-linux-amd64.tar.gz" -o /tmp/containerd.tgz
             - tar -C /usr/local -xzf /tmp/containerd.tgz
             - soci --version
-        pre_build:
-          commands:
-            - set -eux
-            # The index artifact is itself an image in the same repository, so
-            # indexing it would loop. EventBridge already filters it out; this
-            # is the second, local refusal.
-            - |
-              case "$IMAGE_DIGEST" in
-                sha256-*|*.soci) echo "Refusing to index a SOCI artifact ($IMAGE_DIGEST)."; exit 0 ;;
-              esac
-            - |
-              case "$IMAGE_DIGEST" in
-                sha256:*) IMAGE_REF="$REPOSITORY_URI@$IMAGE_DIGEST" ;;
-                *)        IMAGE_REF="$REPOSITORY_URI:$IMAGE_DIGEST" ;;
-              esac
-              echo "IMAGE_REF=$IMAGE_REF" > /tmp/soci.env
-            - /usr/local/bin/containerd > /tmp/containerd.log 2>&1 &
-            - timeout 90 sh -c 'until /usr/local/bin/ctr version >/dev/null 2>&1; do sleep 1; done'
-            - aws ecr get-login-password --region "$AWS_REGION" > /tmp/ecr-password
         build:
           commands:
-            - set -eux
-            - . /tmp/soci.env
-            # `ctr images pull` also UNPACKS into overlayfs, which fails inside
-            # CodeBuild ("failed to convert whiteout file … operation not
-            # permitted"). Building an index only needs the compressed blobs in
-            # the content store, so fetch them and skip the snapshot entirely.
-            - /usr/local/bin/ctr content fetch --platform linux/amd64 --user "AWS:$(cat /tmp/ecr-password)" "$IMAGE_REF"
-            - soci create "$IMAGE_REF"
-            - soci push --user "AWS:$(cat /tmp/ecr-password)" "$IMAGE_REF"
-        post_build:
-          commands:
-            # Presence in ECR is the only proof that counts: a build that
-            # "succeeded" without a readable index artifact is a silent 62 s
-            # pull, and must report itself missing.
             - |
+              cat > /tmp/soci-v2.sh <<'EOS'
+              set -eux
+              # Image pushed (tag $IMAGE_TAG, digest $IMAGE_DIGEST) -> re-publish the SAME tag
+              # as an image index carrying a SOCI Index Manifest v2. The index is the same
+              # tag, so the next push event (the converted image) must be refused here.
+              case "$IMAGE_TAG" in
+                ""|latest|buildcache|sha256-*|*.soci) echo "Not an indexable release tag ($IMAGE_TAG); nothing to do."; exit 0 ;;
+              esac
+              REGISTRY="$${REPOSITORY_URI%%/*}"
+              REF_SRC="$REGISTRY/$REPOSITORY_NAME@$IMAGE_DIGEST"
+              REF_DST="$REGISTRY/$REPOSITORY_NAME:$IMAGE_TAG"
+              MANIFEST=$(aws ecr batch-get-image --repository-name "$REPOSITORY_NAME" --image-ids "imageDigest=$IMAGE_DIGEST" --query 'images[0].imageManifest' --output text)
+              if echo "$MANIFEST" | jq -e '.manifests[]? | select(.artifactType=="application/vnd.amazon.soci.index.v2+json")' >/dev/null; then
+                echo "$REPOSITORY_NAME:$IMAGE_TAG already carries a SOCI v2 index; nothing to do."
+                exit 0
+              fi
+              /usr/local/bin/containerd > /tmp/containerd.log 2>&1 &
+              timeout 90 sh -c 'until /usr/local/bin/ctr version >/dev/null 2>&1; do sleep 1; done'
+              PW=$(aws ecr get-login-password --region "$AWS_REGION")
+              # Fetch compressed blobs only; unpacking fails inside CodeBuild (whiteouts).
+              /usr/local/bin/ctr content fetch --platform linux/amd64 --user "AWS:$PW" "$REF_SRC"
+              /usr/local/bin/soci convert --platform linux/amd64 "$REF_SRC" "$REF_DST"
+              /usr/local/bin/ctr images push --user "AWS:$PW" "$REF_DST"
+              # Presence in ECR is the only proof that counts: read the pushed tag back.
               set +e
               MISSING=1
-              . /tmp/soci.env 2>/dev/null
-              INDEX_DIGEST=$(soci index ls --ref "$IMAGE_REF" -q 2>/dev/null | head -n 1)
-              if [ -n "$INDEX_DIGEST" ]; then
-                MEDIA=$(aws ecr describe-images \
-                  --repository-name "$REPOSITORY_NAME" \
-                  --image-ids "imageDigest=$INDEX_DIGEST" \
-                  --query 'imageDetails[0].artifactMediaType' --output text 2>/dev/null)
-                if [ "$MEDIA" = "application/vnd.amazon.soci.index.v1+json" ]; then
-                  MISSING=0
-                fi
-              fi
-              echo "soci index for $IMAGE_REF -> digest=$INDEX_DIGEST missing=$MISSING"
-              aws cloudwatch put-metric-data \
-                --namespace "$METRIC_NAMESPACE" \
-                --metric-name SociIndexMissing \
-                --dimensions "Repository=$REPOSITORY_NAME" \
-                --unit Count --value "$MISSING"
+              aws ecr batch-get-image --repository-name "$REPOSITORY_NAME" --image-ids "imageTag=$IMAGE_TAG" \
+                --query 'images[0].imageManifest' --output text \
+                | jq -e '.manifests[]? | select(.artifactType=="application/vnd.amazon.soci.index.v2+json")' >/dev/null && MISSING=0
+              echo "soci v2 index for $REPOSITORY_NAME:$IMAGE_TAG missing=$MISSING"
+              aws cloudwatch put-metric-data --namespace "$METRIC_NAMESPACE" --metric-name SociIndexMissing \
+                --dimensions "Repository=$REPOSITORY_NAME" --unit Count --value "$MISSING"
               exit "$MISSING"
+              EOS
+            - bash /tmp/soci-v2.sh
     BUILDSPEC
   }
 
@@ -298,7 +297,7 @@ resource "aws_cloudwatch_event_rule" "browser_worker_soci" {
     detail = {
       "action-type"     = ["PUSH"]
       result            = ["SUCCESS"]
-      "repository-name" = [local.browser_worker_soci_repository]
+      "repository-name" = [local.browser_worker_soci_repository, local.cloud_computer_soci_repository]
       # The pushed SOCI index lands in the same repository. Indexing an index
       # is meaningless and would recurse, so untagged and `sha256-…`-tagged
       # referrer artifacts never reach the builder. `anything-but` also
@@ -318,16 +317,18 @@ resource "aws_cloudwatch_event_target" "browser_worker_soci" {
   input_transformer {
     input_paths = {
       digest = "$.detail.image-digest"
+      repo   = "$.detail.repository-name"
+      tag    = "$.detail.image-tag"
     }
 
     # jsonencode escapes angle brackets as \u003c/\u003e, so EventBridge sees a
     # literal "<digest>" instead of substituting the ECR image digest.
     input_template = replace(replace(jsonencode({
-      environmentVariablesOverride = [{
-        name  = "IMAGE_DIGEST"
-        value = "<digest>"
-        type  = "PLAINTEXT"
-      }]
+      environmentVariablesOverride = [
+        { name = "IMAGE_DIGEST", value = "<digest>", type = "PLAINTEXT" },
+        { name = "REPOSITORY_NAME", value = "<repo>", type = "PLAINTEXT" },
+        { name = "IMAGE_TAG", value = "<tag>", type = "PLAINTEXT" },
+      ]
     }), "\\u003c", "<"), "\\u003e", ">")
   }
 }
@@ -347,7 +348,7 @@ resource "aws_cloudwatch_event_target" "browser_worker_soci" {
 
 resource "aws_cloudwatch_metric_alarm" "browser_worker_soci_index_missing" {
   alarm_name          = "matrx-production-browser-worker-soci-index-missing"
-  alarm_description   = "An image was pushed to matrx-browser-worker and no SOCI Index Manifest v1 artifact could be read back from ECR for it. Cold starts silently fall back to a full ~62 s image pull until this is fixed: start the ${local.browser_worker_soci_project} CodeBuild project with IMAGE_DIGEST set to the image's digest."
+  alarm_description   = "An image was pushed to matrx-browser-worker and no SOCI Index Manifest v2 could be read back from ECR for its tag. Cold starts silently fall back to a full ~62 s image pull until this is fixed: start the ${local.browser_worker_soci_project} CodeBuild project with IMAGE_DIGEST set to the image's digest."
   namespace           = local.browser_worker_soci_namespace
   metric_name         = "SociIndexMissing"
   comparison_operator = "GreaterThanOrEqualToThreshold"
@@ -363,6 +364,24 @@ resource "aws_cloudwatch_metric_alarm" "browser_worker_soci_index_missing" {
 
   dimensions = {
     Repository = local.browser_worker_soci_repository
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "cloud_computer_soci_index_missing" {
+  alarm_name          = "matrx-production-cloud-computer-soci-index-missing"
+  alarm_description   = "An image was pushed to matrx-cloud-computer and no SOCI Index Manifest v2 could be read back from ECR for its tag. Cold starts silently fall back to a full image pull until this is fixed: start the ${local.browser_worker_soci_project} CodeBuild project with IMAGE_DIGEST, REPOSITORY_NAME=matrx-cloud-computer and IMAGE_TAG overrides."
+  namespace           = local.browser_worker_soci_namespace
+  metric_name         = "SociIndexMissing"
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  threshold           = 1
+  evaluation_periods  = 1
+  datapoints_to_alarm = 1
+  period              = 1200
+  statistic           = "Maximum"
+  treat_missing_data  = "notBreaching"
+
+  dimensions = {
+    Repository = local.cloud_computer_soci_repository
   }
 }
 
