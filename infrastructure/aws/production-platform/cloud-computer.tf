@@ -135,16 +135,45 @@ resource "aws_efs_mount_target" "cloud_computer_homes" {
   security_groups = [aws_security_group.cloud_computer_homes.id]
 }
 
-# A machine may mount the homes file system only through an access point the
-# control plane created (tagged managed-by), never the file system root.
-data "aws_iam_policy_document" "cloud_computer_homes" {
-  statement {
-    actions = [
-      "elasticfilesystem:ClientMount",
-      "elasticfilesystem:ClientWrite",
-    ]
-    resources = [aws_efs_file_system.cloud_computer_homes.arn]
+# Isolation (review finding, 2026-10-16): the desktop user has passwordless
+# sudo, so whatever the task role may mount, the person may mount. The SHARED
+# task role therefore carries NO home-mount permission at all. Each person's
+# machine runs under its OWN role, created at runtime by the control plane
+# (aidream cloud_computer.py `ensure_user_role`) under the path below, capped
+# by the permissions boundary below, whose only mount grant names THAT
+# person's access point. The file-system policy is the second layer: a mount
+# through any access point other than the one tagged on the caller's own role
+# is denied, and a caller with no such tag cannot mount at all.
+locals {
+  cloud_computer_user_role_path = "/matrx/cloud-computer/"
+  cloud_computer_user_role_arns = "arn:aws:iam::${var.aws_account_id}:role/matrx/cloud-computer/*"
+}
 
+data "aws_iam_policy_document" "cloud_computer_user_boundary" {
+  statement {
+    sid = "EcsExec"
+    actions = [
+      "ssmmessages:CreateControlChannel",
+      "ssmmessages:CreateDataChannel",
+      "ssmmessages:OpenControlChannel",
+      "ssmmessages:OpenDataChannel",
+    ]
+    resources = ["*"]
+  }
+  statement {
+    sid = "EcsExecLogs"
+    actions = [
+      "logs:CreateLogStream",
+      "logs:DescribeLogGroups",
+      "logs:DescribeLogStreams",
+      "logs:PutLogEvents",
+    ]
+    resources = ["${aws_cloudwatch_log_group.ecs_exec.arn}:*"]
+  }
+  statement {
+    sid       = "MountHomesThroughAnAccessPoint"
+    actions   = ["elasticfilesystem:ClientMount", "elasticfilesystem:ClientWrite"]
+    resources = [aws_efs_file_system.cloud_computer_homes.arn]
     condition {
       test     = "Bool"
       variable = "elasticfilesystem:AccessedViaMountTarget"
@@ -158,6 +187,67 @@ data "aws_iam_policy_document" "cloud_computer_homes" {
   }
 }
 
+resource "aws_iam_policy" "cloud_computer_user_boundary" {
+  name        = "matrx-production-cloud-computer-user-boundary"
+  path        = "/matrx/platform/"
+  description = "Ceiling for every per-user Cloud Computer task role: ECS Exec + mounting a homes access point."
+  policy      = data.aws_iam_policy_document.cloud_computer_user_boundary.json
+}
+
+data "aws_iam_policy_document" "cloud_computer_homes_fs" {
+  statement {
+    sid       = "MountOnlyYourOwnAccessPoint"
+    effect    = "Deny"
+    actions   = ["elasticfilesystem:ClientMount", "elasticfilesystem:ClientWrite", "elasticfilesystem:ClientRootAccess"]
+    resources = [aws_efs_file_system.cloud_computer_homes.arn]
+    principals {
+      type        = "AWS"
+      identifiers = ["*"]
+    }
+    condition {
+      test     = "StringNotEquals"
+      variable = "elasticfilesystem:AccessPointArn"
+      values   = ["arn:aws:elasticfilesystem:${var.aws_region}:${var.aws_account_id}:access-point/$${aws:PrincipalTag/cloud-computer-access-point}"]
+    }
+  }
+  statement {
+    sid       = "NoMountWithoutAnOwnedRole"
+    effect    = "Deny"
+    actions   = ["elasticfilesystem:ClientMount", "elasticfilesystem:ClientWrite", "elasticfilesystem:ClientRootAccess"]
+    resources = [aws_efs_file_system.cloud_computer_homes.arn]
+    principals {
+      type        = "AWS"
+      identifiers = ["*"]
+    }
+    condition {
+      test     = "Null"
+      variable = "aws:PrincipalTag/cloud-computer-access-point"
+      values   = ["true"]
+    }
+  }
+  statement {
+    sid       = "MountThroughMountTargets"
+    actions   = ["elasticfilesystem:ClientMount", "elasticfilesystem:ClientWrite"]
+    resources = [aws_efs_file_system.cloud_computer_homes.arn]
+    principals {
+      type        = "AWS"
+      identifiers = ["arn:aws:iam::${var.aws_account_id}:root"]
+    }
+    condition {
+      test     = "Bool"
+      variable = "elasticfilesystem:AccessedViaMountTarget"
+      values   = ["true"]
+    }
+  }
+}
+
+resource "aws_efs_file_system_policy" "cloud_computer_homes" {
+  file_system_id = aws_efs_file_system.cloud_computer_homes.id
+  policy         = data.aws_iam_policy_document.cloud_computer_homes_fs.json
+}
+
+# The base definition's role: ECS Exec only, no home mount (the base family is
+# never launched with a home; per-user families replace this role).
 resource "aws_iam_role" "cloud_computer_task" {
   name               = "matrx-production-cloud-computer-task"
   path               = "/matrx/platform/"
@@ -167,12 +257,6 @@ resource "aws_iam_role" "cloud_computer_task" {
 resource "aws_iam_role_policy_attachment" "cloud_computer_exec" {
   role       = aws_iam_role.cloud_computer_task.name
   policy_arn = aws_iam_policy.ecs_exec_task.arn
-}
-
-resource "aws_iam_role_policy" "cloud_computer_homes" {
-  name   = "mount-own-home-access-point"
-  role   = aws_iam_role.cloud_computer_task.id
-  policy = data.aws_iam_policy_document.cloud_computer_homes.json
 }
 
 # The BASE definition. It has no home volume: the control plane copies it into
@@ -375,6 +459,7 @@ data "aws_iam_policy_document" "cloud_computer_fleet" {
     resources = [
       aws_iam_role.task_execution.arn,
       aws_iam_role.cloud_computer_task.arn,
+      local.cloud_computer_user_role_arns,
     ]
     condition {
       test     = "StringEquals"
@@ -429,6 +514,50 @@ data "aws_iam_policy_document" "cloud_computer_fleet" {
   }
 }
 
+data "aws_iam_policy_document" "cloud_computer_fleet_roles" {
+  statement {
+    sid       = "CreatePerUserRolesUnderTheBoundary"
+    actions   = ["iam:CreateRole", "iam:PutRolePermissionsBoundary"]
+    resources = [local.cloud_computer_user_role_arns]
+    condition {
+      test     = "StringEquals"
+      variable = "iam:PermissionsBoundary"
+      values   = [aws_iam_policy.cloud_computer_user_boundary.arn]
+    }
+  }
+  statement {
+    sid = "ManagePerUserRoles"
+    actions = [
+      "iam:GetRole",
+      "iam:TagRole",
+      "iam:ListRoleTags",
+      "iam:PutRolePolicy",
+      "iam:GetRolePolicy",
+      "iam:DeleteRolePolicy",
+      "iam:ListRolePolicies",
+      "iam:DeleteRole",
+    ]
+    resources = [local.cloud_computer_user_role_arns]
+  }
+  statement {
+    sid       = "ListTaskDefinitions"
+    actions   = ["ecs:ListTaskDefinitions"]
+    resources = ["*"]
+  }
+  statement {
+    sid       = "DeregisterCloudComputerDefinitions"
+    actions   = ["ecs:DeregisterTaskDefinition"]
+    resources = ["*"]
+  }
+}
+
+resource "aws_iam_role_policy" "cloud_computer_fleet_roles" {
+  for_each = toset(["aidream", "workflow-worker"])
+  name     = "cloud-computer-per-user-roles"
+  role     = aws_iam_role.task[each.key].id
+  policy   = data.aws_iam_policy_document.cloud_computer_fleet_roles.json
+}
+
 resource "aws_iam_role_policy" "cloud_computer_fleet" {
   for_each = toset(["aidream", "workflow-worker"])
   name     = "cloud-computer-lifecycle"
@@ -444,13 +573,15 @@ output "cloud_computer" {
     security_group = aws_security_group.cloud_computer.id
     service        = aws_ecs_service.cloud_computer.name
     task_role      = aws_iam_role.cloud_computer_task.arn
+    user_role_path = local.cloud_computer_user_role_path
+    user_boundary  = aws_iam_policy.cloud_computer_user_boundary.arn
   }
 }
 
 variable "cloud_computer_image_tag" {
   description = "AI Dream Git SHA of the Cloud Computer image (browser worker + desktop) in matrx-cloud-computer."
   type        = string
-  default     = "54ae1711e5516d212b60f4fa7e1a3860534b9326"
+  default     = "72a663f8c20114ffbfba6f2396c777cf52ef2220"
 
   validation {
     condition     = can(regex("^[0-9a-f]{40}$", var.cloud_computer_image_tag))
