@@ -12,7 +12,8 @@ post   sends the message into the recipient's direct room on the server (REST do
        Sender: --from <conversation id> (or env MATRX_CONVERSATION_ID) sends as that session.
        Anything else is an AUTOMATED NOTICE, never the person: --from "<script or lane name>"
        (e.g. "ship-all", "frontend release"), else env MATRX_AUTOMATION_LABEL, else the calling
-       script's name. The recipient reads "automated notice from <label>".
+       script's name, else the coding agent's own session (CLAUDE_CODE_SESSION_ID / CODEX_THREAD_ID),
+       else an unnamed notice, with a loud warning. The recipient reads "automated notice from <label>".
 list / done   retired. Mail is read by the recipient session itself (agent_messages tool,
        action "read"), and nothing is left to deliver by hand.
 
@@ -66,7 +67,24 @@ def token():
     return rec["access_token"]
 
 
-def call(body):
+class Refused(Exception):
+    """The server refused the post (HTTP error); `.error` is its error code when it named one."""
+
+    def __init__(self, code, error, text):
+        super().__init__(text)
+        self.code, self.error, self.text = code, error, text
+
+
+def call(body, fatal=True):
+    try:
+        return _call(body)
+    except Refused as e:
+        if not fatal:
+            raise
+        sys.exit("board: not delivered (%s): %s" % (e.code, e.text))
+
+
+def _call(body):
     req = urllib.request.Request(
         URL, data=json.dumps(body).encode(), method="POST",
         headers={"Authorization": "Bearer " + token(), "Content-Type": "application/json",
@@ -80,9 +98,10 @@ def call(body):
             detail = json.loads(raw).get("detail", raw)
         except ValueError:
             detail = raw
+        error = detail.get("error") if isinstance(detail, dict) else None
         if isinstance(detail, dict):
             detail = "%s: %s %s" % (detail.get("error", e.code), detail.get("message", ""), detail.get("remedy", ""))
-        sys.exit("board: not delivered (%s): %s" % (e.code, str(detail).strip()[:600]))
+        raise Refused(e.code, error, str(detail).strip()[:600])
     except (urllib.error.URLError, TimeoutError, OSError) as e:
         sys.exit("board: could not reach %s: %s" % (URL, e))
 
@@ -119,10 +138,44 @@ def caller_label():
     return ""
 
 
+UNNAMED = "board.py (sender not named)"
+
+
 def automation_label(who):
     """Who an automated notice is from: never the person whose sign-in carries it."""
     label = " ".join((who or os.environ.get("MATRX_AUTOMATION_LABEL") or caller_label()).split())
-    return (label or "board.py (sender not named)")[:80]
+    return (label or UNNAMED)[:80]
+
+
+#: The coding agent's own session id, which the server accepts as `from` (a provider session id):
+#: an agent that forgot --from still sends as itself, never as an unnamed script.
+AGENT_SESSION_ENV = (("CLAUDE_CODE_SESSION_ID", "Claude session"), ("CODEX_THREAD_ID", "Codex session"))
+
+
+def agent_session():
+    """-> (session id, kind) of the coding agent running this command, or None."""
+    for var, kind in AGENT_SESSION_ENV:
+        value = os.environ.get(var, "").strip()
+        if UUID.match(value):
+            return value, kind
+    return None
+
+
+def sender(who):
+    """-> (from_text, fallback label or None). Explicit --from / env / calling script first; then the
+    agent's own session (falling back to a label naming it if the server does not know it)."""
+    if who or os.environ.get("MATRX_AUTOMATION_LABEL") or caller_label():
+        return who, None
+    found = agent_session()
+    if found:
+        sid, kind = found
+        return sid, "%s %s" % (kind, sid[:8])
+    return "", None
+
+
+WARN_UNNAMED = ("board: WARNING: this went out as an UNNAMED automated notice (\"%s\"), so the "
+                "recipient cannot tell who wrote it or answer you. Next time name yourself: "
+                "--from <your AI Matrx conversation id> (an agent) or --from <script or lane name>." % UNNAMED)
 
 
 def build(to, msg, urgent, who):
@@ -136,7 +189,22 @@ def build(to, msg, urgent, who):
 
 def post(args):
     to, msg, urgent, who = parse(args)
-    out = call(build(to, msg, urgent, who))
+    who, fallback = sender(who)
+    if fallback:
+        try:
+            out = call(build(to, msg, urgent, who), fatal=False)
+        except Refused as e:
+            if e.error not in ("not_your_session", "ambiguous_session", "from_required"):
+                sys.exit("board: not delivered (%s): %s" % (e.code, e.text))
+            # This agent's session is not mirrored to AI Matrx: still never unnamed.
+            print("board: your session %s is not known to AI Matrx; sent as an automated notice "
+                  "from \"%s\" (pass --from to name yourself)." % (who, fallback), file=sys.stderr)
+            out = call(build(to, msg, urgent, fallback))
+    else:
+        body = build(to, msg, urgent, who)
+        out = call(body)
+        if body["from"] == "automation:" + UNNAMED:
+            print(WARN_UNNAMED, file=sys.stderr)
     print("board: delivered%s to %s (%s) — message %s%s" % (
         " URGENT" if urgent else "", out.get("to_label") or to, out.get("to") or to, out.get("message_id"),
         ", already sent before" if out.get("replayed") else ""))

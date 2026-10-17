@@ -29,7 +29,63 @@ def main():
     assert unnamed.startswith("automation:") and unnamed != "automation:", unnamed
     for who in ("", "ship-all", "Codex lane 7", SID):
         assert board.build("c1", "x", False, who)["from"] != "person", who
+    agent_sender_named()
     print("test_board: ok")
+
+
+def agent_sender_named():
+    """An agent that forgot --from sends as its own session (CLAUDE_CODE_SESSION_ID / CODEX_THREAD_ID);
+    a session the server does not know goes out as a notice naming that session; only with nothing at
+    all is it unnamed, and then the caller is warned loudly (143 unnamed rows, 2026-10-15..17)."""
+    import contextlib
+    import io
+
+    saved = {k: os.environ.pop(k, None) for k in ("CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID",
+                                                   "MATRX_AUTOMATION_LABEL", "MATRX_CONVERSATION_ID")}
+    real_call, real_caller = board._call, board.caller_label
+    sent = []
+    board.caller_label = lambda: ""
+    try:
+        def ok(body):
+            sent.append(body)
+            return {"message_id": "m1"}
+        board._call = ok
+        os.environ["CLAUDE_CODE_SESSION_ID"] = SID
+        board.post(["c1", "hi"])
+        assert sent[-1]["from"] == SID, sent[-1]
+        del os.environ["CLAUDE_CODE_SESSION_ID"]
+        os.environ["CODEX_THREAD_ID"] = SID
+        board.post(["c1", "hi"])
+        assert sent[-1]["from"] == SID, sent[-1]
+
+        def refuse_session(body):
+            if body["from"] == SID:
+                raise board.Refused(403, "not_your_session", "not yours")
+            sent.append(body)
+            return {"message_id": "m2"}
+        board._call = refuse_session
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+            board.post(["c1", "hi"])
+        assert sent[-1]["from"] == "automation:Codex session " + SID[:8], sent[-1]
+        assert "not known to AI Matrx" in err.getvalue()
+        del os.environ["CODEX_THREAD_ID"]
+        board._call = ok
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+            board.post(["c1", "hi"])
+        assert sent[-1]["from"] == "automation:" + board.UNNAMED, sent[-1]
+        assert "WARNING" in err.getvalue() and "--from" in err.getvalue(), err.getvalue()
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+            board.post(["c1", "hi", "--from", "ship-all"])
+        assert sent[-1]["from"] == "automation:ship-all" and err.getvalue() == "", err.getvalue()
+    finally:
+        board._call, board.caller_label = real_call, real_caller
+        for k, v in saved.items():
+            os.environ.pop(k, None)
+            if v is not None:
+                os.environ[k] = v
 
 
 if __name__ == "__main__":
