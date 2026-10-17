@@ -24,7 +24,7 @@ LOG_TAG="[backup-verify ${VERIFY_TS}]"
 CONTAINER_BASE="bv-pg-${VERIFY_TS}"
 
 mkdir -p "${WORK_DIR}"
-trap 'rm -rf "${WORK_DIR}"; for c in $(docker ps -aq --filter "name=${CONTAINER_BASE}-"); do docker rm -f "$c" >/dev/null 2>&1 || true; done' EXIT
+trap 'rm -rf "${WORK_DIR}"; for c in $(docker ps -aq --filter "name=${CONTAINER_BASE}-"); do docker rm -f -v "$c" >/dev/null 2>&1 || true; done' EXIT
 
 ALL_OK=1
 SUMMARY=""
@@ -81,7 +81,7 @@ verify_db() {
         echo "${LOG_TAG} FAIL: ${label} verify container did not become ready"
         ALL_OK=0
         SUMMARY="${SUMMARY}\n  ${label}: PG NOT READY"
-        docker rm -f "${container}" >/dev/null 2>&1 || true
+        docker rm -f -v "${container}" >/dev/null 2>&1 || true
         return
     fi
 
@@ -90,7 +90,7 @@ verify_db() {
         head -10 "${WORK_DIR}/${label}-restore.err" >&2 || true
         ALL_OK=0
         SUMMARY="${SUMMARY}\n  ${label}: RESTORE ERROR"
-        docker rm -f "${container}" >/dev/null 2>&1 || true
+        docker rm -f -v "${container}" >/dev/null 2>&1 || true
         return
     fi
 
@@ -127,7 +127,7 @@ verify_db() {
         SUMMARY="${SUMMARY}\n  ${label}: OK (${table_count} tables, ${mb} MiB)"
     fi
 
-    docker rm -f "${container}" >/dev/null 2>&1 || true
+    docker rm -f -v "${container}" >/dev/null 2>&1 || true
 }
 
 latest_in() {
