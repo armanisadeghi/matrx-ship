@@ -3,7 +3,7 @@ resource "aws_ecs_cluster" "production" {
 
   setting {
     name  = "containerInsights"
-    value = "enhanced"
+    value = "enabled"
   }
 
   configuration {

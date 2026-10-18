@@ -14,6 +14,12 @@ mock_provider "aws" {
     }
   }
 
+  mock_data "aws_secretsmanager_secret_version" {
+    defaults = {
+      secret_string = "{\"username\":\"mock\",\"password\":\"mock-password-0000000000\"}"
+    }
+  }
+
   mock_data "aws_vpc" {
     defaults = {
       cidr_block = "10.0.0.0/16"
@@ -35,10 +41,11 @@ run "dedicated_browser_memory_alarm_tracks_the_hottest_task" {
   }
 
   assert {
-    condition = anytrue([
-      for query in aws_cloudwatch_metric_alarm.browser_fleet_memory.metric_query :
-      strcontains(query.expression, "TaskDefinitionFamily") && strcontains(query.expression, "TaskId")
-    ])
-    error_message = "The browser memory alarm must target individual dedicated tasks, not the zero-count ECS service."
+    condition = (
+      aws_cloudwatch_metric_alarm.browser_fleet_memory.statistic == "Maximum" &&
+      contains(keys(aws_cloudwatch_metric_alarm.browser_fleet_memory.dimensions), "TaskDefinitionFamily") &&
+      !contains(keys(aws_cloudwatch_metric_alarm.browser_fleet_memory.dimensions), "ServiceName")
+    )
+    error_message = "The browser memory alarm must take the Maximum across individual dedicated tasks of the family, not the zero-count ECS service."
   }
 }

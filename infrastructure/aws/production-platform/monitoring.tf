@@ -191,11 +191,13 @@ resource "aws_cloudwatch_dashboard" "production" {
           period = 60
           stat   = "Maximum"
           metrics = [[
-            {
-              id         = "browser_fleet_memory"
-              expression = "SELECT MAX(MemoryUtilized) FROM SCHEMA(\"ECS/ContainerInsights\", ClusterName, TaskDefinitionFamily, TaskId) WHERE ClusterName = '${aws_ecs_cluster.production.name}' AND TaskDefinitionFamily = '${aws_ecs_task_definition.browser_worker.family}'"
-              label      = "hottest dedicated browser task"
-            },
+            "ECS/ContainerInsights",
+            "MemoryUtilized",
+            "ClusterName",
+            aws_ecs_cluster.production.name,
+            "TaskDefinitionFamily",
+            aws_ecs_task_definition.browser_worker.family,
+            { label = "hottest dedicated browser task", stat = "Maximum" },
           ]]
           yAxis = { left = { min = 0, max = 4096 } }
         }

@@ -92,6 +92,9 @@ resource "aws_iam_role_policy" "browser_fleet" {
 
 # Standalone allocations have no ServiceName. Inspect the hottest individual
 # task, rather than averaging a saturated browser into an otherwise idle fleet.
+# Standard Container Insights publishes one MemoryUtilized sample per task to the
+# (ClusterName, TaskDefinitionFamily) series, so its Maximum statistic is the
+# hottest task without the enhanced-only per-TaskId series.
 resource "aws_cloudwatch_metric_alarm" "browser_fleet_memory" {
   alarm_name          = "matrx-production-browser-fleet-task-memory-high"
   alarm_description   = "An individual dedicated browser task exceeds 85 percent of its 4 GiB allocation."
@@ -101,10 +104,13 @@ resource "aws_cloudwatch_metric_alarm" "browser_fleet_memory" {
   datapoints_to_alarm = 3
   treat_missing_data  = "notBreaching"
 
-  metric_query {
-    id          = "fleet_memory"
-    expression  = "SELECT MAX(MemoryUtilized) FROM SCHEMA(\"ECS/ContainerInsights\", ClusterName, TaskDefinitionFamily, TaskId) WHERE ClusterName = '${aws_ecs_cluster.production.name}' AND TaskDefinitionFamily = '${aws_ecs_task_definition.browser_worker.family}'"
-    period      = 60
-    return_data = true
+  namespace   = "ECS/ContainerInsights"
+  metric_name = "MemoryUtilized"
+  period      = 60
+  statistic   = "Maximum"
+
+  dimensions = {
+    ClusterName          = aws_ecs_cluster.production.name
+    TaskDefinitionFamily = aws_ecs_task_definition.browser_worker.family
   }
 }
