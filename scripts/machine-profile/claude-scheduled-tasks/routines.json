@@ -1,0 +1,21 @@
+{
+  "_about": "Approved Claude desktop routines that must exist on EVERY Claude account signed into the desktop app. Mirror of the agent-duty rows in operations/scheduled-tasks.md (approval lives there, never here). sync_routines.py reads this file. window: daily = server default (today PT); ampm = YYYY-MM-DD + am|pm; hour = YYYY-MM-DDTHH (slot hour, PT). preface=false means the routine's own script claims its window (do not add a second claim).",
+  "routines": [
+    {"source": "hourly-ship-all-sweep", "task_key": "hourly-ship-all-sweep", "cron": "7 * * * *", "window": "hour", "lease_minutes": 50, "title": "Hourly ship-all sweep"},
+    {"source": "attention-triage-3", "task_key": "attention-triage", "cron": "0 8,13,18 * * *", "window": "hour", "lease_minutes": 60, "title": "Attention triage"},
+    {"source": "agent-review-sweep", "task_key": "agent-review-sweep", "cron": "45 7 * * *", "window": "daily", "lease_minutes": 240, "title": "Agent review sweep"},
+    {"source": "daily-feedback-tracker", "task_key": "daily-feedback-tracker", "cron": "3 7 * * *", "window": "daily", "lease_minutes": 240, "title": "Daily feedback tracker"},
+    {"source": "hard-cost-vendor-reconcile-daily", "task_key": "hard-cost-vendor-reconcile-daily", "cron": "50 6 * * *", "window": "daily", "lease_minutes": 30, "title": "Hard-cost vendor reconcile"},
+    {"source": "docs-daily-sweep", "task_key": "docs-daily-sweep", "cron": "0 21 * * *", "window": "daily", "lease_minutes": 240, "title": "Docs daily sweep"},
+    {"source": "dedupe-and-verify", "task_key": "dedupe-and-verify", "cron": "51 9 * * *", "window": "daily", "lease_minutes": 240, "title": "Dedupe and verify"},
+    {"source": "settings-rejection-routine", "task_key": "settings-rejection-routine", "cron": "42 0 * * *", "window": "daily", "lease_minutes": 120, "title": "Settings rejection routine"},
+    {"source": "package-duplicate-watch", "task_key": "package-duplicate-watch", "cron": "17 8,20 * * *", "window": "ampm", "lease_minutes": 240, "title": "Package duplicate watch"},
+    {"source": "p14-interface-text", "task_key": "p14-interface-text", "cron": "40 10 * * *", "window": "ampm", "lease_minutes": 240, "title": "Pattern Patrol P14 - Interface text"},
+    {"source": "ci-spend-watch", "task_key": "ci-spend-watch", "cron": "37 7,19 * * *", "window": "ampm", "lease_minutes": 120, "until": "2026-11-14", "title": "CI spend watch"},
+    {"source": "tool-upkeep-price-check", "task_key": "tool_upkeep.price_check", "cron": "10 7 * * *", "preface": false, "title": "Tool upkeep - price check"},
+    {"source": "tool-upkeep-reliability-probes", "task_key": "tool_upkeep.reliability_probes", "cron": "5 */6 * * *", "preface": false, "title": "Tool upkeep - reliability probes"},
+    {"source": "tool-upkeep-reverify", "task_key": "tool_upkeep.reverify", "cron": "20 */2 * * *", "preface": false, "title": "Tool upkeep - re-verify"},
+    {"source": "tool-upkeep-import", "task_key": "tool_upkeep.import", "cron": "0 6 * * 1", "preface": false, "title": "Tool upkeep - import"},
+    {"source": "tool-upkeep-trap-notes", "task_key": "tool_upkeep.trap_notes", "cron": "40 7 * * *", "preface": false, "title": "Tool upkeep - trap notes"}
+  ]
+}
