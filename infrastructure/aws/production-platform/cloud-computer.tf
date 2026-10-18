@@ -591,7 +591,7 @@ output "cloud_computer" {
 variable "cloud_computer_image_tag" {
   description = "AI Dream Git SHA of the Cloud Computer image (browser worker + desktop) in matrx-cloud-computer."
   type        = string
-  default     = "7e9429ce03c5d01d388483995d749bb2fd25f887"
+  default     = "9adaa4b6002379d4b7e3c97d0409c8756ec301dd"
 
   validation {
     condition     = can(regex("^[0-9a-f]{40}$", var.cloud_computer_image_tag))
