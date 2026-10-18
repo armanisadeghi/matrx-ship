@@ -464,6 +464,7 @@ def release_liveness(info):
     if not rows:
         return ["%s: LAST RELEASE UNVERIFIED — no Vercel deployment rows" % name]
     if live(rows):
+        info["vercel_live"] = True      # READY and served — not merely inside the build grace window
         return []
     if any(r[1] in ("NO_TOKEN", "UNREACHABLE") for r in rows):
         return ["%s: LAST RELEASE UNVERIFIED — no Vercel answer (%s)" % (name, ", ".join("%s %s" % (r[0], r[1]) for r in rows))]
@@ -862,7 +863,18 @@ def main(args=None):
         say("■ landed in %s" % fmt(time.time() - t0))
     for info in infos:
         try:
-            info["not_live"] = (release_liveness(info) + failed_release_workflows(info)) if info["fetch_ok"] else []
+            if info["fetch_ok"]:
+                live_problems = release_liveness(info)
+                workflows = failed_release_workflows(info)
+                # A Vercel repo whose newest release is READY and serving is LIVE: a failed release
+                # workflow there (an after-phase check run cut short, run 39162960893) is still a
+                # failure to fix, but never "NOT LIVE". Repos without the Vercel proof keep the
+                # workflow as their only liveness evidence (a failed npm publish IS not live).
+                vercel_live = not live_problems and info.get("vercel_live", False)
+                info["not_live"] = live_problems + ([] if vercel_live else workflows)
+                info["live_workflow_failed"] = workflows if vercel_live else []
+            else:
+                info["not_live"], info["live_workflow_failed"] = [], []
         except Exception as error:  # never let the check vanish silently
             info["not_live"] = ["release liveness check crashed: %s" % error]
         try:
@@ -921,11 +933,17 @@ def main(args=None):
     landing = [r for r in infos if r.get("needs_landing")]
     not_live = [r for r in infos if r.get("not_live")]
     npm_lag = [r for r in infos if r.get("npm_lag")]
+    live_wf = [r for r in infos if r.get("live_workflow_failed")]
     say("")
     if not_live:
         say("RELEASES NOT LIVE — EVERYTHING ELSE STOPS: read the failing build log, fix the cause, ship, watch the new build until it is live")
         for r in not_live:
             for line in r["not_live"]:
+                say("  %s: %s" % (r["repo"], line))
+    if live_wf:
+        say("RELEASE LIVE, ITS WORKFLOW FAILED — the site serves the newest release; read the failed run and fix what it names")
+        for r in live_wf:
+            for line in r["live_workflow_failed"]:
                 say("  %s: %s" % (r["repo"], line))
     if npm_lag:
         say("PACKAGES NOT ON NPM — a package change that never reached npm is a release that is not live: publish it, then fix why the push run did not")
@@ -958,7 +976,7 @@ def main(args=None):
         for r in problems:
             say("  %s: %s  %s" % (r["repo"], r["status"], r.get("release_slot_blocker", r.get("log", r.get("fetch_error", "")))))
     say("done in %s. summary: %s" % (fmt(time.time() - t_all), os.path.join(out_dir, "summary.json")))
-    return 1 if (open_repos or problems or landing or stale_after or not_live or npm_lag) else 0
+    return 1 if (open_repos or problems or landing or stale_after or not_live or npm_lag or live_wf) else 0
 
 
 if __name__ == "__main__":
