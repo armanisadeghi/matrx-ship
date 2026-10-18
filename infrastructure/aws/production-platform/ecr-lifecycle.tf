@@ -34,9 +34,11 @@ locals {
         },
         {
           rulePriority = 5
-          description  = "Rollback window: keep the ${keep} newest images"
-          selection    = { tagStatus = "any", countType = "imageCountMoreThan", countNumber = keep }
-          action       = { type = "expire" }
+          # Tagged releases only: an untagged index child or SOCI index of a kept release is never
+          # expired, and counting them made "keep 20" only 4-7 releases (2026-10-18 review).
+          description = "Rollback window: keep the ${keep} newest tagged releases"
+          selection   = { tagStatus = "tagged", tagPatternList = ["*"], countType = "imageCountMoreThan", countNumber = keep }
+          action      = { type = "expire" }
         },
       ]
     })

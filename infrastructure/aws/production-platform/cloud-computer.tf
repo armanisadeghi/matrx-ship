@@ -587,6 +587,9 @@ output "cloud_computer" {
 #     --candidate-image <ecr>/matrx-cloud-computer:<new sha> --auth-domain <signed-in site> ...
 # Exit 1 (anything lost: sign-ins, extensions, files, desktop settings, installed
 # software, or an older Chrome) blocks the move.
+# On PASS, tag the candidate pinned-cloud-computer-<sha> (aws ecr put-image with its manifest) BEFORE
+# moving this default: the ECR rollback window (ecr-lifecycle.tf) never expires pinned-* images, and
+# an unpinned promoted image ages out and every Cloud Computer wake fails to pull.
 variable "cloud_computer_image_tag" {
   description = "AI Dream Git SHA of the Cloud Computer image (browser worker + desktop) in matrx-cloud-computer."
   type        = string
