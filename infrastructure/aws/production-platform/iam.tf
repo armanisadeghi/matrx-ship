@@ -273,7 +273,7 @@ data "aws_iam_policy_document" "operator" {
     resources = concat(
       [aws_iam_role.task_execution.arn],
       values(aws_iam_role.task)[*].arn,
-      [aws_iam_role.browser_worker_task.arn],
+      [aws_iam_role.browser_worker_task.arn, aws_iam_role.render_worker_task.arn],
     )
 
     condition {
