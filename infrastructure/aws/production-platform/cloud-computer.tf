@@ -587,16 +587,38 @@ output "cloud_computer" {
 #     --candidate-image <ecr>/matrx-cloud-computer:<new sha> --auth-domain <signed-in site> ...
 # Exit 1 (anything lost: sign-ins, extensions, files, desktop settings, installed
 # software, or an older Chrome) blocks the move.
-# On PASS, tag the candidate pinned-cloud-computer-<sha> (aws ecr put-image with its manifest) BEFORE
-# moving this default: the ECR rollback window (ecr-lifecycle.tf) never expires pinned-* images, and
-# an unpinned promoted image ages out and every Cloud Computer wake fails to pull.
+# Moving this default pins the image automatically (terraform_data.pin_cloud_computer_image below).
 variable "cloud_computer_image_tag" {
   description = "AI Dream Git SHA of the Cloud Computer image (browser worker + desktop) in matrx-cloud-computer."
   type        = string
-  default     = "38683f36ab01f30eb8d1a7b3a0df2e4dfd892182"
+  default     = "9adaa4b6002379d4b7e3c97d0409c8756ec301dd"
 
   validation {
     condition     = can(regex("^[0-9a-f]{40}$", var.cloud_computer_image_tag))
     error_message = "Cloud Computer images must be deployed by a full 40-character Git SHA."
+  }
+}
+
+# The promoted image is tagged pinned-cloud-computer-<sha> on every apply that moves the default, so the
+# ECR rollback window (ecr-lifecycle.tf) can never expire the image every Cloud Computer wake pulls.
+# 2026-10-18: a promoted image was ~2 days from expiry twice because pinning was only a comment.
+resource "terraform_data" "pin_cloud_computer_image" {
+  triggers_replace = [var.cloud_computer_image_tag]
+
+  provisioner "local-exec" {
+    interpreter = ["/bin/bash", "-c"]
+    environment = {
+      REPO = aws_ecr_repository.cloud_computer.name
+      SHA  = var.cloud_computer_image_tag
+    }
+    command = <<-EOT
+      set -euo pipefail
+      PIN="pinned-cloud-computer-$SHA"
+      if aws ecr describe-images --region us-east-1 --repository-name "$REPO" --image-ids imageTag="$PIN" >/dev/null 2>&1; then exit 0; fi
+      TYPES="application/vnd.oci.image.index.v1+json application/vnd.docker.distribution.manifest.list.v2+json application/vnd.oci.image.manifest.v1+json application/vnd.docker.distribution.manifest.v2+json"
+      MANIFEST=$(aws ecr batch-get-image --region us-east-1 --repository-name "$REPO" --image-ids imageTag="$SHA" --accepted-media-types $TYPES --query 'images[0].imageManifest' --output text)
+      MEDIA=$(aws ecr batch-get-image --region us-east-1 --repository-name "$REPO" --image-ids imageTag="$SHA" --accepted-media-types $TYPES --query 'images[0].imageManifestMediaType' --output text)
+      aws ecr put-image --region us-east-1 --repository-name "$REPO" --image-tag "$PIN" --image-manifest "$MANIFEST" --image-manifest-media-type "$MEDIA" >/dev/null
+    EOT
   }
 }
