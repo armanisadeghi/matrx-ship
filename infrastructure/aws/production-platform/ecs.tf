@@ -55,35 +55,7 @@ resource "aws_ecr_lifecycle_policy" "service" {
   for_each = aws_ecr_repository.service
 
   repository = each.value.name
-  policy = jsonencode({
-    rules = [
-      {
-        rulePriority = 1
-        description  = "Remove untagged images after seven days"
-        selection = {
-          tagStatus   = "untagged"
-          countType   = "sinceImagePushed"
-          countUnit   = "days"
-          countNumber = 7
-        }
-        action = {
-          type = "expire"
-        }
-      },
-      {
-        rulePriority = 2
-        description  = "Retain the latest fifty tagged images"
-        selection = {
-          tagStatus   = "any"
-          countType   = "imageCountMoreThan"
-          countNumber = 50
-        }
-        action = {
-          type = "expire"
-        }
-      },
-    ]
-  })
+  policy     = local.ecr_lifecycle_rules[20]
 }
 
 resource "aws_secretsmanager_secret" "service" {

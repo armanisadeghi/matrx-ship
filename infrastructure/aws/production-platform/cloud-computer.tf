@@ -37,18 +37,7 @@ resource "aws_ecr_repository" "cloud_computer" {
 
 resource "aws_ecr_lifecycle_policy" "cloud_computer" {
   repository = aws_ecr_repository.cloud_computer.name
-  policy = jsonencode({
-    rules = [{
-      rulePriority = 1
-      description  = "Keep the 30 newest cloud-computer images"
-      selection = {
-        tagStatus   = "any"
-        countType   = "imageCountMoreThan"
-        countNumber = 30
-      }
-      action = { type = "expire" }
-    }]
-  })
+  policy     = local.ecr_lifecycle_rules[30]
 }
 
 resource "aws_security_group" "cloud_computer" {

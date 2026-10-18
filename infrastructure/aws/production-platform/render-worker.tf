@@ -37,18 +37,7 @@ resource "aws_ecr_repository" "render_worker" {
 
 resource "aws_ecr_lifecycle_policy" "render_worker" {
   repository = aws_ecr_repository.render_worker.name
-  policy = jsonencode({
-    rules = [{
-      rulePriority = 1
-      description  = "Keep the 20 newest render worker images"
-      selection = {
-        tagStatus   = "any"
-        countType   = "imageCountMoreThan"
-        countNumber = 20
-      }
-      action = { type = "expire" }
-    }]
-  })
+  policy     = local.ecr_lifecycle_rules[20]
 }
 
 resource "aws_cloudwatch_log_group" "render_worker" {
