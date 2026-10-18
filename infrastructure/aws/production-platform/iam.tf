@@ -214,6 +214,7 @@ data "aws_iam_policy_document" "operator" {
       [
         "arn:aws:ecr:${var.aws_region}:${var.aws_account_id}:repository/matrx/aidream-server",
         "arn:aws:ecr:${var.aws_region}:${var.aws_account_id}:repository/matrx-browser-worker",
+        aws_ecr_repository.render_worker.arn,
       ],
     )
   }

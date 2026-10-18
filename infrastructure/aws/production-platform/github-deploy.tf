@@ -41,6 +41,7 @@ data "aws_iam_policy_document" "aidream_github_deploy" {
       data.aws_ecr_repository.aidream.arn,
       data.aws_ecr_repository.browser_worker.arn,
       aws_ecr_repository.cloud_computer.arn,
+      aws_ecr_repository.render_worker.arn,
       aws_ecr_repository.service["matrx/admin-dashboard"].arn,
       aws_ecr_repository.service["matrx/workflow-studio"].arn,
     ]
@@ -104,6 +105,7 @@ data "aws_iam_policy_document" "aidream_github_deploy" {
       "arn:aws:iam::${var.aws_account_id}:role/matrx/platform/matrx-production-admin-dashboard-task",
       "arn:aws:iam::${var.aws_account_id}:role/matrx/platform/matrx-production-browser-worker-task",
       "arn:aws:iam::${var.aws_account_id}:role/matrx/platform/matrx-production-livekit-worker-task",
+      "arn:aws:iam::${var.aws_account_id}:role/matrx/platform/matrx-production-render-worker-task",
       "arn:aws:iam::${var.aws_account_id}:role/matrx/platform/matrx-production-workflow-studio-task",
       "arn:aws:iam::${var.aws_account_id}:role/matrx/platform/matrx-production-workflow-worker-task",
     ]
