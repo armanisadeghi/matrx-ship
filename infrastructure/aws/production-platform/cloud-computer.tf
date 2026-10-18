@@ -592,6 +592,12 @@ output "cloud_computer" {
   }
 }
 
+# GATE (owner ruling 16, "Upgrades keep everything"): before moving this tag,
+# the carry-over check must PASS against the candidate image on admin's machine:
+#   cd aidream && uv run python scripts/check_cloud_computer_carryover.py run \
+#     --candidate-image <ecr>/matrx-cloud-computer:<new sha> --auth-domain <signed-in site> ...
+# Exit 1 (anything lost: sign-ins, extensions, files, desktop settings, installed
+# software, or an older Chrome) blocks the move.
 variable "cloud_computer_image_tag" {
   description = "AI Dream Git SHA of the Cloud Computer image (browser worker + desktop) in matrx-cloud-computer."
   type        = string
