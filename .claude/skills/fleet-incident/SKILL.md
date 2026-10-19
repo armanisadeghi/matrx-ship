@@ -1,5 +1,6 @@
 ---
 name: fleet-incident
+subject: matrx-ship:.claude/skills/fleet-incident
 description: "Incident method for the Matrx fleet: the /srv host, EC2 boxes, and every managed service. Use when the operator says X isn't working, isn't updating, or shows behind, a deploy is stuck, fleet-health is red, a service is unreachable, or sandboxes misbehave."
 ---
 

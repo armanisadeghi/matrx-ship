@@ -1,5 +1,6 @@
 ---
 name: add-managed-service
+subject: architecture/deploy-control-plane
 description: "Onboarding recipe for a PyPI-published aidream package as a managed microservice on the ship server. Use when asked to make a `packages/` service autodeploy or be managed like matrx-files or matrx-seo, or when adding a `MICROSERVICES` or `REMOTE_SECRET_STORES` entry in `server-manager/src/index.js`."
 ---
 

@@ -1,5 +1,6 @@
 ---
 name: supabase-region-migration
+subject: architecture/production-infra
 description: "Post-mortem and rollback reference for the finished Supabase region move (us-west-1 to us-east-1). Use when a task names `txzxabzwovsujtloxrus` or a `runner-*.sh` script, or needs rollback, logical dump/restore, Auth/config sync, Vault key copy, cron/pg_net isolation, or consumer credential rotation."
 ---
 
