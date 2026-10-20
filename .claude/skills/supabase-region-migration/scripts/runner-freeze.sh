@@ -46,7 +46,7 @@ assert_mode() {
 case "${1:-status}" in
   freeze)
     query "$SOURCE_DIRECT_HOST" template1 postgres \
-      "alter database postgres set default_transaction_read_only = on; select pg_terminate_backend(a.pid) from pg_stat_activity a join pg_roles r on r.rolname=a.usename where a.datname='postgres' and a.pid <> pg_backend_pid() and not r.rolsuper;" >/dev/null
+      "alter database postgres set default_transaction_read_only = on; select pg_terminate_backend(a.pid) from pg_stat_activity a join pg_roles r on r.rolname=a.usename where a.datname='postgres' and a.pid <> pg_backend_pid() and not r.rolsuper;" >/dev/null  # pooler-session-readonly:allow direct (non-pooled) host freeze of the retired source; backends are terminated in the same call
     assert_mode on
     if query "$SOURCE_DIRECT_HOST" postgres postgres "create table public.${PROBE_TABLE}(id integer);" >/dev/null 2>&1; then
       echo "Direct write probe unexpectedly succeeded" >&2
@@ -64,7 +64,7 @@ case "${1:-status}" in
     # long-running, read-only pooler session.
     if [ "$(mode "$SOURCE_DIRECT_HOST")" != on ]; then
       query "$SOURCE_DIRECT_HOST" template1 postgres \
-        "alter database postgres set default_transaction_read_only = on;" >/dev/null
+        "alter database postgres set default_transaction_read_only = on;" >/dev/null  # pooler-session-readonly:allow direct (non-pooled) host freeze of the retired source
     fi
     assert_mode on
     echo SOURCE_WRITE_FREEZE=refreshed
