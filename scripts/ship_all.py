@@ -645,6 +645,41 @@ def failed_release_workflows(info):
     return bad
 
 
+# THE ONE DEFINITION OF "A RED TEST RUN HOLDS THE TRAIN" (2026-10-19). Both ship-all agents read
+# their FIRST RULE off this verdict, never off a red check they found themselves. A failure whose
+# only error lines come from the CI cost guard (check_workflow_runner_cost.py) is a SPENDING
+# SIGNAL for the ci-spend owner (common-docs/policies/ci-spend.md), never a broken build: on
+# 2026-10-19 that one guard held every release for four hours. Any other error line is code.
+TEST_WORKFLOWS = {"aidream": "test.yml"}
+COST_GUARD_LINE = re.compile(r"ci-cost\.json|CI costs ~\$|workflow cost problem", re.I)
+GENERIC_ERROR_LINE = re.compile(r"Process completed with exit code", re.I)
+
+
+def test_run_verdict(info):
+    """Newest finished Tests run on main -> (holds, signals). `holds` = code failures that stop
+    the train; `signals` = cost-guard-only reds that are reported to their owner and never hold."""
+    workflow = TEST_WORKFLOWS.get(info["repo"])
+    if not workflow:
+        return [], []
+    repo = info["path"]
+    rc, out, err = run(["gh", "run", "list", "--workflow", workflow, "--branch", "main", "--status",
+                        "completed", "-L", "5", "--json", "databaseId,conclusion,url,createdAt"], repo, 60)
+    if rc != 0:
+        return [], ["Tests verdict UNVERIFIED — gh could not answer: %s" % (err.strip().splitlines() or ["?"])[-1][:160]]
+    runs = [r for r in json.loads(out or "[]") if r.get("conclusion") not in ("cancelled", "skipped", "neutral")]
+    if not runs or runs[0].get("conclusion") == "success":
+        return [], []
+    newest = runs[0]
+    rid = newest.get("databaseId")
+    rc, log, err = run(["gh", "run", "view", str(rid), "--log-failed"], repo, 120)
+    errors = [l for l in (log or "").splitlines() if "##[error]" in l and not GENERIC_ERROR_LINE.search(l)]
+    where = "Tests run %s (%s) %s" % (rid, newest.get("createdAt", "")[:16], newest.get("url", ""))
+    if rc == 0 and errors and all(COST_GUARD_LINE.search(l) for l in errors):
+        return [], ["%s red ONLY on the CI cost guard: %s — owner: ci-spend lane; NOT a failed build, never hold" % (
+            where, errors[0].split("##[error]", 1)[1][:200])]
+    return ["%s failed on code checks — gh run view %s --log-failed" % (where, rid)], []
+
+
 def open_items(repo):
     checker = os.path.join(repo, "scripts", "check-conflict-markers.py")
     if not os.path.isfile(checker):
@@ -878,6 +913,10 @@ def main(args=None):
         except Exception as error:  # never let the check vanish silently
             info["not_live"] = ["release liveness check crashed: %s" % error]
         try:
+            info["tests_red"], info["ci_signals"] = test_run_verdict(info) if info["fetch_ok"] else ([], [])
+        except Exception as error:  # never let the check vanish silently
+            info["tests_red"], info["ci_signals"] = [], ["Tests verdict check crashed: %s" % error]
+        try:
             info["npm_lag"] = npm_publish_lag(info) if info["fetch_ok"] else []
         except Exception as error:  # never let the check vanish silently
             info["npm_lag"] = ["publish-lag check crashed: %s" % error]
@@ -934,7 +973,19 @@ def main(args=None):
     not_live = [r for r in infos if r.get("not_live")]
     npm_lag = [r for r in infos if r.get("npm_lag")]
     live_wf = [r for r in infos if r.get("live_workflow_failed")]
+    tests_red = [r for r in infos if r.get("tests_red")]
+    ci_signals = [r for r in infos if r.get("ci_signals")]
     say("")
+    if tests_red:
+        say("TESTS RED ON CODE — a failed build: fix the cause in this round (FIRST RULE)")
+        for r in tests_red:
+            for line in r["tests_red"]:
+                say("  %s: %s" % (r["repo"], line))
+    if ci_signals:
+        say("CI SIGNALS — NOT A FAILED BUILD, NEVER HOLD: keep releasing; the named owner lane owns it")
+        for r in ci_signals:
+            for line in r["ci_signals"]:
+                say("  %s: %s" % (r["repo"], line))
     if not_live:
         say("RELEASES NOT LIVE — EVERYTHING ELSE STOPS: read the failing build log, fix the cause, ship, watch the new build until it is live")
         for r in not_live:
@@ -976,7 +1027,7 @@ def main(args=None):
         for r in problems:
             say("  %s: %s  %s" % (r["repo"], r["status"], r.get("release_slot_blocker", r.get("log", r.get("fetch_error", "")))))
     say("done in %s. summary: %s" % (fmt(time.time() - t_all), os.path.join(out_dir, "summary.json")))
-    return 1 if (open_repos or problems or landing or stale_after or not_live or npm_lag or live_wf) else 0
+    return 1 if (open_repos or problems or landing or stale_after or not_live or npm_lag or live_wf or tests_red) else 0
 
 
 if __name__ == "__main__":
