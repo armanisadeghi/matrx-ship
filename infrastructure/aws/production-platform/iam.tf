@@ -215,6 +215,7 @@ data "aws_iam_policy_document" "operator" {
         "arn:aws:ecr:${var.aws_region}:${var.aws_account_id}:repository/matrx/aidream-server",
         "arn:aws:ecr:${var.aws_region}:${var.aws_account_id}:repository/matrx-browser-worker",
         aws_ecr_repository.render_worker.arn,
+        aws_ecr_repository.diagram_service.arn,
       ],
     )
   }
@@ -273,7 +274,7 @@ data "aws_iam_policy_document" "operator" {
     resources = concat(
       [aws_iam_role.task_execution.arn],
       values(aws_iam_role.task)[*].arn,
-      [aws_iam_role.browser_worker_task.arn, aws_iam_role.render_worker_task.arn],
+      [aws_iam_role.browser_worker_task.arn, aws_iam_role.render_worker_task.arn, aws_iam_role.diagram_service_task.arn],
     )
 
     condition {
