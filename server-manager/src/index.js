@@ -3666,9 +3666,19 @@ function microservice(id) { return MICROSERVICES[id] || null; }
 
 // The one `docker run` line for a service, shared by the upgrade swap, the
 // rollback, and the Secrets "Apply" restart — so they can never drift.
+// Local json-file logs: 10 x 50 MB per container (the daemon default is 3 x 10 MB).
+const MS_LOG_OPTS = "--log-driver json-file --log-opt max-size=50m --log-opt max-file=10";
 function msDockerRunImage(svc, image) {
   const extra = svc.dockerRunExtraArgs ? `${svc.dockerRunExtraArgs} ` : "";
-  return `sudo docker run -d --name ${svc.container} --restart unless-stopped -p 127.0.0.1:${svc.port}:${svc.port} ${extra}--env-file ${svc.envFile} ${image} >/dev/null`;
+  return `sudo docker run -d --name ${svc.container} --restart unless-stopped ${MS_LOG_OPTS} -p 127.0.0.1:${svc.port}:${svc.port} ${extra}--env-file ${svc.envFile} ${image} >/dev/null`;
+}
+// A container's json-file log dies with the container, so every swap used to
+// erase the service's whole log history. Copy it to the host first, then
+// remove. Best-effort by design: archiving can never block a swap or rollback.
+// Archives older than 30 days are pruned.
+function msRemoveContainer(svc) {
+  const dir = `/var/log/${svc.container}`;
+  return `{ sudo mkdir -p ${dir} && sudo sh -c "docker logs --timestamps ${svc.container} > ${dir}/$(date -u +%Y%m%dT%H%M%SZ).log 2>&1" && sudo find ${dir} -name '*.log' -mtime +30 -delete; } >/dev/null 2>&1 || true; sudo docker rm -f ${svc.container} >/dev/null 2>&1 || true`;
 }
 function msDockerRun(svc, tag) { return msDockerRunImage(svc, `${svc.container}:${tag}`); }
 // The installed image owns policy validation. A missing old helper refuses
@@ -3686,7 +3696,7 @@ function msLocalHealthUrl(svc) { return `http://127.0.0.1:${svc.port}${svc.healt
 // from docker inspect, never CURRENT; a missing container fails before anything
 // is removed. Used by the Secrets store.
 function msRestartCommand(svc) {
-  return `IMAGE=$(sudo docker inspect ${svc.container} --format '{{.Config.Image}}' 2>/dev/null); [ -n "$IMAGE" ] || { echo 'APPLY_UNAVAILABLE: live container image not found'; exit 3; }; sudo docker image inspect "$IMAGE" >/dev/null 2>&1 || { echo "APPLY_UNAVAILABLE: image $IMAGE is not present"; exit 3; }; ${msPreflightImage(svc, '"$IMAGE"')} || { echo 'APPLY_BLOCKED: installed policy preflight failed'; exit 3; }; sudo docker rm -f ${svc.container} >/dev/null; ${msDockerRunImage(svc, '"$IMAGE"')} || exit 1; code=000; for i in $(seq 1 20); do sleep 3; code=$(curl -s -o /dev/null -w '%{http_code}' -m 4 ${msLocalHealthUrl(svc)} || true); [ "$code" = 200 ] && break; done; [ "$code" = 200 ] || { echo "APPLY_FAILED health:$code image:$IMAGE"; exit 1; }; echo "APPLY_OK health:$code image:$IMAGE"`;
+  return `IMAGE=$(sudo docker inspect ${svc.container} --format '{{.Config.Image}}' 2>/dev/null); [ -n "$IMAGE" ] || { echo 'APPLY_UNAVAILABLE: live container image not found'; exit 3; }; sudo docker image inspect "$IMAGE" >/dev/null 2>&1 || { echo "APPLY_UNAVAILABLE: image $IMAGE is not present"; exit 3; }; ${msPreflightImage(svc, '"$IMAGE"')} || { echo 'APPLY_BLOCKED: installed policy preflight failed'; exit 3; }; ${msRemoveContainer(svc)}; ${msDockerRunImage(svc, '"$IMAGE"')} || exit 1; code=000; for i in $(seq 1 20); do sleep 3; code=$(curl -s -o /dev/null -w '%{http_code}' -m 4 ${msLocalHealthUrl(svc)} || true); [ "$code" = 200 ] && break; done; [ "$code" = 200 ] || { echo "APPLY_FAILED health:$code image:$IMAGE"; exit 1; }; echo "APPLY_OK health:$code image:$IMAGE"`;
 }
 
 // null (not an error) when the package has never been published — that is how
@@ -3813,10 +3823,10 @@ function msUpgradeScript(svc, version, dockerfileB64) {
     `PREV_IMAGE=$(sudo docker inspect ${c} --format '{{.Config.Image}}' 2>/dev/null)`,
     `[ -n "$PREV_IMAGE" ] || { echo "VERIFY_FAILED live image not found"; exit 1; }`,
     `${msPreflightImage(svc, `${c}:${version}`)} || { echo "UPGRADE_BLOCKED installed policy preflight failed"; exit 1; }`,
-    `sudo docker rm -f ${c} >/dev/null 2>&1 || true`,
+    msRemoveContainer(svc),
     msDockerRun(svc, version),
     `ok=""; for i in $(seq 1 20); do sleep 3; code=$(curl -s -o /dev/null -w '%{http_code}' -m 4 ${msLocalHealthUrl(svc)} || true); [ "$code" = 200 ] && { ok=1; break; }; done`,
-    `if [ -z "$ok" ]; then echo "HEALTH_FAILED evaluating rollback to $PREV_IMAGE"; ${msPreflightImage(svc, '"$PREV_IMAGE"')} || { echo "ROLLBACK_BLOCKED installed policy preflight failed; current container preserved"; exit 1; }; sudo docker rm -f ${c} >/dev/null 2>&1 || true; ${msDockerRunImage(svc, '"$PREV_IMAGE"')}; exit 1; fi`,
+    `if [ -z "$ok" ]; then echo "HEALTH_FAILED evaluating rollback to $PREV_IMAGE"; ${msPreflightImage(svc, '"$PREV_IMAGE"')} || { echo "ROLLBACK_BLOCKED installed policy preflight failed; current container preserved"; exit 1; }; ${msRemoveContainer(svc)}; ${msDockerRunImage(svc, '"$PREV_IMAGE"')}; exit 1; fi`,
     `echo "\${PREV_IMAGE##*:}" | sudo tee ${d}/PREVIOUS >/dev/null`,
     `echo "${version}" | sudo tee ${d}/CURRENT >/dev/null`,
     `echo "UPGRADE_OK ${version} (was $PREV_IMAGE)"`,
