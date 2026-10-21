@@ -15,10 +15,13 @@ caused it is told.
       and BLOCKS the turn's end while one of its changed lines carries an error (at most
       MAX_BLOCKS times in a row, so a stuck agent is never trapped).
   lint-guard.py self-test
-      Proves the changed-line split and the hunk parser can fail.
+      Proves the changed-line split, the hunk parser and the law-guard mapping can fail.
 
 Linters: matrx-frontend -> its own eslint (errors only, severity 2); aidream *.py -> ruff.
-A repo or file type with no linter is skipped, never failed.
+Law guards (LAW_GUARDS): each repo's own `check:archived-items-law` / `check:canonical-pickers`
+script, run when this change touched a file that guard scans; its `✗ file:line — reason` findings
+go through the same changed-line split (a finding in a file this change did not touch is ignored
+here — the release gates report it). A repo or file type with no linter is skipped, never failed.
 """
 import hashlib
 import json
@@ -27,8 +30,10 @@ import re
 import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 
-CODE = os.path.expanduser("~/code")
+# LINT_GUARD_CODE_ROOT exists only so the planted-violation proof can run on a scratch clone.
+CODE = os.environ.get("LINT_GUARD_CODE_ROOT") or os.path.expanduser("~/code")
 SCRIPTS = os.path.dirname(os.path.realpath(__file__))
 STATE_DIR = os.path.expanduser("~/.matrx/lint-guard")
 SENT_FILE = os.path.join(STATE_DIR, "sent.json")
@@ -53,13 +58,53 @@ def repo_root(path):
     return out or None
 
 
-def linter_for(repo, rel):
+# The repo-wide law guards, run like linters. (repo dir name, package dir inside it, check name,
+# script relative to the package, regex over REPO-relative paths the guard scans, takes --files).
+# A guard without --files runs whole-package (each measured < 15 s under load 200) and its findings
+# are filtered to this change's files; matrx-frontend's two read 18k files, so they take --files.
+LAW_GUARDS = (
+    ("matrx-frontend", "", "archived-items-law", "scripts/check-archived-items-law.ts",
+     r"^(app|components|features|hooks|lib|utils|providers)/.+\.tsx?$", True),
+    ("matrx-frontend", "", "canonical-pickers", "scripts/check-canonical-pickers.ts",
+     r"^(app|components|features|hooks|lib|utils)/.+\.tsx?$", True),
+    ("matrx-extend", "", "archived-items-law", "scripts/check-archived-items-law.ts", r"^src/.+\.tsx?$", False),
+    ("matrx-extend", "", "canonical-pickers", "scripts/check-canonical-pickers.ts", r"^src/.+\.tsx?$", False),
+    ("matrx-vscode", "", "archived-items-law", "scripts/check-archived-items-law.ts", r"^src/.+\.tsx?$", False),
+    ("matrx-vscode", "", "canonical-pickers", "scripts/check-canonical-pickers.ts",
+     r"^(src|tests|certification|scripts)/.+\.(tsx?|jsx?|cjs|mjs)$", False),
+    ("matrx-local", "desktop", "archived-items-law", "scripts/check-archived-items-law.mjs",
+     r"^(desktop/src|app)/.+\.(tsx?|py)$", False),
+    ("matrx-local", "desktop", "canonical-pickers", "scripts/check-canonical-pickers.mjs", r"^desktop/src/.+\.tsx?$", False),
+    ("aidream", "apps/workflow-studio", "archived-items-law", "scripts/check-archived-items-law.mjs",
+     r"^apps/workflow-studio/src/.+\.tsx?$", False),
+    ("aidream", "apps/workflow-studio", "canonical-pickers", "scripts/check-canonical-pickers.mjs",
+     r"^apps/workflow-studio/src/.+\.tsx?$", False),
+    ("aidream", "apps/dashboard", "archived-items-law", "scripts/check-archived-items-law.mjs",
+     r"^apps/dashboard/src/.+\.tsx?$", False),
+)
+LAW_HINT = {
+    "archived-items-law": "every list over an archivable entity carries an archive control (ArchiveFilter / ArchivedDisclosure) — ../common-docs/policies/archived-items.md",
+    "canonical-pickers": "agent/model choice renders only through the canonical picker (AgentListDropdown / AgentListInlinePicker / ModelListDropdown)",
+}
+LAW_TIMEOUT = 75
+
+
+def linters_for(repo, rel):
+    """Every checker that covers this repo-relative file: 'eslint', 'ruff', or 'law:<index>'."""
     name = os.path.basename(repo)
+    out = []
     if name == "matrx-frontend" and rel.endswith(JS_EXT):
-        return "eslint"
+        out.append("eslint")
     if name == "aidream" and rel.endswith(".py"):
-        return "ruff"
-    return None
+        out.append("ruff")
+    for i, (gname, _pkg, _check, _script, scans, _files) in enumerate(LAW_GUARDS):
+        if gname == name and re.match(scans, rel) and not re.search(r"\.(test|spec)\.[a-z]+$", rel):
+            out.append(f"law:{i}")
+    return out
+
+
+def linter_for(repo, rel):
+    return (linters_for(repo, rel) or [None])[0]
 
 
 def run_tool(cmd, cwd, timeout):
@@ -115,17 +160,73 @@ def run_ruff(repo, rels):
     ]
 
 
+# `  ✗ <file>[:<line>] — <reason>` — the one finding line every law guard prints.
+LAW_FINDING = re.compile(r"^\s*\u2717 (.+?)(?::(\d+))? \u2014 (.*)$")
+
+
+def parse_law_output(repo, pkg, check_name, returncode, text):
+    """A guard's exit + output -> findings with REPO-relative paths, or None when the guard itself
+    failed (crash, missing deps): that is reported and skipped, never counted as clean or dirty."""
+    found = []
+    for row in text.splitlines():
+        m = LAW_FINDING.match(row)
+        if not m:
+            continue
+        path = m.group(1).strip()
+        cands = [os.path.normpath(os.path.join(pkg, path)), os.path.normpath(path)] if pkg else [os.path.normpath(path)]
+        rel = next((c for c in cands if os.path.exists(os.path.join(repo, c))), cands[0])
+        found.append({"file": rel, "line": int(m.group(2)) if m.group(2) else None, "rule": check_name, "message": m.group(3).strip()})
+    if returncode == 0 and not found:
+        return []
+    if returncode == 1 and found:
+        return found
+    return None
+
+
+def run_law(repo, idx, rels):
+    _name, pkg, check_name, script, _scans, takes_files = LAW_GUARDS[idx]
+    pkg_dir = os.path.join(repo, pkg) if pkg else repo
+    if script.endswith(".ts"):
+        exe = os.path.join(pkg_dir, "node_modules", ".bin", "tsx")
+        if not os.path.exists(exe):
+            print(f"lint-guard: skipped {check_name} in {os.path.basename(repo)}/{pkg} (no node_modules/.bin/tsx); nothing was checked.", file=sys.stderr)
+            return []
+        cmd = [exe, script]
+    else:
+        cmd = ["node", script]
+    if takes_files:
+        cmd += ["--files", *[os.path.relpath(os.path.join(repo, r), pkg_dir) for r in rels]]
+    r = run_tool(cmd, pkg_dir, LAW_TIMEOUT)
+    if r is None:
+        return []
+    found = parse_law_output(repo, pkg, check_name, r.returncode, (r.stderr or "") + "\n" + (r.stdout or ""))
+    if found is None:
+        tail = (r.stderr or r.stdout or "").strip().splitlines()[-3:]
+        print(f"lint-guard: {check_name} failed (exit {r.returncode}): {' | '.join(tail)[:300]}; nothing was checked.", file=sys.stderr)
+        return []
+    wanted = set(rels)
+    return [f for f in found if f["file"] in wanted]
+
+
 def lint(repo, rels):
     by = {}
     for rel in rels:
-        kind = linter_for(repo, rel)
-        if kind and os.path.exists(os.path.join(repo, rel)):
+        if not os.path.exists(os.path.join(repo, rel)):
+            continue
+        for kind in linters_for(repo, rel):
             by.setdefault(kind, []).append(rel)
-    found = []
-    if by.get("eslint"):
-        found += run_eslint(repo, by["eslint"])
-    if by.get("ruff"):
-        found += run_ruff(repo, by["ruff"])
+    jobs = []
+    with ThreadPoolExecutor(max_workers=max(1, len(by))) as pool:
+        for kind, files in by.items():
+            if kind == "eslint":
+                jobs.append(pool.submit(run_eslint, repo, files))
+            elif kind == "ruff":
+                jobs.append(pool.submit(run_ruff, repo, files))
+            elif kind.startswith("law:"):
+                jobs.append(pool.submit(run_law, repo, int(kind[4:]), files))
+        found = []
+        for j in jobs:
+            found += j.result()
     return found
 
 
@@ -184,8 +285,9 @@ def split(findings, touched, written=None, texts=None):
     mine, inherited = [], []
     for f in findings:
         lines = touched.get(f["file"], set())
-        ours = lines is None or f["line"] in lines
-        if ours and written is not None and f["file"] in written:
+        # A file-level finding (no line) is this change's only when this change created the file.
+        ours = lines is None or (f["line"] is not None and f["line"] in lines)
+        if ours and f["line"] is not None and written is not None and f["file"] in written:
             body = (texts.get(f["file"]) or [])
             line_text = body[f["line"] - 1].strip() if 0 < f["line"] <= len(body) else ""
             ours = bool(line_text) and line_text in written[f["file"]]
@@ -226,10 +328,14 @@ def session_of_commit(repo, sha):
 def session_by_edit_time(repo, rel, when):
     """No trailer: the conversation that edited the file in the 30 minutes before the commit.
     Nothing in that window -> nobody is mailed (a wrong recipient is worse than none)."""
-    r = subprocess.run(
-        [sys.executable, os.path.join(SCRIPTS, "find-file-sessions.py"), "--days", str(BLAME_WINDOW_DAYS + 1), "--json", os.path.join(repo, rel)],
-        capture_output=True, text=True,
-    )
+    try:  # bounded: a transcript scan under load took 45 s, past the Stop hook's whole budget
+        r = subprocess.run(
+            [sys.executable, os.path.join(SCRIPTS, "find-file-sessions.py"), "--days", str(BLAME_WINDOW_DAYS + 1), "--json", os.path.join(repo, rel)],
+            capture_output=True, text=True, timeout=NOTIFY_BUDGET_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        print(f"lint-guard: finding who wrote {rel} took over {NOTIFY_BUDGET_SECONDS}s; not mailed this run.", file=sys.stderr)
+        return None
     try:
         rows = next(iter(json.loads(r.stdout or "{}").values()), [])
     except (json.JSONDecodeError, StopIteration):
@@ -270,7 +376,7 @@ def notify_inherited(repo, inherited, me):
         if time.time() > deadline:
             print(f"lint-guard: notify budget ({NOTIFY_BUDGET_SECONDS}s) spent; remaining inherited errors are not mailed this run.", file=sys.stderr)
             break
-        b = blame(repo, f["file"], f["line"])
+        b = blame(repo, f["file"], f["line"]) if f["line"] else None
         if not b or set(b[0]) == {"0"}:
             continue  # uncommitted: someone's live edit; their own Stop hook owns it
         sha, when = b
@@ -315,12 +421,15 @@ def notify_inherited(repo, inherited, me):
 # ---------------------------------------------------------------- commands
 
 def describe(mine):
-    return "\n".join(f"  {f['file']}:{f['line']}  {f['rule']}  {f['message'].splitlines()[0][:200] if f['message'] else ''}" for f in mine)
+    rows = [f"  {f['file']}{':' + str(f['line']) if f['line'] else ''}  {f['rule']}  {f['message'].splitlines()[0][:300] if f['message'] else ''}" for f in mine]
+    rules = sorted({f["rule"] for f in mine if f["rule"] in LAW_HINT})
+    rows += [f"  ({r}: {LAW_HINT[r]})" for r in rules]
+    return "\n".join(rows)
 
 
 def check(repo, rels, staged, me, written=None):
     rels = rels or changed_files(repo, staged)
-    rels = [r for r in rels if linter_for(repo, r)]
+    rels = [r for r in rels if linters_for(repo, r)]
     if not rels:
         return [], []
     touched = touched_lines(repo, rels)
@@ -410,7 +519,7 @@ def cmd_stop_hook():
         if not repo or not full.startswith(CODE):
             continue
         rel = os.path.relpath(full, repo)
-        if linter_for(repo, rel):
+        if linters_for(repo, rel):
             by_repo.setdefault(repo, []).append(rel)
             written.setdefault(repo, {})[rel] = text
     mine = []
@@ -444,6 +553,61 @@ def cmd_stop_hook():
     return 0
 
 
+def law_self_test():
+    """The law-guard mapping: which files wake which guard, how its output maps to repo paths, and
+    that a finding blocks only on a line this change touched. Every assert fails if that breaks."""
+    import tempfile
+    idx = {(g[0] if not g[1] else f"{g[0]}/{g[1]}", g[2]): f"law:{i}" for i, g in enumerate(LAW_GUARDS)}
+    fe = "/x/matrx-frontend"
+    assert linters_for(fe, "features/a/List.tsx") == ["eslint", idx["matrx-frontend", "archived-items-law"], idx["matrx-frontend", "canonical-pickers"]], linters_for(fe, "features/a/List.tsx")
+    assert linters_for(fe, "providers/P.tsx") == ["eslint", idx["matrx-frontend", "archived-items-law"]], linters_for(fe, "providers/P.tsx")
+    assert linters_for(fe, "scripts/x.ts") == ["eslint"] and linters_for(fe, "features/a/x.test.tsx") == ["eslint"]
+    assert linters_for("/x/aidream", "apps/dashboard/src/T.tsx") == [idx["aidream/apps/dashboard", "archived-items-law"]]
+    assert linters_for("/x/aidream", "apps/workflow-studio/src/W.tsx") == [idx["aidream/apps/workflow-studio", "archived-items-law"], idx["aidream/apps/workflow-studio", "canonical-pickers"]]
+    assert linters_for("/x/aidream", "x/y.py") == ["ruff"] and linters_for("/x/matrx-local", "app/r.py") == [idx["matrx-local/desktop", "archived-items-law"]]
+    for repo in ("matrx-extend", "matrx-vscode"):
+        assert len(linters_for(f"/x/{repo}", "src/a.tsx")) == 2, repo
+    with tempfile.TemporaryDirectory() as root:
+        repo = os.path.join(root, "matrx-local")
+        for rel in ("desktop/src/a.tsx", "app/b.py"):
+            os.makedirs(os.path.dirname(os.path.join(repo, rel)), exist_ok=True)
+            open(os.path.join(repo, rel), "w").close()
+        out = ("\n\U0001f6a8 ARCHIVED-ITEMS LAW VIOLATIONS\n\n  \u2717 src/a.tsx:12 \u2014 list read of `x` has no control\n"
+               "  \u2717 app/b.py:3 \u2014 py read\n  \u2717 src/a.tsx \u2014 file-level\n\nEvery list over ...\n")
+        got = parse_law_output(repo, "desktop", "archived-items-law", 1, out)
+        assert [(f["file"], f["line"], f["rule"]) for f in got] == [
+            ("desktop/src/a.tsx", 12, "archived-items-law"), ("app/b.py", 3, "archived-items-law"), ("desktop/src/a.tsx", None, "archived-items-law")], got
+        assert parse_law_output(repo, "desktop", "c", 0, "\u2705 holds") == []
+        assert parse_law_output(repo, "desktop", "c", 1, "TypeError: boom") is None  # crashed guard
+        assert parse_law_output(repo, "desktop", "c", 2, out) is None
+        # a no-line finding blocks only in a file this change created
+        mine, inh = split(got, {"desktop/src/a.tsx": {12}, "app/b.py": {9}})
+        assert [(f["file"], f["line"]) for f in mine] == [("desktop/src/a.tsx", 12)] and len(inh) == 2, (mine, inh)
+        mine, _ = split(got, {"desktop/src/a.tsx": None})
+        assert [f["line"] for f in mine] == [12, None], mine
+        # run_law end to end through a stand-in guard: --files carries package-relative paths, a
+        # finding outside this change's files is dropped, a crash is skipped (never clean/dirty).
+        fake = os.path.join(repo, "desktop", "scripts", "g.mjs")
+        os.makedirs(os.path.dirname(fake))
+        with open(fake, "w") as fh:
+            fh.write("const a=process.argv.slice(process.argv.indexOf('--files')+1);"
+                     "if(process.env.LG_CRASH){throw new Error('boom')}"
+                     "for(const f of [...a,'src/other.tsx'])console.error(`  \u2717 ${f}:7 \u2014 planted`);process.exit(1);")
+        saved = LAW_GUARDS
+        globals()["LAW_GUARDS"] = (("matrx-local", "desktop", "archived-items-law", "scripts/g.mjs", r"^desktop/src/", True),)
+        try:
+            got = run_law(repo, 0, ["desktop/src/a.tsx"])
+            assert [(f["file"], f["line"]) for f in got] == [("desktop/src/a.tsx", 7)], got
+            got = lint(repo, ["desktop/src/a.tsx"])  # the dispatcher wakes the guard
+            assert [(f["file"], f["line"], f["rule"]) for f in got] == [("desktop/src/a.tsx", 7, "archived-items-law")], got
+            os.environ["LG_CRASH"] = "1"
+            assert run_law(repo, 0, ["desktop/src/a.tsx"]) == []
+        finally:
+            os.environ.pop("LG_CRASH", None)
+            globals()["LAW_GUARDS"] = saved
+        assert "archived-items-law: every list" in describe([{"file": "f.tsx", "line": 3, "rule": "archived-items-law", "message": "m"}])
+
+
 def cmd_self_test():
     diff = "@@ -3,0 +4,2 @@\n+a\n+b\n@@ -10 +12 @@\n-x\n+y\n@@ -20,3 +21,0 @@\n"
     assert parse_hunks(diff) == {4, 5, 12}, parse_hunks(diff)
@@ -454,6 +618,7 @@ def cmd_self_test():
     mine, inherited = split([{"file": "p.tsx", "line": 3}, {"file": "p.tsx", "line": 1}], {"p.tsx": {1, 3}},
                             {"p.tsx": "\nconst mine = 1;"}, {"p.tsx": ["const mine = 1;", "x", "BAD otherlane"]})
     assert [f["line"] for f in mine] == [1] and [f["line"] for f in inherited] == [3], (mine, inherited)
+    law_self_test()
     print("lint-guard self-test: ok")
     return 0
 
@@ -468,7 +633,13 @@ def main():
     if cmd == "stop-hook":
         return cmd_stop_hook()
     if cmd == "self-test":
-        return cmd_self_test()
+        try:
+            return cmd_self_test()
+        except AssertionError as e:  # a self-test failure is a red, never the guard's "nothing checked" pass
+            import traceback
+            traceback.print_exc()
+            print(f"lint-guard self-test: FAILED {e}", file=sys.stderr)
+            return 1
     print(__doc__)
     return 2
 
