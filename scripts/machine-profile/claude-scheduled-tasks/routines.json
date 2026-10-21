@@ -12,6 +12,7 @@
     {"source": "package-duplicate-watch", "task_key": "package-duplicate-watch", "cron": "17 8,20 * * *", "window": "ampm", "lease_minutes": 240, "title": "Package duplicate watch"},
     {"source": "p14-interface-text", "task_key": "p14-interface-text", "cron": "40 10 * * *", "window": "ampm", "lease_minutes": 240, "title": "Pattern Patrol P14 - Interface text"},
     {"source": "ci-spend-watch", "task_key": "ci-spend-watch", "cron": "37 7,19 * * *", "window": "ampm", "lease_minutes": 120, "until": "2026-11-14", "title": "CI spend watch"},
+    {"source": "triage-loop-2h", "task_key": "triage-loop-2h", "cron": "17 */2 * * *", "window": "hour", "lease_minutes": 50, "title": "Triage loop (2h)"},
     {"source": "tool-upkeep-price-check", "task_key": "tool_upkeep.price_check", "cron": "10 7 * * *", "preface": false, "title": "Tool upkeep - price check"},
     {"source": "tool-upkeep-reliability-probes", "task_key": "tool_upkeep.reliability_probes", "cron": "5 */6 * * *", "preface": false, "title": "Tool upkeep - reliability probes"},
     {"source": "tool-upkeep-reverify", "task_key": "tool_upkeep.reverify", "cron": "20 */2 * * *", "preface": false, "title": "Tool upkeep - re-verify"},
