@@ -17,6 +17,7 @@
     {"source": "tool-upkeep-reliability-probes", "task_key": "tool_upkeep.reliability_probes", "cron": "5 */6 * * *", "preface": false, "title": "Tool upkeep - reliability probes"},
     {"source": "tool-upkeep-reverify", "task_key": "tool_upkeep.reverify", "cron": "20 */2 * * *", "preface": false, "title": "Tool upkeep - re-verify"},
     {"source": "tool-upkeep-import", "task_key": "tool_upkeep.import", "cron": "0 6 * * 1", "preface": false, "title": "Tool upkeep - import"},
-    {"source": "tool-upkeep-trap-notes", "task_key": "tool_upkeep.trap_notes", "cron": "40 7 * * *", "preface": false, "title": "Tool upkeep - trap notes"}
+    {"source": "tool-upkeep-trap-notes", "task_key": "tool_upkeep.trap_notes", "cron": "40 7 * * *", "preface": false, "title": "Tool upkeep - trap notes"},
+    {"source": "tool-battle-weekly", "task_key": "tool-battle-weekly", "cron": "30 3 * * 1", "lease_minutes": 90, "title": "Tool Battle weekly re-run"}
   ]
 }
