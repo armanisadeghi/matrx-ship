@@ -15,6 +15,8 @@ MODULE_PATH = Path(__file__).with_name("ship_all.py")
 SPEC = importlib.util.spec_from_file_location("ship_all", MODULE_PATH)
 ship_all = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(ship_all)
+# The suite never reads the machine's real cutover stop file (a cutover may be running).
+ship_all.CUTOVER_STOP = str(Path(tempfile.gettempdir(), "ship-all-test-no-stop-%d" % time.time_ns()))
 
 
 class ShipAllCliTests(unittest.TestCase):
@@ -410,6 +412,85 @@ release_outcome_serving() { echo main-id; }
             problems = ship_all.failed_release_workflows(info)
         self.assertIn("gh could not answer", problems[0])
         self.assertEqual(run.call_count, 1)
+
+
+class CutoverStopTests(unittest.TestCase):
+    """THE CUTOVER STOP: ~/.matrx/cutover/STOP-SHIP holds every round, new or running."""
+
+    def info(self, name):
+        return {"repo": name, "path": "/x/" + name, "branch": "main", "has_ship": True,
+                "fetch_ok": True, "dirty": 1, "ahead": 0, "behind": 0,
+                "stale_packages": [], "local_branches": [], "extra_worktrees": [],
+                "remote_branches": [], "open_prs": []}
+
+    def test_new_round_exits_zero_before_any_repository_work(self):
+        with tempfile.TemporaryDirectory() as d, tempfile.TemporaryDirectory() as out_root:
+            stop = Path(d, "STOP-SHIP")
+            stop.write_text("monorepo cutover 2026-10-22\n")
+            said = []
+            with patch.object(ship_all, "CUTOVER_STOP", str(stop)), patch.object(ship_all, "OUT_ROOT", out_root), \
+                 patch.object(ship_all, "inspect") as inspect, patch.object(ship_all, "ship") as ship, \
+                 patch.object(ship_all, "land_github_work") as land, \
+                 patch.object(ship_all, "say", side_effect=said.append):
+                self.assertEqual(ship_all.main([]), 0)
+            inspect.assert_not_called(); ship.assert_not_called(); land.assert_not_called()
+            self.assertIn("cutover in progress, skipping", said[0])
+            self.assertIn("monorepo cutover 2026-10-22", said[0])
+            summary = json.loads(Path(out_root, "latest.json").read_text())
+            self.assertEqual((summary["held"], summary["repos"]), ("cutover", []))
+
+    def test_running_round_ships_nothing_once_the_stop_appears(self):
+        with tempfile.TemporaryDirectory() as d:
+            stop = Path(d, "STOP-SHIP")
+            stop.write_text("")
+            with patch.object(ship_all, "CUTOVER_STOP", str(stop)), \
+                 patch.object(ship_all, "OUT_ROOT", d), \
+                 patch.object(ship_all, "active_release_slot") as slot, \
+                 patch.object(ship_all.subprocess, "Popen") as popen, patch.object(ship_all, "say"):
+                result = ship_all.ship({"repo": "aidream", "path": "/unused"}, d, "stamp")
+            self.assertEqual(result["status"], "held: cutover")
+            slot.assert_not_called(); popen.assert_not_called()
+
+    def test_running_round_lands_no_github_work_once_the_stop_appears(self):
+        infos = {name: self.info(name) for name in ("aidream", "common-docs")}
+        with tempfile.TemporaryDirectory() as code, tempfile.TemporaryDirectory() as out_root:
+            for name in infos:
+                Path(code, name, ".git").mkdir(parents=True)
+            stop = Path(out_root, "STOP-SHIP")
+            def ship_then_freeze(info, out_dir, stamp):
+                stop.write_text("frozen mid-round\n")   # the freeze lands while this round ships
+                info["status"] = "shipped"
+                return info
+            with patch.object(ship_all, "CODE", code), patch.object(ship_all, "OUT_ROOT", out_root), \
+                 patch.object(ship_all, "CUTOVER_STOP", str(stop)), \
+                 patch.object(ship_all, "inspect", side_effect=lambda p: infos[Path(p).name]), \
+                 patch.object(ship_all, "ship", side_effect=ship_then_freeze), \
+                 patch.object(ship_all, "is_consumer", return_value=False), \
+                 patch.object(ship_all, "source_pushed", return_value=False), \
+                 patch.object(ship_all, "land_github_work") as land, \
+                 patch.object(ship_all, "release_liveness", return_value=[]), \
+                 patch.object(ship_all, "failed_release_workflows", return_value=[]), \
+                 patch.object(ship_all, "test_run_verdict", return_value=([], [])), \
+                 patch.object(ship_all, "npm_publish_lag", return_value=[]), \
+                 patch.object(ship_all, "stale_release_alarm", return_value=None), \
+                 patch.object(ship_all, "open_items", return_value=[]), \
+                 patch.object(ship_all, "held_files", return_value=[]), \
+                 patch.object(ship_all, "say"):
+                ship_all.main([])
+            land.assert_not_called()
+
+    def test_absent_stop_file_changes_nothing(self):
+        with tempfile.TemporaryDirectory() as d:
+            with patch.object(ship_all, "CUTOVER_STOP", str(Path(d, "STOP-SHIP"))):
+                self.assertIsNone(ship_all.cutover_stop())
+            fake = SimpleNamespace(stdout=iter(["ship.sh: sync exit 0, release exit 0\n"]), wait=lambda: 0, returncode=0)
+            with patch.object(ship_all, "CUTOVER_STOP", str(Path(d, "STOP-SHIP"))), patch.object(ship_all, "OUT_ROOT", d), \
+                 patch.object(ship_all, "active_release_slot", return_value=None), \
+                 patch.object(ship_all.subprocess, "Popen", return_value=fake) as popen, \
+                 patch.object(ship_all, "git", return_value=(0, "", "")), patch.object(ship_all, "say"):
+                info = {"repo": "aidream", "path": "/unused", "dirty": 0, "ahead": 0, "behind": 0, "origin_before": ""}
+                self.assertEqual(ship_all.ship(info, d, "s")["status"], "shipped")
+            popen.assert_called_once()
 
 
 if __name__ == "__main__":

@@ -57,6 +57,25 @@ FIND_SESSIONS = os.path.join(HERE, "find-file-sessions.py")
 EXCLUDED = {"wordpress-infrastructure", "titanium-marketing-wordpress", "real-singles", "matrx-mobile", "ai-matrx-biz",
             "matrx-local"}
 
+# THE CUTOVER STOP (monorepo cutover, 2026-10-22). While this file exists no round ships, releases or
+# lands anything: a new round says so and exits 0; a round already running ships no further repo and
+# lands no GitHub work. The cutover creates it at its freeze and removes it at unfreeze, abort or
+# rollback. Its first line, if any, is the reason printed. Every caller (ship-all.sh, the detached
+# round, Codex and Claude schedules on every account) reaches main() and ship(), so one file holds all.
+CUTOVER_STOP = os.environ.get("MATRX_CUTOVER_STOP") or os.path.expanduser("~/.matrx/cutover/STOP-SHIP")
+
+
+def cutover_stop():
+    """The reason the cutover stop file gives, or None when the file is absent."""
+    try:
+        with open(CUTOVER_STOP) as f:
+            return f.readline().strip() or "monorepo cutover in progress"
+    except FileNotFoundError:
+        return None
+    except OSError as error:   # present but unreadable: still a stop
+        return "stop file unreadable (%s)" % error
+
+
 USAGE = """Usage: ship-all.sh [--dry-run] [--only REPOS] [--skip REPOS] [--days DAYS] [--jobs JOBS]
 
 Run ./ship.sh in every eligible repository under the code directory.
@@ -831,6 +850,11 @@ def _ship_locked(info, out_dir, stamp):
     """Run one repo's ./ship.sh. While it runs, one progress line; when it ends, its whole output
     is printed as ONE block (START, everything it printed, END) so nothing from another repo is
     mixed in. The full output is also in the log file."""
+    stop = cutover_stop()
+    if stop:   # a round that started before the freeze ships nothing after it (checked under the repo lock)
+        info["status"], info["seconds"] = "held: cutover", 0
+        say("■ HOLD  %s  CUTOVER STOP (%s): %s — not shipped" % (info["repo"], CUTOVER_STOP, stop))
+        return info
     name, repo = info["repo"], info["path"]
     slot_blocker = active_release_slot(info) if name in RELEASE_TRAIN else None
     if slot_blocker:
@@ -923,6 +947,17 @@ def main(args=None):
         return 0
 
     dry = options["dry"]
+    stop = None if dry else cutover_stop()
+    if stop:
+        say("ship-all HELD: CUTOVER STOP (%s): %s — cutover in progress, skipping this round "
+            "(nothing inspected, shipped, released or landed). It resumes when the cutover removes the file."
+            % (CUTOVER_STOP, stop))
+        os.makedirs(OUT_ROOT, exist_ok=True)
+        with open(os.path.join(OUT_ROOT, "latest.json"), "w") as f:
+            json.dump({"stamp": datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S"), "code_dir": CODE,
+                       "dry_run": False, "seconds": 0, "held": "cutover", "cutover_stop": CUTOVER_STOP,
+                       "reason": stop, "repos": []}, f, indent=2)
+        return 0
     only, skip = options["only"], options["skip"]
     days, jobs = options["days"], options["jobs"]
 
@@ -1015,7 +1050,8 @@ def main(args=None):
         say("■ all shipping finished in %s" % fmt(time.time() - t0))
 
     # ── 3b. land GitHub-side work and re-measure packages (the "after" truth) ─────────────
-    if not dry and not blockers:
+    landing_stop = None if dry or blockers else cutover_stop()   # frozen mid-round: no PR merge or branch delete
+    if not dry and not blockers and not landing_stop:
         t0 = time.time()
         say("▶ landing open PRs / merged branches and re-checking packages…")
         def after(info):
@@ -1025,6 +1061,8 @@ def main(args=None):
         with ThreadPoolExecutor(max_workers=8) as pool:
             list(pool.map(after, infos))
         say("■ landed in %s" % fmt(time.time() - t0))
+    elif landing_stop:
+        say("■ HOLD  landing skipped: CUTOVER STOP (%s): %s" % (CUTOVER_STOP, landing_stop))
     for info in infos:
         if not dry and not blockers:
             build_verdict(info)
