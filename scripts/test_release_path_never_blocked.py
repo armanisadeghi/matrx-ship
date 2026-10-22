@@ -126,6 +126,9 @@ STATIC = [
     ("aidream", ".github/actions/npm-publish-one/action.yml", "nothing newer on main will release it.\"\n        exit 1", "PUBLISHED ANYWAY"),
     ("aidream", "scripts/npm-release-plan.mjs", "process.exitCode = 3", "const gateReported = new Map(blocked)"),
     ("aidream", ".github/workflows/publish-npm-package.yml", "npm publish BLOCKED::${b.dir}: ${b.reason}`);\n          '\n          exit 1", "PUBLISHED ANYWAY"),
+    ("matrx-extend", "release.sh", 'hard_stop "mandatory checks failed for $NEW_TAG', "report_check_failure()"),
+    ("matrx-extend", "release.sh", None, 'scream_release "$name" "$name failed (exit $rc)'),
+    ("matrx-extend", "scripts/test-release-ship-path.sh", 'touch "$SANDBOX/fail-tests"', "a lint failure is reported and the release is pushed"),
 ]
 
 
@@ -182,7 +185,7 @@ def main():
         print("FAIL wiring:\n" + str(e))
     try:
         check_static()
-        print("ok   static: twins, desktop smoke/gate, npm sibling hold and gate verdicts are report-only")
+        print("ok   static: twins, desktop smoke/gate, npm sibling hold, gate verdicts and extend's release checks are report-only")
     except AssertionError as e:
         failures.append(str(e))
         print("FAIL static:\n" + str(e))
