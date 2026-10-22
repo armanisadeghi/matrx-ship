@@ -139,7 +139,7 @@ LAW_HINT["lockfile-drift"] = "pnpm install --lockfile-only, then stage pnpm-lock
 # (the changed-line split below); every other NEW_BYPASS is mailed to its author like any inherited finding.
 # Report-only for releases: nothing on the release path runs this, and a slow or crashed census is SEEN, never fatal.
 MANDATE_SITES_SCANS = r"^(aidream|packages)/.+\.py$"
-MANDATE_SITES_TIMEOUT = 100
+MANDATE_SITES_TIMEOUT = 30
 LAW_HINT["mandate-call-site"] = "an AI call names its Mandate through the mandate runner (aidream/services/mandate_runner), or is allowlisted with a reason in boundary_allowlist.toml — scripts/check_mandate_call_sites.py, runner plan 25 §6"
 LAW_HINT["hardcoded-settings"] = "behavioral settings live in platform.feature_knob rows, never in code or the environment (aidream scripts/check_hardcoded_settings.py)"
 
@@ -327,7 +327,9 @@ def run_mandate_sites(repo, rels):
     """aidream's mandate call-site census, keeping only the NEW_BYPASS rows in these files."""
     py = os.path.join(repo, ".venv", "bin", "python")
     py = py if os.path.exists(py) else sys.executable
-    r = run_tool([py, "scripts/check_mandate_call_sites.py", "--json"], repo, MANDATE_SITES_TIMEOUT)
+    # INCREMENTAL: only the files this turn edited (check_mandate_call_sites.py --changed-files, ~1 s). The full
+    # repo census (~100 s CPU, minutes under load) stays the self-test / scheduled-task path, never the hook.
+    r = run_tool([py, "scripts/check_mandate_call_sites.py", "--json", "--changed-files", *rels], repo, MANDATE_SITES_TIMEOUT)
     if r is None:
         return []
     out = r.stdout or ""
