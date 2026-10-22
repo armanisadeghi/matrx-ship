@@ -13,7 +13,7 @@ importers:
     dependencies:
       '@ai-matrx/kit':
         specifier: latest
-        version: 0.45.26(react@19.3.0)(typescript@5.9.3)
+        version: 0.45.27(react@19.3.0)(typescript@5.9.3)
       '@codemirror/lang-sql':
         specifier: ^6.10.0
         version: 6.10.0
@@ -122,7 +122,7 @@ importers:
     dependencies:
       '@ai-matrx/kit':
         specifier: latest
-        version: 0.45.26(react@19.3.0)(typescript@5.9.3)
+        version: 0.45.27(react@19.3.0)(typescript@5.9.3)
       '@matrx/admin-ui':
         specifier: workspace:*
         version: link:../packages/admin-ui
@@ -280,7 +280,7 @@ importers:
     dependencies:
       '@ai-matrx/kit':
         specifier: latest
-        version: 0.45.26(react@19.3.0)(typescript@5.9.3)
+        version: 0.45.27(react@19.3.0)(typescript@5.9.3)
       '@aws-sdk/client-cloudtrail':
         specifier: ^3.1141.0
         version: 3.1141.0
@@ -323,7 +323,7 @@ importers:
     dependencies:
       '@ai-matrx/kit':
         specifier: latest
-        version: 0.45.26(react@19.3.0)(typescript@5.9.3)
+        version: 0.45.27(react@19.3.0)(typescript@5.9.3)
       '@matrx/admin-ui':
         specifier: workspace:*
         version: link:../../packages/admin-ui
@@ -406,8 +406,8 @@ importers:
 
 packages:
 
-  '@ai-matrx/kit@0.45.26':
-    resolution: {integrity: sha512-W2TE0U7uAEBg8jQM2AStwQ+5Qnag/k8iiDFdxddzDYU1G8seMgmQ2CzXvw7YyJuseMVNk0cwdzBSjGhCGQcB1g==}
+  '@ai-matrx/kit@0.45.27':
+    resolution: {integrity: sha512-MNWINPabWuis6XR1Tf4kRotaWdFYEfnj8dnQNdtA6Z7c8KomuqWluI7KNRkhEJqfW1tef4cJFEgd1RlVtQYXqA==}
     engines: {node: '>=20'}
     hasBin: true
     peerDependencies:
@@ -1169,6 +1169,9 @@ packages:
 
   '@lezer/common@1.5.3':
     resolution: {integrity: sha512-H0iErY4e43LpXbYDyBci5W4v/RwTgGV3YzYOlJPiGZ8RY8w51kVE+xLn1tg3Z6UmSfyETvtsUK3r7YsgDQEI7Q==}
+
+  '@lezer/common@1.5.4':
+    resolution: {integrity: sha512-xt3Q4z64xM+xhg4M7NXqw1N//1O74bUFo5kz6fwMeC4qwxSuRdwkYSmjcqCEEKYkNw5e67f2hcNqBoNERAEU0w==}
 
   '@lezer/highlight@1.2.4':
     resolution: {integrity: sha512-4UeRVFO0lsBaM7GA32zOqbmqNPme9jedo8Ey+5c5656MU3MLitMLIA8aCZTYjUMEpEsuSeXEm78Uea6Iq3bvSg==}
@@ -5512,7 +5515,7 @@ packages:
 
 snapshots:
 
-  '@ai-matrx/kit@0.45.26(react@19.3.0)(typescript@5.9.3)':
+  '@ai-matrx/kit@0.45.27(react@19.3.0)(typescript@5.9.3)':
     dependencies:
       idb: 8.0.4
       json5: 2.2.3
@@ -6385,13 +6388,15 @@ snapshots:
 
   '@lezer/common@1.5.3': {}
 
+  '@lezer/common@1.5.4': {}
+
   '@lezer/highlight@1.2.4':
     dependencies:
       '@lezer/common': 1.5.3
 
   '@lezer/highlight@1.2.5':
     dependencies:
-      '@lezer/common': 1.5.3
+      '@lezer/common': 1.5.4
 
   '@lezer/lr@1.4.10':
     dependencies:
