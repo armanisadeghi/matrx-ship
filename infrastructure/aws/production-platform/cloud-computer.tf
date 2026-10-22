@@ -587,7 +587,7 @@ output "cloud_computer" {
 #     --candidate-image <ecr>/matrx-cloud-computer:<new sha> --auth-domain <signed-in site> ...
 # Exit 1 (anything lost: sign-ins, extensions, files, desktop settings, installed
 # software, or an older Chrome) blocks the move.
-# Moving this default pins the image automatically (terraform_data.pin_cloud_computer_image below).
+# Moving this default pins the image automatically (terraform_data.pin_deployed_image in ecr-lifecycle.tf).
 variable "cloud_computer_image_tag" {
   description = "AI Dream Git SHA of the Cloud Computer image (browser worker + desktop) in matrx-cloud-computer."
   type        = string
@@ -599,26 +599,9 @@ variable "cloud_computer_image_tag" {
   }
 }
 
-# The promoted image is tagged pinned-cloud-computer-<sha> on every apply that moves the default, so the
-# ECR rollback window (ecr-lifecycle.tf) can never expire the image every Cloud Computer wake pulls.
-# 2026-10-18: a promoted image was ~2 days from expiry twice because pinning was only a comment.
-resource "terraform_data" "pin_cloud_computer_image" {
-  triggers_replace = [var.cloud_computer_image_tag]
-
-  provisioner "local-exec" {
-    interpreter = ["/bin/bash", "-c"]
-    environment = {
-      REPO = aws_ecr_repository.cloud_computer.name
-      SHA  = var.cloud_computer_image_tag
-    }
-    command = <<-EOT
-      set -euo pipefail
-      PIN="pinned-cloud-computer-$SHA"
-      if aws ecr describe-images --region us-east-1 --repository-name "$REPO" --image-ids imageTag="$PIN" >/dev/null 2>&1; then exit 0; fi
-      TYPES="application/vnd.oci.image.index.v1+json application/vnd.docker.distribution.manifest.list.v2+json application/vnd.oci.image.manifest.v1+json application/vnd.docker.distribution.manifest.v2+json"
-      MANIFEST=$(aws ecr batch-get-image --region us-east-1 --repository-name "$REPO" --image-ids imageTag="$SHA" --accepted-media-types $TYPES --query 'images[0].imageManifest' --output text)
-      MEDIA=$(aws ecr batch-get-image --region us-east-1 --repository-name "$REPO" --image-ids imageTag="$SHA" --accepted-media-types $TYPES --query 'images[0].imageManifestMediaType' --output text)
-      aws ecr put-image --region us-east-1 --repository-name "$REPO" --image-tag "$PIN" --image-manifest "$MANIFEST" --image-manifest-media-type "$MEDIA" >/dev/null
-    EOT
-  }
+# The promoted image is pinned (pinned-cloud-computer-<sha>) by terraform_data.pin_deployed_image in
+# ecr-lifecycle.tf, so the ECR rollback window can never expire the image every Cloud Computer wake pulls.
+moved {
+  from = terraform_data.pin_cloud_computer_image
+  to   = terraform_data.pin_deployed_image["cloud-computer"]
 }
