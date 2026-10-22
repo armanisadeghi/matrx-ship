@@ -12,10 +12,13 @@ caused it is told.
       edited the file around then) is mailed once through agent mail, and it never fails you.
   lint-guard.py stop-hook
       Claude Code Stop / SubagentStop hook (JSON on stdin). Lints every file this session edited
-      and BLOCKS the turn's end while one of its changed lines carries an error (at most
-      MAX_BLOCKS times in a row, so a stuck agent is never trapped).
+      (Edit/Write/serena calls, AND files its writing Bash commands named and changed — see
+      session_edits) and BLOCKS the turn's end while one of its changed lines carries an error (at
+      most MAX_BLOCKS times in a row, so a stuck agent is never trapped; after that the findings
+      still print as a visible systemMessage, and so does every crashed scanner).
   lint-guard.py self-test
-      Proves the changed-line split, the hunk parser and the law-guard mapping can fail.
+      Proves the changed-line split, the hunk parser and the law-guard mapping can fail, then runs
+      test_lint_guard_stop_hook.py (the Stop hook end to end on a scratch repo).
 
 Linters: matrx-frontend -> its own eslint (errors only, severity 2); aidream *.py -> ruff.
 Law guards (LAW_GUARDS): each repo's own `check:archived-items-law` / `check:canonical-pickers`
@@ -35,12 +38,23 @@ from concurrent.futures import ThreadPoolExecutor
 # LINT_GUARD_CODE_ROOT exists only so the planted-violation proof can run on a scratch clone.
 CODE = os.environ.get("LINT_GUARD_CODE_ROOT") or os.path.expanduser("~/code")
 SCRIPTS = os.path.dirname(os.path.realpath(__file__))
-STATE_DIR = os.path.expanduser("~/.matrx/lint-guard")
+STATE_DIR = os.environ.get("LINT_GUARD_STATE_DIR") or os.path.expanduser("~/.matrx/lint-guard")
 SENT_FILE = os.path.join(STATE_DIR, "sent.json")
 MAX_BLOCKS = 3
 # An inherited error older than this is backlog, not a live session's mess: never mailed.
 BLAME_WINDOW_DAYS = 3
 JS_EXT = (".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts")
+
+
+# Scanner failures the person must SEE (adversarial review 2026-10-22: a Stop hook's stderr is not
+# shown, so a crashed scanner passed the turn in silence). warn() prints to stderr AND collects the line;
+# the stop-hook puts every collected line into its visible systemMessage.
+WARNINGS = []
+
+
+def warn(msg):
+    WARNINGS.append(msg)
+    print(msg, file=sys.stderr)
 
 
 # ---------------------------------------------------------------- repos and linters
@@ -131,7 +145,7 @@ def run_tool(cmd, cwd, timeout):
     try:
         return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout)
     except (OSError, subprocess.TimeoutExpired) as e:
-        print(f"lint-guard: skipped {os.path.basename(cmd[0])} ({type(e).__name__}: {e}); nothing was checked.", file=sys.stderr)
+        warn(f"lint-guard scanner {os.path.basename(cmd[0])} crashed: {type(e).__name__}: {e}; nothing was checked.")
         return None
 
 
@@ -147,7 +161,7 @@ def run_eslint(repo, rels):
     except json.JSONDecodeError:
         data = None
     if data is None or (not data and r.returncode not in (0, 1)):
-        print(f"lint-guard: the linter failed (exit {r.returncode}): {(r.stderr or r.stdout).strip()[:200]}; nothing was checked.", file=sys.stderr)
+        warn(f"lint-guard scanner eslint crashed: exit {r.returncode}: {(r.stderr or r.stdout).strip()[:200]}; nothing was checked.")
         return []
     out = []
     for f in data:
@@ -171,7 +185,7 @@ def run_ruff(repo, rels):
     except json.JSONDecodeError:
         data = None
     if data is None or (not data and r.returncode not in (0, 1)):
-        print(f"lint-guard: the linter failed (exit {r.returncode}): {(r.stderr or r.stdout).strip()[:200]}; nothing was checked.", file=sys.stderr)
+        warn(f"lint-guard scanner ruff crashed: exit {r.returncode}: {(r.stderr or r.stdout).strip()[:200]}; nothing was checked.")
         return []
     return [
         {"file": os.path.relpath(d["filename"], repo), "line": d["location"]["row"], "rule": d.get("code") or "syntax", "message": d.get("message", "")}
@@ -221,7 +235,7 @@ def run_law(repo, idx, rels):
     found = parse_law_output(repo, pkg, check_name, r.returncode, (r.stderr or "") + "\n" + (r.stdout or ""))
     if found is None:
         tail = (r.stderr or r.stdout or "").strip().splitlines()[-3:]
-        print(f"lint-guard: {check_name} failed (exit {r.returncode}): {' | '.join(tail)[:300]}; nothing was checked.", file=sys.stderr)
+        warn(f"lint-guard scanner {check_name} crashed: exit {r.returncode}: {' | '.join(tail)[:300]}; nothing was checked.")
         return []
     wanted = set(rels)
     return [f for f in found if f["file"] in wanted]
@@ -252,7 +266,7 @@ def run_settings(repo, rels):
     r = run_tool([py, "scripts/check_hardcoded_settings.py", "--changed-from", "HEAD", "--target", target], repo, LAW_TIMEOUT)
     if r is None or r.returncode not in (0, 1) or "hard-coded settings (changed" not in (r.stdout or ""):
         if r is not None:
-            print(f"lint-guard: hardcoded-settings failed (exit {r.returncode}); nothing was checked.", file=sys.stderr)
+            warn(f"lint-guard scanner hardcoded-settings crashed: exit {r.returncode}: {(r.stderr or r.stdout or '').strip()[-200:]}; nothing was checked.")
         return []
     wanted, found = set(rels), []
     for row in (r.stdout or "").splitlines():
@@ -288,22 +302,21 @@ def lint(repo, rels):
             continue
         for kind in linters_for(repo, rel):
             by.setdefault(kind, []).append(rel)
+    runners = {"eslint": run_eslint, "ruff": run_ruff, "settings": run_settings, "lockfile": run_lockfile}
     jobs = []
     with ThreadPoolExecutor(max_workers=max(1, len(by))) as pool:
         for kind, files in by.items():
-            if kind == "eslint":
-                jobs.append(pool.submit(run_eslint, repo, files))
-            elif kind == "ruff":
-                jobs.append(pool.submit(run_ruff, repo, files))
-            elif kind.startswith("law:"):
-                jobs.append(pool.submit(run_law, repo, int(kind[4:]), files))
-            elif kind == "settings":
-                jobs.append(pool.submit(run_settings, repo, files))
-            elif kind == "lockfile":
-                jobs.append(pool.submit(run_lockfile, repo, files))
+            if kind.startswith("law:"):
+                jobs.append((kind, pool.submit(run_law, repo, int(kind[4:]), files)))
+            elif kind in runners:
+                jobs.append((kind, pool.submit(runners[kind], repo, files)))
         found = []
-        for j in jobs:
-            found += j.result()
+        for kind, j in jobs:
+            try:
+                found += j.result()
+            except Exception as e:  # one broken scanner never hides the others' findings; it is SEEN
+                name = LAW_GUARDS[int(kind[4:])][2] if kind.startswith("law:") else kind
+                warn(f"lint-guard scanner {name} crashed: {type(e).__name__}: {e}; nothing was checked by it.")
     return found
 
 
@@ -550,32 +563,97 @@ EDIT_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
 SERENA_EDIT = re.compile(r"^mcp__serena__(replace|insert|rename|safe_delete|create_text_file)")
 
 
-def edited_files(transcript):
-    """{path: text this session's edit tools wrote into it}."""
-    files = {}
+# BASH EDITS (adversarial review 2026-10-22): sed -i, heredocs and scripts change files without an Edit
+# call, so the Stop hook never saw them and the --no-verify sweep carried them to main. A file counts as
+# this session's Bash edit only when ALL hold — the attribution has to survive a shared checkout with
+# many concurrent writers: (1) a Bash command of THIS session names the path, (2) that command writes
+# (redirect, tee, sed/perl -i, cp/mv, git apply/checkout/restore, a script's open(..., 'w') / write_text, --fix), (3) the file was
+# modified at or after that command started, and (4) it still carries uncommitted changes. A file some
+# other lane edits but this session only read (`cat`, `rg`) is never flagged.
+BASH_WRITES = re.compile(
+    r"(?<![0-9&])>>?(?!&)|\btee\b|\b(sed|perl|ruby)\b[^|;&]*\s-[a-zA-Z]*i|\b(cp|mv|install|patch|truncate|dd|rsync|ln)\b"
+    r"|\bgit\s+(?:-C\s+\S+\s+)?(apply|checkout|restore|mv|am|cherry-pick|revert|stash)\b"
+    # an interpreter or tool writes only when the command says so (a bare `python3 x.py` / `node -e` read is not an edit)
+    r"|write_text|write_bytes|writeFileSync|writeFile\(|\.write\(|open\([^)]*['\"][wa]b?\+?['\"]|--write\b|--fix\b|\bblack\b")
+DEV_NULL = re.compile(r"\d?>>?\s*/dev/null|\d?>&\d|&>\s*/dev/null")
+PATH_TOKEN = re.compile(r"""[A-Za-z0-9_@~./+\-]*[A-Za-z0-9_@~+\-]/[A-Za-z0-9_@~./+\-]*|[A-Za-z0-9_@+\-][A-Za-z0-9_@.+\-]*\.[A-Za-z0-9]{1,6}""")
+
+
+def bash_named_paths(command, cwd):
+    """Absolute paths a Bash command names (existing files only), resolved against the session cwd and
+    every directory the command itself `cd`s into or passes as `git -C` / `--repo`."""
+    bases = [cwd]
+    for m in re.finditer(r"(?:\bcd|\bgit\s+-C|--repo|--cwd|-C)\s+(['\"]?)([^'\"\s;&|)]+)\1", command):
+        d = os.path.expanduser(m.group(2))
+        bases.append(d if os.path.isabs(d) else os.path.join(cwd, d))
+    out = set()
+    for tok in PATH_TOKEN.findall(command):
+        tok = os.path.expanduser(tok.strip(".,:"))
+        if not tok or tok in (".", ".."):
+            continue
+        for base in ([""] if os.path.isabs(tok) else bases):
+            full = os.path.normpath(os.path.join(base, tok)) if base else os.path.normpath(tok)
+            if os.path.isfile(full):
+                out.add(full)
+                break
+    return out
+
+
+def _utc_seconds(raw_ts):
+    """ISO-8601 UTC transcript timestamp -> epoch seconds (None when absent)."""
+    try:
+        import calendar
+        return calendar.timegm(time.strptime(raw_ts[:19], "%Y-%m-%dT%H:%M:%S"))
+    except (TypeError, ValueError):
+        return None
+
+
+def session_edits(transcript, cwd):
+    """-> ({path: text this session's edit tools wrote into it}, {abs path: earliest start of a writing
+    Bash command of this session that names it})."""
+    files, bash = {}, {}
     try:
         fh = open(transcript)
     except OSError:
-        return files
+        return files, bash
     with fh:
         for raw in fh:
             if '"tool_use"' not in raw:
                 continue
             try:
-                msg = json.loads(raw).get("message") or {}
+                row = json.loads(raw)
             except json.JSONDecodeError:
                 continue
+            msg = row.get("message") or {}
             for part in msg.get("content") or []:
                 if not isinstance(part, dict) or part.get("type") != "tool_use":
                     continue
                 name, inp = part.get("name", ""), part.get("input") or {}
+                if name == "Bash":
+                    command = inp.get("command") or ""
+                    if not BASH_WRITES.search(DEV_NULL.sub(" ", command)):
+                        continue
+                    started = _utc_seconds(row.get("timestamp")) or 0
+                    for full in bash_named_paths(command, cwd):
+                        bash[full] = min(bash.get(full, started), started)
+                    continue
                 path = inp.get("file_path") if name in EDIT_TOOLS else inp.get("relative_path") if SERENA_EDIT.match(name) else None
                 if not path:
                     continue
                 pieces = [inp.get(k) for k in ("new_string", "content", "body", "new_source", "repl")]
                 pieces += [e.get("new_string") for e in inp.get("edits") or [] if isinstance(e, dict)]
                 files[path] = files.get(path, "") + "\n" + "\n".join(p for p in pieces if isinstance(p, str))
-    return files
+    return files, bash
+
+
+def edited_files(transcript):
+    """{path: text this session's edit tools wrote into it}."""
+    return session_edits(transcript, os.getcwd())[0]
+
+
+def visible(lines):
+    """The Stop hook's one channel a person and the agent both SEE when the turn is allowed to end."""
+    return json.dumps({"systemMessage": "\n".join(lines)})
 
 
 def cmd_stop_hook():
@@ -588,7 +666,7 @@ def cmd_stop_hook():
     cwd = hook.get("cwd") or os.getcwd()
     counter = os.path.join(STATE_DIR, f"blocks-{session}")
     by_repo = {}
-    written_by_path = edited_files(transcript)
+    written_by_path, bash_by_path = session_edits(transcript, cwd)
     written = {}
     for p, text in written_by_path.items():
         full = p if os.path.isabs(p) else os.path.join(cwd, p)
@@ -599,6 +677,18 @@ def cmd_stop_hook():
         if linters_for(repo, rel):
             by_repo.setdefault(repo, []).append(rel)
             written.setdefault(repo, {})[rel] = text
+    for full, started in bash_by_path.items():
+        try:
+            if os.path.getmtime(full) + 1 < started:
+                continue  # unchanged since this session's writing command: never this session's edit
+        except OSError:
+            continue
+        repo = repo_root(full)
+        if not repo or not full.startswith(CODE):
+            continue
+        rel = os.path.relpath(full, repo)
+        if linters_for(repo, rel) and rel not in by_repo.get(repo, []):
+            by_repo.setdefault(repo, []).append(rel)
     mine = []
     for repo, rels in by_repo.items():
         # Only files still carrying uncommitted changes: committed work already passed pre-commit.
@@ -612,6 +702,8 @@ def cmd_stop_hook():
             os.remove(counter)
         except OSError:
             pass
+        if WARNINGS:
+            print(visible(WARNINGS))
         return 0
     os.makedirs(STATE_DIR, exist_ok=True)
     try:
@@ -620,13 +712,20 @@ def cmd_stop_hook():
         n = 0
     if n >= MAX_BLOCKS:
         os.remove(counter)
+        # Never a quiet pass (adversarial review 2026-10-22): the turn may end, but the errors are SHOWN.
+        print(visible([f"lint-guard WARNING: {len(mine)} lint error(s) on lines you changed are STILL there after "
+                       f"{MAX_BLOCKS} blocks; the turn ends anyway. Fix them now, in place (never disable the rule):",
+                       describe(mine), *WARNINGS]))
         return 0
     with open(counter, "w") as fh:
         fh.write(str(n + 1))
-    print(json.dumps({
+    out = {
         "decision": "block",
         "reason": f"lint-guard: {len(mine)} lint error(s) on lines you changed. Fix each one in place (never disable the rule), then finish:\n{describe(mine)}",
-    }))
+    }
+    if WARNINGS:
+        out["systemMessage"] = "\n".join(WARNINGS)
+    print(json.dumps(out))
     return 0
 
 
@@ -701,6 +800,10 @@ def cmd_self_test():
     assert m and m.group(2) == "7" and "x" in m.group(3), "lockfile finding parse"
     assert linters_for("/x/aidream", "apps/shared/a/package.json") == [] or "lockfile" in linters_for("/x/aidream", "apps/shared/a/package.json")
     law_self_test()
+    # The Stop hook end to end (Bash edits, other lanes' files, past MAX_BLOCKS, crashed scanner).
+    r = subprocess.run([sys.executable, os.path.join(SCRIPTS, "test_lint_guard_stop_hook.py")],
+                       env=dict(os.environ, LINT_GUARD_PATH=os.path.realpath(__file__)), capture_output=True, text=True)
+    assert r.returncode == 0, "stop-hook proof:\n" + r.stdout[-1500:] + r.stderr[-500:]
     print("lint-guard self-test: ok")
     return 0
 
@@ -731,6 +834,9 @@ if __name__ == "__main__":
         sys.exit(main())
     except SystemExit:
         raise
-    except BaseException as e:  # a broken guard never refuses anyone's work; it says so
-        print(f"lint-guard: internal failure ({type(e).__name__}: {e}); nothing was checked.", file=sys.stderr)
+    except BaseException as e:  # a broken guard never refuses anyone's work; it says so, VISIBLY
+        line = f"lint-guard scanner lint-guard crashed: {type(e).__name__}: {e}; nothing was checked."
+        print(line, file=sys.stderr)
+        if len(sys.argv) > 1 and sys.argv[1] == "stop-hook":
+            print(visible([*WARNINGS, line]))
         sys.exit(0)
