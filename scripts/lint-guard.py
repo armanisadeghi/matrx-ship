@@ -95,6 +95,12 @@ LAW_TIMEOUT = 75
 # the release push it only reports (.githooks/pre-push, MATRX_RELEASE_PATH=1).
 SETTINGS_SCANS = r"^(aidream|packages)/.+\.py$"
 SETTINGS_FINDING = re.compile(r"^NEW\s+(\S+?\.py)::(\w+)::(\S+)\s+—\s+(.*)$")
+# LOCKFILE DRIFT AT WRITE TIME (Arman 2026-10-21): a workspace package.json dependency edit without its
+# pnpm-lock.yaml broke every npm publish (playground commits 0607580db8, 2548f21eb2). aidream's
+# scripts/check_lockfile_specifiers.py compares the edited package.json to the lockfile on disk; findings
+# carry the dependency's line so the changed-line split applies. Never on the release path.
+LOCKFILE_FINDING = re.compile(r"^(\S+package\.json):(\d+)\s+lockfile-drift\s+(.*)$")
+LAW_HINT["lockfile-drift"] = "pnpm install --lockfile-only, then stage pnpm-lock.yaml with the package.json (aidream scripts/check_lockfile_specifiers.py)"
 LAW_HINT["hardcoded-settings"] = "behavioral settings live in platform.feature_knob rows, never in code or the environment (aidream scripts/check_hardcoded_settings.py)"
 
 
@@ -108,6 +114,8 @@ def linters_for(repo, rel):
         out.append("ruff")
     if name == "aidream" and re.match(SETTINGS_SCANS, rel) and os.path.exists(os.path.join(repo, "scripts", "check_hardcoded_settings.py")):
         out.append("settings")
+    if name == "aidream" and os.path.basename(rel) == "package.json" and os.path.exists(os.path.join(repo, "scripts", "check_lockfile_specifiers.py")):
+        out.append("lockfile")
     for i, (gname, _pkg, _check, _script, scans, _files) in enumerate(LAW_GUARDS):
         if gname == name and re.match(scans, rel) and not re.search(r"\.(test|spec)\.[a-z]+$", rel):
             out.append(f"law:{i}")
@@ -263,6 +271,16 @@ def run_settings(repo, rels):
     return found
 
 
+def run_lockfile(repo, rels):
+    r = run_tool([sys.executable, "scripts/check_lockfile_specifiers.py", "--worktree", "--repo", repo, *rels], repo, 30)
+    found = []
+    for row in (r.stdout if r is not None else "").splitlines():
+        m = LOCKFILE_FINDING.match(row.strip())
+        if m:
+            found.append({"file": m.group(1), "line": int(m.group(2)), "rule": "lockfile-drift", "message": m.group(3)})
+    return found
+
+
 def lint(repo, rels):
     by = {}
     for rel in rels:
@@ -281,6 +299,8 @@ def lint(repo, rels):
                 jobs.append(pool.submit(run_law, repo, int(kind[4:]), files))
             elif kind == "settings":
                 jobs.append(pool.submit(run_settings, repo, files))
+            elif kind == "lockfile":
+                jobs.append(pool.submit(run_lockfile, repo, files))
         found = []
         for j in jobs:
             found += j.result()
@@ -677,6 +697,9 @@ def cmd_self_test():
     mine, inherited = split([{"file": "p.tsx", "line": 3}, {"file": "p.tsx", "line": 1}], {"p.tsx": {1, 3}},
                             {"p.tsx": "\nconst mine = 1;"}, {"p.tsx": ["const mine = 1;", "x", "BAD otherlane"]})
     assert [f["line"] for f in mine] == [1] and [f["line"] for f in inherited] == [3], (mine, inherited)
+    m = LOCKFILE_FINDING.match("apps/shared/a/package.json:7  lockfile-drift  dependencies 'x' is not in apps/pnpm-lock.yaml; fix")
+    assert m and m.group(2) == "7" and "x" in m.group(3), "lockfile finding parse"
+    assert linters_for("/x/aidream", "apps/shared/a/package.json") == [] or "lockfile" in linters_for("/x/aidream", "apps/shared/a/package.json")
     law_self_test()
     print("lint-guard self-test: ok")
     return 0
