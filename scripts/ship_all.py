@@ -205,12 +205,22 @@ def is_consumer(repo):
 
 
 def source_pushed(info):
-    """True when the package source's ship moved GitHub's main (so a publish train may be running)."""
+    """True when the package source's OWN ship landed on GitHub's main (so its publish train runs).
+    origin/main moving is not enough: other developers push every minute, so a refused push
+    (2026-10-21: aidream "Nothing was pushed") still saw main move and waited 12 min on THEIR runs.
+    The checkout's HEAD must now be on origin/main, and must not have been there before."""
     if info.get("ship_started") is None:
         return False
-    git(info["path"], "fetch", "-q", "origin", timeout=90)
-    _, now, _ = git(info["path"], "rev-parse", "-q", "--verify", "origin/main")
-    return bool(now.strip()) and now.strip() != info.get("origin_before")
+    repo = info["path"]
+    git(repo, "fetch", "-q", "origin", timeout=90)
+    _, now, _ = git(repo, "rev-parse", "-q", "--verify", "origin/main")
+    if not now.strip() or now.strip() == info.get("origin_before"):
+        return False
+    if git(repo, "merge-base", "--is-ancestor", "HEAD", "origin/main")[0] != 0:
+        return False   # our commits never reached GitHub
+    before = info.get("origin_before")
+    already = bool(before) and git(repo, "merge-base", "--is-ancestor", "HEAD", before)[0] == 0
+    return not already or "release exit 0" in info.get("ship_summary", "")
 
 
 def wait_for_publish_runs(since, now=time.time, sleep=time.sleep):
