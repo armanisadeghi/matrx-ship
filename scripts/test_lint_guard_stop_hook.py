@@ -6,7 +6,11 @@ Proves, through the real `lint-guard.py stop-hook` command with a stand-in ruff:
   2. a file another lane changed, which this session only read or touched before that change, is NOT;
   3. an Edit-tool file still blocks (regression);
   4. past MAX_BLOCKS the turn ends with the findings in a VISIBLE systemMessage, never quietly;
-  5. a crashed scanner prints a visible "lint-guard scanner ruff crashed" line.
+  5. a crashed scanner prints a visible "lint-guard scanner ruff crashed" line;
+  6. a read-only command with a redirect to ANOTHER path (`rg x a.py > /tmp/o`) never attributes a.py, while
+     `cat x | tee a.py` and `cp x a.py` do;
+  7. the second Stop of a session parses no transcript bytes and relints no unchanged file (and reports the
+     same findings); an appended call parses only the new bytes and only the changed file is relinted.
 
 Run:  python3 ~/code/matrx-ship/scripts/test_lint_guard_stop_hook.py
       LINT_GUARD_PATH=<old copy> ... runs the same proof against another lint-guard (fail-before).
@@ -89,7 +93,7 @@ def main():
             git(repo, "config", k, v)
         with open(os.path.join(repo, ".gitignore"), "w") as fh:
             fh.write(".venv/\n")
-        for name in ("bash_edit.py", "other_lane.py", "read_only.py", "edit_tool.py"):
+        for name in ("bash_edit.py", "other_lane.py", "read_only.py", "edit_tool.py", "redir_only.py", "tee_target.py", "cp_target.py", "cp_src.py"):
             with open(os.path.join(repo, name), "w") as fh:
                 fh.write("x = 1\ny = 2\n")
         git(repo, "add", "-A")
@@ -143,6 +147,51 @@ def main():
         out = hook(root, state, "s5-" + uuid.uuid4().hex, t3, repo, {"FAKE_RUFF_CRASH": "1"})
         expect("lint-guard scanner ruff crashed" in out.get("systemMessage", ""),
                "a crashed scanner prints a visible 'lint-guard scanner ruff crashed' line", out)
+
+        # 6. redirect elsewhere never attributes the inputs; tee / cp targets do.
+        dirty("redir_only.py", 10)
+        dirty("tee_target.py", 5)
+        dirty("cp_target.py", 5)
+        t6 = os.path.join(root, "t6.jsonl")
+        transcript(t6, [
+            (now - 60, "Bash", {"command": "cd %s && rg x redir_only.py > /tmp/lint-guard-test-out" % repo}),
+            (now - 59, "Bash", {"command": "rg x %s/redir_only.py 2>&1 | head > /tmp/lint-guard-test-out" % repo}),
+            (now - 58, "Bash", {"command": "cat cp_src.py | tee %s/tee_target.py" % repo}),
+            (now - 57, "Bash", {"command": "cd %s && cp cp_src.py cp_target.py" % repo}),
+        ])
+        out = hook(root, state, "s6-" + uuid.uuid4().hex, t6, repo)
+        reason = out.get("reason", "")
+        expect("redir_only.py" not in reason, "a redirect to another path does not make its inputs edited", out)
+        expect("tee_target.py:2" in reason and "cp_target.py:2" in reason,
+               "tee FILE and cp x FILE still attribute their targets", out)
+
+        # 7. cached second pass.
+        stats = os.path.join(root, "stats.json")
+        s7 = "s7-" + uuid.uuid4().hex
+        t7 = os.path.join(root, "t7.jsonl")
+        transcript(t7, [(now - 30, "Bash", {"command": "cd %s && sed -i '' 's/2/BAD/' bash_edit.py" % repo}),
+                        (now - 29, "Bash", {"command": "cd %s && sed -i '' 's/2/BAD/' tee_target.py" % repo})])
+        env = {"LINT_GUARD_STATS": stats}
+        first = hook(root, state, s7, t7, repo, env)
+        st1 = json.load(open(stats)) if os.path.exists(stats) else {}
+        second = hook(root, state, s7, t7, repo, env)
+        st2 = json.load(open(stats)) if os.path.exists(stats) else {}
+        expect(st1.get("files_linted") == 2 and st1.get("bytes_parsed", 0) > 0, "first pass parses the transcript and lints both files", st1)
+        expect(st2.get("bytes_parsed") == 0 and st2.get("files_linted") == 0,
+               "second pass with nothing changed parses 0 bytes and relints 0 files", st2)
+        expect(first.get("decision") == "block" and second.get("decision") == "block"
+               and "bash_edit.py:2" in second.get("reason", "") and "tee_target.py:2" in second.get("reason", ""),
+               "the cached pass reports the same findings", second)
+        with open(t7, "a") as fh:
+            fh.write(json.dumps({"timestamp": iso(now - 20), "message": {"content": [
+                {"type": "tool_use", "name": "Bash", "input": {"command": "cd %s && echo 'z = BAD' >> bash_edit.py" % repo}}]}}) + "\n")
+        with open(os.path.join(repo, "bash_edit.py"), "a") as fh:
+            fh.write("z = BAD\n")
+        third = hook(root, state, s7, t7, repo, env)
+        st3 = json.load(open(stats)) if os.path.exists(stats) else {}
+        expect(0 < st3.get("bytes_parsed", 0) < st1.get("bytes_parsed", 0) * 2 and st3.get("files_linted") == 1
+               and "bash_edit.py:3" in third.get("reason", ""),
+               "an appended call parses only the new bytes and relints only the changed file", [st3, third])
     finally:
         shutil.rmtree(root, ignore_errors=True)
     if failures:
