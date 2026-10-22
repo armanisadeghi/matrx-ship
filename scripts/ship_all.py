@@ -45,6 +45,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
 HERE = os.path.dirname(os.path.realpath(__file__))   # real location, even when run through code/scripts/
@@ -500,6 +501,83 @@ def release_liveness(info):
     return out
 
 
+# THE STALE-RELEASE ALARM (2026-10-21). Releases stalled for hours with no alarm: /api/version served
+# the same commit from 16:25 to 19:58 while main kept moving. Inside this round's release check (no new
+# schedule): when the commit the live site serves has not changed for 90 minutes and origin/main holds
+# commits it does not contain, the ship-all lanes are told ONCE per stall by urgent agent mail.
+STALE_REPO = "matrx-frontend"
+VERSION_URL = "https://www.aimatrx.com/api/version"
+STALE_AFTER_S = 90 * 60
+STALE_STATE = os.path.join(OUT_ROOT, "version-watch.json")
+STALE_FROM = "c44203b2-c5cf-5a24-ad76-cb80b7686125"
+STALE_TO = ("6bda811a-6b18-5ef3-a1c1-67f81ae6b2c4", "50b803bb-a5df-5ae9-a769-16f0a253bda6")
+BOARD = os.path.join(HERE, "board.py")
+
+
+def served_commit(url=None):
+    """The commit the live site reports, or None when it cannot be read (never guessed)."""
+    try:
+        with urllib.request.urlopen(url or VERSION_URL, timeout=20) as r:
+            commit = str(json.load(r).get("commit") or "")
+        return commit if re.fullmatch(r"[0-9a-f]{40}", commit) else None
+    except Exception:
+        return None
+
+
+def send_stall_mail(message):
+    """Urgent agent mail to every ship-all lane; True when at least one went."""
+    sent = False
+    for to in STALE_TO:
+        r = subprocess.run([sys.executable, BOARD, "post", to, message, "--urgent", "--from", STALE_FROM],
+                           capture_output=True, text=True, timeout=120)
+        sent = sent or r.returncode == 0
+        if r.returncode != 0:
+            say("stale-release alarm: mail to %s failed: %s" % (to[:8], (r.stderr or r.stdout).strip()[:200]))
+    return sent
+
+
+def stale_release_alarm(info, served=None, mail=None, now=time.time, state_path=None):
+    """Returns the stall line (str) while the live site is stalled, else None. Mails once per stall."""
+    if info["repo"] != STALE_REPO:
+        return None
+    repo, state_path = info["path"], state_path or STALE_STATE
+    commit = served if served is not None else served_commit()
+    if not commit:
+        return None
+    rc, out, _ = git(repo, "rev-list", "--count", "%s..origin/main" % commit)
+    behind = int(out.strip()) if rc == 0 and out.strip().isdigit() else None
+    if behind is None:      # the served commit is not in this checkout: main has moved past it
+        rc, out, _ = git(repo, "rev-list", "--count", "origin/main")
+        behind = 1 if rc == 0 else 0
+    try:
+        with open(state_path) as f:
+            st = json.load(f)
+    except (OSError, ValueError):
+        st = {}
+    t = now()
+    if st.get("commit") != commit:
+        # Cold start: the served commit's own date is the best evidence of when it went live. Once a
+        # change is SEEN, the clock starts at the moment it was seen (a late round never inflates a stall).
+        since = t
+        if not st:
+            rc, ct, _ = git(repo, "log", "-1", "--format=%ct", commit)
+            since = min(t, int(ct.strip())) if rc == 0 and ct.strip().isdigit() else t
+        st = {"commit": commit, "since": since, "alarmed": False}
+    stalled = behind > 0 and t - st["since"] >= STALE_AFTER_S
+    line = None
+    if stalled:
+        mins = int((t - st["since"]) // 60)
+        line = ("%s serves %s, unchanged for %d min, while origin/main holds %d newer commit(s) — "
+                "releases are stalled: read the newest release's Vercel log and fix the cause"
+                % (VERSION_URL, commit[:10], mins, behind))
+        if not st.get("alarmed") and (mail or send_stall_mail)("RELEASE STALLED. " + line):
+            st["alarmed"] = True
+    os.makedirs(os.path.dirname(state_path), exist_ok=True)
+    with open(state_path, "w") as f:
+        json.dump(st, f)
+    return line
+
+
 RELEASE_WORKFLOW = re.compile(r"release|publish|deploy|nominate", re.I)
 
 # GitHub meters Actions REST and GraphQL independently.  A fleet pass can exhaust the
@@ -922,6 +1000,13 @@ def main(args=None):
                 info["not_live"], info["live_workflow_failed"] = [], []
         except Exception as error:  # never let the check vanish silently
             info["not_live"] = ["release liveness check crashed: %s" % error]
+        if not dry:
+            try:
+                stalled = stale_release_alarm(info)
+                if stalled:
+                    info["not_live"] = list(info.get("not_live") or []) + [stalled]
+            except Exception as error:  # never let the check vanish silently
+                info["not_live"] = list(info.get("not_live") or []) + ["stale-release alarm crashed: %s" % error]
         try:
             info["tests_red"], info["ci_signals"] = test_run_verdict(info) if info["fetch_ok"] else ([], [])
         except Exception as error:  # never let the check vanish silently
