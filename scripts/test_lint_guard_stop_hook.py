@@ -38,8 +38,12 @@ sys.exit(1 if out else 0)
 '''
 
 
+# Never inherit an outer hook's GIT_INDEX_FILE / GIT_DIR into the scratch repo's git calls.
+CLEAN_ENV = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+
+
 def git(repo, *args):
-    subprocess.run(["git", "-C", repo, *args], check=True, capture_output=True)
+    subprocess.run(["git", "-C", repo, *args], check=True, capture_output=True, env=CLEAN_ENV)
 
 
 def iso(t):
@@ -54,7 +58,7 @@ def transcript(path, calls):
 
 
 def hook(root, state, session, tpath, cwd, extra_env=None):
-    env = dict(os.environ, LINT_GUARD_CODE_ROOT=root, LINT_GUARD_STATE_DIR=state, LINT_GUARD_DRY="1", **(extra_env or {}))
+    env = dict(CLEAN_ENV, LINT_GUARD_CODE_ROOT=root, LINT_GUARD_STATE_DIR=state, LINT_GUARD_DRY="1", **(extra_env or {}))
     r = subprocess.run([sys.executable, GUARD, "stop-hook"], input=json.dumps(
         {"session_id": session, "transcript_path": tpath, "cwd": cwd}), capture_output=True, text=True, env=env, timeout=120)
     try:
