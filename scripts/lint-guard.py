@@ -95,9 +95,16 @@ LAW_GUARDS = (
      r"^apps/workflow-studio/src/.+\.tsx?$", False),
     ("aidream", "apps/dashboard", "archived-items-law", "scripts/check-archived-items-law.mjs",
      r"^apps/dashboard/src/.+\.tsx?$", False),
+    # THE CONTENT LANE AT WRITE TIME (Arman 2026-10-21): a whole-file copy of package source (app vs
+    # package, or package vs another package) is screamed at the agent that writes it. The same lane
+    # runs in check-package-twins as a report-only release advisory; here it reads only this change's files.
+    ("matrx-frontend", "", "content-copy", "scripts/content-lane.mjs",
+     r"^(app|components|features|hooks|lib|utils|providers|constants)/.+\.tsx?$", True),
+    ("aidream", "apps/shared", "content-copy", "scripts/content-lane.mjs", r"^apps/shared/[^/]+/src/.+\.tsx?$", True),
 )
 LAW_HINT = {
     "archived-items-law": "every list over an archivable entity carries an archive control (ArchiveFilter / ArchivedDisclosure) — ../common-docs/policies/archived-items.md",
+    "content-copy": "a file that is >=80% a copy of package source (or of another package) is debt: delete one side and import the other (scripts/content-lane.mjs; pairs already in scripts/package-twins.json contentCensus are existing debt)",
     "canonical-pickers": "agent/model choice renders only through the canonical picker (AgentListDropdown / AgentListInlinePicker / ModelListDropdown)",
 }
 LAW_TIMEOUT = 75
@@ -735,9 +742,13 @@ def law_self_test():
     import tempfile
     idx = {(g[0] if not g[1] else f"{g[0]}/{g[1]}", g[2]): f"law:{i}" for i, g in enumerate(LAW_GUARDS)}
     fe = "/x/matrx-frontend"
-    assert linters_for(fe, "features/a/List.tsx") == ["eslint", idx["matrx-frontend", "archived-items-law"], idx["matrx-frontend", "canonical-pickers"]], linters_for(fe, "features/a/List.tsx")
-    assert linters_for(fe, "providers/P.tsx") == ["eslint", idx["matrx-frontend", "archived-items-law"]], linters_for(fe, "providers/P.tsx")
+    assert linters_for(fe, "features/a/List.tsx") == ["eslint", idx["matrx-frontend", "archived-items-law"], idx["matrx-frontend", "canonical-pickers"], idx["matrx-frontend", "content-copy"]], linters_for(fe, "features/a/List.tsx")
+    assert linters_for(fe, "providers/P.tsx") == ["eslint", idx["matrx-frontend", "archived-items-law"], idx["matrx-frontend", "content-copy"]], linters_for(fe, "providers/P.tsx")
     assert linters_for(fe, "scripts/x.ts") == ["eslint"] and linters_for(fe, "features/a/x.test.tsx") == ["eslint"]
+    assert idx["matrx-frontend", "content-copy"] in linters_for(fe, "features/a/List.tsx") and idx["matrx-frontend", "content-copy"] in linters_for(fe, "constants/k.ts")
+    assert idx["matrx-frontend", "content-copy"] not in linters_for(fe, "features/a/x.test.tsx") and idx["matrx-frontend", "content-copy"] not in linters_for(fe, "scripts/x.ts")
+    assert linters_for("/x/aidream", "apps/shared/kit/src/a/B.tsx") == [idx["aidream/apps/shared", "content-copy"]], linters_for("/x/aidream", "apps/shared/kit/src/a/B.tsx")
+    assert idx["aidream/apps/shared", "content-copy"] not in linters_for("/x/aidream", "apps/shared/kit/src/a/B.test.tsx")
     assert linters_for("/x/aidream", "apps/dashboard/src/T.tsx") == [idx["aidream/apps/dashboard", "archived-items-law"]]
     assert linters_for("/x/aidream", "apps/workflow-studio/src/W.tsx") == [idx["aidream/apps/workflow-studio", "archived-items-law"], idx["aidream/apps/workflow-studio", "canonical-pickers"]]
     m = SETTINGS_FINDING.match("NEW  aidream/services/x.py::constant::RETRY_SECONDS  — added by this change; move it")
