@@ -13,11 +13,28 @@ What this proves, per repo, with a REAL git push into a throwaway bare remote:
   3. Wiring: each release-train ship.sh / scripts/release.sh exports MATRX_RELEASE_PATH=1 and no
      ship.sh skips its release when the sync fails.
 
+  4. Generic (2026-10-22, less brittle than the fixed lists): every non-zero exit (`exit N`, `sys.exit(N)`,
+     `raise SystemExit(N)`, `process.exit(N)`) in a release-path file — ship.sh, scripts/release.sh,
+     scripts/sync-main.py, a pre-push hook — must carry an allowlisted reason: it sits in a function that
+     checks MATRX_RELEASE_PATH first (the hooks' refuse()), it is a git/cd plumbing failure, its own line or
+     the 3 above name a build / network / lock / in-progress / usage / conflict failure, or it carries
+     `release-path-ok: <reason>` with a reason from RELEASE_OK_REASONS. At commit time (--staged) only the
+     lines that commit ADDS are judged and an unexplained one refuses the commit; the full run lists the
+     existing ones as review items and never fails on them (a scream at the writer, not a new block).
+
 Run:  python3 ~/code/matrx-ship/scripts/test_release_path_never_blocked.py
       RELEASE_GUARD_HOOK_REV=<rev> ... reads every hook at <rev> (fail-before proof).
+      ... --static                        the file checks only (no pushes; seconds), every repo.
+      ... --static --staged --repo <repo> [files]
+                                          COMMIT TIME (each repo's pre-commit, when a git hook, ship.sh,
+                                          release.sh or sync-main.py is staged): the static and wiring checks
+                                          that name these files, plus the generic exit check on the lines this
+                                          commit adds, read from the index. Exit 1 = refuse the commit. Never on
+                                          the release path: MATRX_RELEASE_PATH=1 makes it a no-op.
 Repos not checked out beside matrx-ship are skipped (named), never passed silently.
 """
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -165,7 +182,164 @@ def check_wiring():
     assert not bad, "\n".join(bad)
 
 
+# ---------------------------------------------------------------- generic: every exit needs a reason
+
+RELEASE_OK_REASONS = ("build", "network", "lock", "in-progress", "usage", "git", "conflict", "not-release-path")
+RELEASE_PATH_FILE = re.compile(r"^(ship\.sh|scripts/release\.sh|scripts/sync-main\.py|\.githooks/pre-push|scripts/githooks/pre-push)$")
+COMMIT_TIME_FILE = re.compile(r"^(ship\.sh|scripts/release\.sh|scripts/sync-main\.py|\.githooks/[^/]+|scripts/githooks/[^/]+)$")
+NONZERO_EXIT = re.compile(r"(?:^|[\s;&|{(])(?:exit\s+[1-9]\d*\b(?!\s*\))|exit\s+\$\?|(?:sys\.)?exit\(\s*[1-9]\d*\s*\)"
+                          r"|raise\s+SystemExit\(\s*[1-9]|process\.exit\(\s*[1-9]|process\.exitCode\s*=\s*[1-9])")
+MARKER = re.compile(r"release-path-ok:\s*([a-z-]+)")
+REASON_TEXT = re.compile(r"(?<![A-Za-z])(build|compil\w*|network|unreachable|timed?[ -]?out|lock\w*|in progress|EX_TEMPFAIL|usage"
+                         r"|not a git|conflict\w*|offline)(?![A-Za-z])", re.I)
+PLUMBING = re.compile(r"(^|[\s;(])(git\s|cd\s|GIT_INDEX_FILE=|mkdir\s|mktemp)[^#]*\|\|\s*(exit|return)\b")
+FUNC_START = re.compile(r"^\s*(?:function\s+)?([A-Za-z_][\w-]*)\s*\(\)\s*\{|^\s*def\s+\w+\(|^\s*(?:async\s+)?function\s+\w+\(")
+
+
+def exit_reason(lines, i):
+    """Why the non-zero exit on lines[i] may stand on the release path, or None (unexplained)."""
+    window = lines[max(0, i - 3):i + 1]
+    for row in window:
+        m = MARKER.search(row)
+        if m:
+            return m.group(1) if m.group(1) in RELEASE_OK_REASONS else None
+    j = i
+    while j >= 0 and i - j < 80 and not FUNC_START.search(lines[j]):
+        j -= 1
+    if j >= 0 and FUNC_START.search(lines[j]) and "MATRX_RELEASE_PATH" in "\n".join(lines[j:i]):
+        return "not-release-path"
+    # an `if MATRX_RELEASE_PATH ...; then ... exit 0; fi` just above: the release path already left
+    for k in range(i - 1, max(-1, i - 16), -1):
+        if "MATRX_RELEASE_PATH" in lines[k]:
+            if any(re.search(r"\b(exit|return)\s+0\b", r) for r in lines[k:i]):
+                return "not-release-path"
+            break
+    if PLUMBING.search(lines[i]):
+        return "git"
+    if re.search(r"exit\s*\(?\s*75\b", lines[i]):
+        return "in-progress"  # EX_TEMPFAIL: another release holds the slot; the next run ships
+    if any(REASON_TEXT.search(row) for row in window):
+        return "named"
+    return None
+
+
+def unexplained_exits(text, only_lines=None):
+    """[(line number, line)] of non-zero exits without a reason; only_lines limits it to those numbers."""
+    lines = text.splitlines()
+    out = []
+    for i, row in enumerate(lines):
+        code = row.split("#", 1)[0] if not row.lstrip().startswith(("//", "*")) else ""
+        if not NONZERO_EXIT.search(code):
+            continue
+        if only_lines is not None and i + 1 not in only_lines:
+            continue
+        if exit_reason(lines, i) is None:
+            out.append((i + 1, row.strip()))
+    return out
+
+
+def added_lines(repo_dir, rel):
+    """New-side line numbers the staged change adds to rel (all of them for a new file)."""
+    r = subprocess.run(["git", "diff", "--cached", "-U0", "--no-color", "--", rel], cwd=repo_dir, capture_output=True, text=True)
+    nums = set()
+    for row in r.stdout.splitlines():
+        m = re.match(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@", row)
+        if m:
+            start, count = int(m.group(1)), int(m.group(2) if m.group(2) is not None else 1)
+            nums.update(range(start, start + count))
+    return nums
+
+
+def check_generic(report_only=True):
+    """Full run: every release-path file of every repo; unexplained exits are review items (printed)."""
+    items = []
+    for repo in sorted(set(SHIP_WIRING) | set(RELEASE_WIRING) | set(CASES) | {"matrx-ship"}):
+        for rel in ("ship.sh", "scripts/release.sh", "scripts/sync-main.py", ".githooks/pre-push", "scripts/githooks/pre-push"):
+            text = read(repo, rel)
+            if text is None:
+                continue
+            items += ["%s/%s:%d  %s" % (repo, rel, n, row[:110]) for n, row in unexplained_exits(text)]
+    return items
+
+
+def staged_static(repo_dir, files):
+    """Commit-time: the checks that name these files, read from the index. -> list of findings."""
+    repo = os.path.basename(os.path.realpath(repo_dir))
+    if not files:
+        r = subprocess.run(["git", "diff", "--cached", "--name-only", "--diff-filter=AMR"], cwd=repo_dir, capture_output=True, text=True)
+        files = [f for f in r.stdout.splitlines() if COMMIT_TIME_FILE.match(f)]
+    bad = []
+
+    def blob(rel):
+        r = subprocess.run(["git", "show", ":%s" % rel], cwd=repo_dir, capture_output=True, text=True)
+        return r.stdout if r.returncode == 0 else None
+
+    for rel in files:
+        text = blob(rel)
+        if text is None:
+            continue
+        for srepo, srel, forbidden, required in STATIC:
+            if srepo == repo and srel == rel:
+                if forbidden and forbidden in text:
+                    bad.append("%s/%s still stops the release: %r" % (repo, rel, forbidden[:70]))
+                if required and required not in text:
+                    bad.append("%s/%s lacks its report-only path: %r" % (repo, rel, required[:70]))
+        code = "\n".join(l for l in text.splitlines() if not l.lstrip().startswith("#"))
+        if rel == "ship.sh" and repo in SHIP_WIRING:
+            if "export MATRX_RELEASE_PATH=1" not in text:
+                bad.append("%s/ship.sh does not export MATRX_RELEASE_PATH=1" % repo)
+            if "release skipped" in code or "was not dispatched" in code:
+                bad.append("%s/ship.sh skips the release when its sync fails" % repo)
+        if rel == "scripts/release.sh" and repo in RELEASE_WIRING and "export MATRX_RELEASE_PATH=1" not in text:
+            bad.append("%s/scripts/release.sh does not export MATRX_RELEASE_PATH=1" % repo)
+        if RELEASE_PATH_FILE.match(rel):
+            for n, row in unexplained_exits(text, added_lines(repo_dir, rel)):
+                bad.append("%s/%s:%d adds a non-zero exit with no allowlisted reason: %s\n"
+                           "      the release path never blocks — scream (release-scream.py) and go on, or gate it on "
+                           "MATRX_RELEASE_PATH, or mark a real build/network/lock failure `# release-path-ok: <%s>`"
+                           % (repo, rel, n, row[:100], "|".join(RELEASE_OK_REASONS)))
+    return bad
+
+
+def cmd_static(argv):
+    staged = "--staged" in argv
+    repo_dir, files, i = None, [], 0
+    while i < len(argv):
+        if argv[i] == "--repo":
+            repo_dir, i = argv[i + 1], i + 2
+            continue
+        if not argv[i].startswith("--"):
+            files.append(argv[i])
+        i += 1
+    if staged:
+        if os.environ.get("MATRX_RELEASE_PATH") == "1":
+            return 0  # commit time only: never on the release path
+        try:
+            bad = staged_static(repo_dir or os.getcwd(), files)
+        except Exception as e:  # the guard's own bug never refuses anyone's commit; it says so
+            print("release-path guard: internal failure (%s: %s); nothing was checked." % (type(e).__name__, e), file=sys.stderr)
+            return 0
+        if bad:
+            print("RELEASE PATH CAN BE BLOCKED by this commit:\n  " + "\n  ".join(bad), file=sys.stderr)
+            return 1
+        return 0
+    failures = []
+    for name, fn in (("wiring", check_wiring), ("static", check_static)):
+        try:
+            fn()
+            print("ok   %s" % name)
+        except AssertionError as e:
+            failures.append(str(e))
+            print("FAIL %s:\n%s" % (name, e))
+    review = check_generic()
+    print("review: %d non-zero exit(s) on release-path files carry no allowlisted reason (not a failure; new ones refuse "
+          "at commit time)%s" % (len(review), (":\n  " + "\n  ".join(review)) if review else ""))
+    return 1 if failures else 0
+
+
 def main():
+    if "--static" in sys.argv[1:]:
+        return cmd_static([a for a in sys.argv[1:] if a != "--static"])
     failures = []
     for repo in CASES:
         if not os.path.isdir(os.path.join(CODE, repo, ".git")):
@@ -189,6 +363,9 @@ def main():
     except AssertionError as e:
         failures.append(str(e))
         print("FAIL static:\n" + str(e))
+    review = check_generic()
+    print("review: %d non-zero exit(s) on release-path files carry no allowlisted reason (not a failure; new ones refuse "
+          "at commit time)%s" % (len(review), (":\n  " + "\n  ".join(review)) if review else ""))
     if failures:
         print("\n".join(["", "THE RELEASE PATH CAN BE BLOCKED:"] + failures))
         return 1
