@@ -13,7 +13,7 @@ importers:
     dependencies:
       '@ai-matrx/kit':
         specifier: latest
-        version: 0.45.28(react@19.3.0)(typescript@5.9.3)
+        version: 0.45.30(react@19.3.0)(typescript@5.9.3)
       '@codemirror/lang-sql':
         specifier: ^6.10.0
         version: 6.10.0
@@ -122,7 +122,7 @@ importers:
     dependencies:
       '@ai-matrx/kit':
         specifier: latest
-        version: 0.45.28(react@19.3.0)(typescript@5.9.3)
+        version: 0.45.30(react@19.3.0)(typescript@5.9.3)
       '@matrx/admin-ui':
         specifier: workspace:*
         version: link:../packages/admin-ui
@@ -280,7 +280,7 @@ importers:
     dependencies:
       '@ai-matrx/kit':
         specifier: latest
-        version: 0.45.28(react@19.3.0)(typescript@5.9.3)
+        version: 0.45.30(react@19.3.0)(typescript@5.9.3)
       '@aws-sdk/client-cloudtrail':
         specifier: ^3.1141.0
         version: 3.1141.0
@@ -323,7 +323,7 @@ importers:
     dependencies:
       '@ai-matrx/kit':
         specifier: latest
-        version: 0.45.28(react@19.3.0)(typescript@5.9.3)
+        version: 0.45.30(react@19.3.0)(typescript@5.9.3)
       '@matrx/admin-ui':
         specifier: workspace:*
         version: link:../../packages/admin-ui
@@ -406,8 +406,8 @@ importers:
 
 packages:
 
-  '@ai-matrx/kit@0.45.28':
-    resolution: {integrity: sha512-cG7Au+oqu3Fn2DzfvQUSqt4kKZf+9xlX6FyQ99grm5sqV9atywlyhOvHY14bahnBliGglK3vqiTI0GruU19e1A==}
+  '@ai-matrx/kit@0.45.30':
+    resolution: {integrity: sha512-+OHYpHjaHRRaA/ULePYm7q+15hWDgfAwlUgXqH2NyhogIukOvZmifYKBGaf2bd1/5WX1Cm3swyXPuHghQGvPfg==}
     engines: {node: '>=20'}
     hasBin: true
     peerDependencies:
@@ -5515,7 +5515,7 @@ packages:
 
 snapshots:
 
-  '@ai-matrx/kit@0.45.28(react@19.3.0)(typescript@5.9.3)':
+  '@ai-matrx/kit@0.45.30(react@19.3.0)(typescript@5.9.3)':
     dependencies:
       idb: 8.0.4
       json5: 2.2.3
