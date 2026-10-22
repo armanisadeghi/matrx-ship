@@ -1,0 +1,38 @@
+#!/bin/sh
+# matrx-ship's versioned pre-commit. Activate once per clone: git config core.hooksPath .githooks
+# Commit time only — nothing here runs on any release path (MATRX_RELEASE_PATH=1 makes it a no-op).
+#
+# THE RELEASE PATH IS NEVER BLOCKED (adversarial review 2026-10-22: nothing ran the guard). A staged
+# release-path file (ship.sh, scripts/release.sh, scripts/sync-main.py, a hook here) goes through the
+# guard's static part, read from the index (~0.1 s). A staged change to the guard itself or to
+# release-scream.py (which every hook calls on the release path) runs their proofs.
+root=$(git rev-parse --show-toplevel) || exit 0
+LOCAL_HOOK="$(git rev-parse --git-common-dir)/hooks/pre-commit"
+if [ -x "$LOCAL_HOOK" ]; then
+    "$LOCAL_HOOK" "$@" || exit $?
+fi
+[ "${MATRX_RELEASE_PATH:-0}" = "1" ] && exit 0
+command -v python3 >/dev/null 2>&1 || exit 0
+staged=$(git diff --cached --name-only --diff-filter=AMR)
+refuse() {
+    echo "COMMIT REFUSED: $1" >&2
+    exit 1
+}
+
+rp_files=$(printf '%s\n' "$staged" | grep -E '^(\.githooks/[^/]+|ship\.sh|scripts/release\.sh|scripts/sync-main\.py)$')
+if [ -n "$rp_files" ]; then
+    # shellcheck disable=SC2086
+    python3 "$root/scripts/test_release_path_never_blocked.py" --static --staged --repo "$root" $rp_files \
+        || refuse "this change can block the release path (above). Scream and go on, never stop a release."
+fi
+if printf '%s\n' "$staged" | grep -qE '^scripts/(test_release_path_never_blocked|test_release_path_guard_commit_time)\.py$'; then
+    python3 "$root/scripts/test_release_path_never_blocked.py" --static \
+        || refuse "the release-path guard's static checks are red (above)."
+    python3 "$root/scripts/test_release_path_guard_commit_time.py" >/dev/null 2>&1 \
+        || refuse "the release-path guard's commit-time proof is red: python3 scripts/test_release_path_guard_commit_time.py"
+fi
+if printf '%s\n' "$staged" | grep -qE '^scripts/(release-scream|test_release_scream)\.py$'; then
+    python3 "$root/scripts/test_release_scream.py" >/dev/null 2>&1 \
+        || refuse "release-scream's proof is red: python3 scripts/test_release_scream.py"
+fi
+exit 0
