@@ -273,15 +273,31 @@ def live_plants(top, common_dir):
     return sorted(found.items())
 
 
+def scratch_files():
+    """New temporary files belong to their author, not the automatic sweep."""
+    paths = set()
+    for args in (("ls-files", "--others", "--exclude-standard", "-z"),
+                 ("diff", "--cached", "--no-renames", "--diff-filter=A", "--name-only", "-z")):
+        _, out, _ = git(*args)
+        paths.update(p for p in out.split("\0") if p)
+    return sorted(p for p in paths if any(
+        part == "zz-scratch" or part.startswith("zz-tmp") for part in p.split("/")))
+
+
 # ── step 1 ──────────────────────────────────────────────────────────────────────────────────
 def commit_all():
     _, common, _ = git("rev-parse", "--git-common-dir")
     planted = live_plants(os.getcwd(), os.path.abspath(common.strip()))
-    git("add", "-A", "--", ".", *[":(exclude,literal)" + p for p, _ in planted])
+    scratch = scratch_files()
+    git("add", "-A", "--", ".", *[":(exclude,literal)" + p for p, _ in planted],
+        *[":(exclude,literal)" + p for p in scratch])
     for p, pid in planted:
         git("restore", "--staged", "--", ":(literal)" + p, check=False)
         say("SWEEP SKIPPED %s: a forcing-function plant (pid %d) is live in it; the next sync "
             "commits it." % (p, pid))
+    for p in scratch:
+        git("restore", "--staged", "--", ":(literal)" + p, check=False)
+        say("SWEEP SKIPPED %s: temporary scratch file; its author keeps it." % p)
     rc, _, _ = git("diff", "--cached", "--quiet", check=False)
     if rc == 0:
         return 0

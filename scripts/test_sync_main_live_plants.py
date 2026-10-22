@@ -107,6 +107,24 @@ class LivePlantsAreNeverSwept(unittest.TestCase):
         self.marker(self.dead_pid(), os.path.join(self.repo, "planted.py"))
         self.assertEqual(self.swept(), {"planted.py", "other.py", "new file [1].txt"})
 
+    def test_new_scratch_files_are_not_swept_even_when_staged(self):
+        os.makedirs(os.path.join(self.repo, "src", "zz-scratch"))
+        self.write("src/zz-scratch/probe.test.ts", "test('probe', () => {});\n")
+        os.makedirs(os.path.join(self.repo, "scripts"))
+        self.write("scripts/zz-tmp-twins-run.mjs", "import './missing.mjs';\n")
+        sh(self.repo, "git", "add", "scripts/zz-tmp-twins-run.mjs")
+        self.assertEqual(self.swept(), {"planted.py", "other.py", "new file [1].txt"})
+        self.assertNotIn("zz-", sh(self.repo, "git", "ls-files"))
+        remaining = sh(self.repo, "git", "ls-files", "--others", "--exclude-standard")
+        self.assertIn("scripts/zz-tmp-twins-run.mjs", remaining)
+        self.assertIn("src/zz-scratch/probe.test.ts", remaining)
+
+    def test_staged_move_into_scratch_keeps_destination_out_of_sweep(self):
+        os.makedirs(os.path.join(self.repo, "src", "zz-scratch"))
+        sh(self.repo, "git", "mv", "other.py", "src/zz-scratch/other.py")
+        self.assertEqual(self.swept(), {"other.py", "planted.py", "new file [1].txt"})
+        self.assertIn("src/zz-scratch/other.py", sh(self.repo, "git", "ls-files", "--others", "--exclude-standard"))
+
     def test_plant_in_another_repo_skips_nothing(self):
         self.marker(os.getpid(), os.path.join(self.tmp, "elsewhere", "planted.py"))
         self.assertEqual(self.swept(), {"planted.py", "other.py", "new file [1].txt"})
