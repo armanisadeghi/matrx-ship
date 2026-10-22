@@ -117,6 +117,32 @@ def read(repo, rel):
         return None
 
 
+# (repo, file, text that must NOT appear in code lines, text that MUST appear) — gates that used to stop a release.
+STATIC = [
+    ("matrx-frontend", "package.json", None, "process.env.VERCEL || process.env.CI || process.env.MATRX_RELEASE_PATH"),
+    ("matrx-frontend", "scripts/release.sh", 'fail "pnpm-lock.yaml in the release tree has @ai-matrx twins', "RELEASED ANYWAY"),
+    ("matrx-desktop", "scripts/dist-mac.sh", "packaged-app smoke failed on the signed build; nothing published", 'scream "packaged-app smoke failed'),
+    ("matrx-desktop", "scripts/local-release-gate.sh", None, 'BUILD_STEPS=("build")'),
+    ("aidream", ".github/actions/npm-publish-one/action.yml", "nothing newer on main will release it.\"\n        exit 1", "PUBLISHED ANYWAY"),
+    ("aidream", "scripts/npm-release-plan.mjs", "process.exitCode = 3", "const gateReported = new Map(blocked)"),
+    ("aidream", ".github/workflows/publish-npm-package.yml", "npm publish BLOCKED::${b.dir}: ${b.reason}`);\n          '\n          exit 1", "PUBLISHED ANYWAY"),
+]
+
+
+def check_static():
+    bad = []
+    for repo, rel, forbidden, required in STATIC:
+        text = read(repo, rel)
+        if text is None:
+            print("SKIP static %s/%s (not checked out)" % (repo, rel))
+            continue
+        if forbidden and forbidden in text:
+            bad.append("%s/%s still stops the release: %r" % (repo, rel, forbidden[:70]))
+        if required and required not in text:
+            bad.append("%s/%s lacks its report-only path: %r" % (repo, rel, required[:70]))
+    assert not bad, "\n".join(bad)
+
+
 def check_wiring():
     bad = []
     for repo in SHIP_WIRING:
@@ -154,6 +180,12 @@ def main():
     except AssertionError as e:
         failures.append(str(e))
         print("FAIL wiring:\n" + str(e))
+    try:
+        check_static()
+        print("ok   static: twins, desktop smoke/gate, npm sibling hold and gate verdicts are report-only")
+    except AssertionError as e:
+        failures.append(str(e))
+        print("FAIL static:\n" + str(e))
     if failures:
         print("\n".join(["", "THE RELEASE PATH CAN BE BLOCKED:"] + failures))
         return 1
