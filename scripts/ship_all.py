@@ -886,6 +886,30 @@ def _ship_locked(info, out_dir, stamp):
     return info
 
 
+def build_verdict(info):
+    """Read the same release and code-test verdict before and after shipping.
+
+    CI cost signals stay informational; only a failed release or tests red on
+    code holds the fleet. A Vercel release with no reliable readback is held.
+    """
+    try:
+        if info["fetch_ok"]:
+            info.pop("vercel_live", None)
+            live_problems = release_liveness(info)
+            workflows = failed_release_workflows(info)
+            vercel_live = not live_problems and info.get("vercel_live", False)
+            info["not_live"] = live_problems + ([] if vercel_live else workflows)
+            info["live_workflow_failed"] = workflows if vercel_live else []
+        else:
+            info["not_live"], info["live_workflow_failed"] = [], []
+    except Exception as error:  # never let an unknown release state vanish
+        info["not_live"] = ["release liveness check crashed: %s" % error]
+    try:
+        info["tests_red"], info["ci_signals"] = test_run_verdict(info) if info["fetch_ok"] else ([], [])
+    except Exception as error:  # never let an unknown test state vanish
+        info["tests_red"], info["ci_signals"] = [], ["Tests verdict check crashed: %s" % error]
+
+
 def main(args=None):
     args = sys.argv[1:] if args is None else args
     try:
@@ -936,6 +960,23 @@ def main(args=None):
     say("■ checked in %s: %d %s, %d skipped" % (fmt(time.time() - t0), len(to_ship), "would ship" if dry else "to ship",
                                                     len(infos) - len(to_ship)))
 
+    # FIRST RULE: evaluate release/build failures BEFORE any sync, release, PR merge or
+    # branch deletion. The old end-only verdict could ship unrelated repos for hours
+    # while a Vercel release was already ERROR or timed out.
+    blockers = []
+    if not dry:
+        say("▶ checking release/build verdict before any shipping…")
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            list(pool.map(build_verdict, infos))
+        blockers = [i for i in infos if i.get("not_live") or i.get("tests_red")]
+        if blockers:
+            for info in to_ship:
+                info["status"] = "held: failed build"
+            say("■ FAILED BUILD HOLD: %d repo(s); skipping all shipping and landing" % len(blockers))
+            for info in blockers:
+                for line in info.get("not_live", []) + info.get("tests_red", []):
+                    say("  %s: %s" % (info["repo"], line))
+
     # ── 2. ship in TWO WAVES: the package source first, its consumers after npm serves it ────
     # THE PACKAGE ORDER (2026-10-16). Every repo used to ship at once, so matrx-frontend read npm
     # (06:08) four minutes BEFORE aidream even pushed its package changes (06:12): the web build ran
@@ -943,7 +984,7 @@ def main(args=None):
     # change. Wave 1 is aidream plus every repo that consumes no @ai-matrx package; wave 2 waits for
     # the publish runs aidream's push started, re-measures the consumers that looked in sync, and
     # ships every consumer once, against what npm now serves.
-    if to_ship and not dry:
+    if to_ship and not dry and not blockers:
         t0 = time.time()
         consumers = {i["repo"] for i in infos if is_consumer(i["path"])}
         wave1 = [i for i in to_ship if i["repo"] == PACKAGE_SOURCE or i["repo"] not in consumers]
@@ -974,7 +1015,7 @@ def main(args=None):
         say("■ all shipping finished in %s" % fmt(time.time() - t0))
 
     # ── 3b. land GitHub-side work and re-measure packages (the "after" truth) ─────────────
-    if not dry:
+    if not dry and not blockers:
         t0 = time.time()
         say("▶ landing open PRs / merged branches and re-checking packages…")
         def after(info):
@@ -985,21 +1026,10 @@ def main(args=None):
             list(pool.map(after, infos))
         say("■ landed in %s" % fmt(time.time() - t0))
     for info in infos:
-        try:
-            if info["fetch_ok"]:
-                live_problems = release_liveness(info)
-                workflows = failed_release_workflows(info)
-                # A Vercel repo whose newest release is READY and serving is LIVE: a failed release
-                # workflow there (an after-phase check run cut short, run 39162960893) is still a
-                # failure to fix, but never "NOT LIVE". Repos without the Vercel proof keep the
-                # workflow as their only liveness evidence (a failed npm publish IS not live).
-                vercel_live = not live_problems and info.get("vercel_live", False)
-                info["not_live"] = live_problems + ([] if vercel_live else workflows)
-                info["live_workflow_failed"] = workflows if vercel_live else []
-            else:
-                info["not_live"], info["live_workflow_failed"] = [], []
-        except Exception as error:  # never let the check vanish silently
-            info["not_live"] = ["release liveness check crashed: %s" % error]
+        if not dry and not blockers:
+            build_verdict(info)
+        elif dry:
+            build_verdict(info)
         if not dry:
             try:
                 stalled = stale_release_alarm(info)
@@ -1007,10 +1037,6 @@ def main(args=None):
                     info["not_live"] = list(info.get("not_live") or []) + [stalled]
             except Exception as error:  # never let the check vanish silently
                 info["not_live"] = list(info.get("not_live") or []) + ["stale-release alarm crashed: %s" % error]
-        try:
-            info["tests_red"], info["ci_signals"] = test_run_verdict(info) if info["fetch_ok"] else ([], [])
-        except Exception as error:  # never let the check vanish silently
-            info["tests_red"], info["ci_signals"] = [], ["Tests verdict check crashed: %s" % error]
         try:
             info["npm_lag"] = npm_publish_lag(info) if info["fetch_ok"] else []
         except Exception as error:  # never let the check vanish silently

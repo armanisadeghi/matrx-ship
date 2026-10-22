@@ -27,6 +27,7 @@ go through the same changed-line split (a finding in a file this change did not 
 here — the release gates report it). A repo or file type with no linter is skipped, never failed.
 """
 import hashlib
+import shlex
 import json
 import os
 import re
@@ -66,10 +67,20 @@ def git(repo, *args, check=False):
     return r.stdout
 
 
+_ROOTS = {}
+
+
 def repo_root(path):
     d = path if os.path.isdir(path) else os.path.dirname(path)
-    out = git(d, "rev-parse", "--show-toplevel").strip()
-    return out or None
+    if d not in _ROOTS:  # a stat walk, not a git call per directory (a Stop names hundreds of paths)
+        top, cur = None, d
+        while cur and cur != os.path.dirname(cur):
+            if os.path.exists(os.path.join(cur, ".git")):
+                top = cur
+                break
+            cur = os.path.dirname(cur)
+        _ROOTS[d] = top or git(d, "rev-parse", "--show-toplevel").strip() or None
+    return _ROOTS[d]
 
 
 # The repo-wide law guards, run like linters. (repo dir name, package dir inside it, check name,
@@ -122,6 +133,14 @@ SETTINGS_FINDING = re.compile(r"^NEW\s+(\S+?\.py)::(\w+)::(\S+)\s+—\s+(.*)$")
 # carry the dependency's line so the changed-line split applies. Never on the release path.
 LOCKFILE_FINDING = re.compile(r"^(\S+package\.json):(\d+)\s+lockfile-drift\s+(.*)$")
 LAW_HINT["lockfile-drift"] = "pnpm install --lockfile-only, then stage pnpm-lock.yaml with the package.json (aidream scripts/check_lockfile_specifiers.py)"
+# THE MANDATE CALL-SITE GUARD AT WRITE TIME (runner plan 25 §6 G1, D23): aidream's
+# scripts/check_mandate_call_sites.py grades every AI call / runner-boundary symbol; one the baseline and the
+# allowlist do not know is a NEW_BYPASS. It stops an AGENT's turn only for a bypass on a line that agent wrote
+# (the changed-line split below); every other NEW_BYPASS is mailed to its author like any inherited finding.
+# Report-only for releases: nothing on the release path runs this, and a slow or crashed census is SEEN, never fatal.
+MANDATE_SITES_SCANS = r"^(aidream|packages)/.+\.py$"
+MANDATE_SITES_TIMEOUT = 30
+LAW_HINT["mandate-call-site"] = "an AI call names its Mandate through the mandate runner (aidream/services/mandate_runner), or is allowlisted with a reason in boundary_allowlist.toml — scripts/check_mandate_call_sites.py, runner plan 25 §6"
 LAW_HINT["hardcoded-settings"] = "behavioral settings live in platform.feature_knob rows, never in code or the environment (aidream scripts/check_hardcoded_settings.py)"
 
 
@@ -135,6 +154,8 @@ def linters_for(repo, rel):
         out.append("ruff")
     if name == "aidream" and re.match(SETTINGS_SCANS, rel) and os.path.exists(os.path.join(repo, "scripts", "check_hardcoded_settings.py")):
         out.append("settings")
+    if name == "aidream" and re.match(MANDATE_SITES_SCANS, rel) and not re.search(r"(^|/)tests?/|(^|/)test_[^/]*\.py$", rel) and os.path.exists(os.path.join(repo, "scripts", "check_mandate_call_sites.py")):
+        out.append("mandate-sites")
     if name == "aidream" and os.path.basename(rel) == "package.json" and os.path.exists(os.path.join(repo, "scripts", "check_lockfile_specifiers.py")):
         out.append("lockfile")
     for i, (gname, _pkg, _check, _script, scans, _files) in enumerate(LAW_GUARDS):
@@ -302,6 +323,30 @@ def run_lockfile(repo, rels):
     return found
 
 
+def run_mandate_sites(repo, rels):
+    """aidream's mandate call-site census, keeping only the NEW_BYPASS rows in these files."""
+    py = os.path.join(repo, ".venv", "bin", "python")
+    py = py if os.path.exists(py) else sys.executable
+    # INCREMENTAL: only the files this turn edited (check_mandate_call_sites.py --changed-files, ~1 s). The full
+    # repo census (~100 s CPU, minutes under load) stays the self-test / scheduled-task path, never the hook.
+    r = run_tool([py, "scripts/check_mandate_call_sites.py", "--json", "--changed-files", *rels], repo, MANDATE_SITES_TIMEOUT)
+    if r is None:
+        return []
+    out = r.stdout or ""
+    start = out.find("\n[") + 1 if "\n[" in out else (0 if out.startswith("[") else -1)
+    try:
+        rows = json.JSONDecoder().raw_decode(out[start:])[0] if start >= 0 else None
+    except ValueError:
+        rows = None
+    if not isinstance(rows, list):
+        warn(f"lint-guard scanner mandate-call-sites gave no JSON (exit {r.returncode}): {(r.stderr or out).strip()[-200:]}; nothing was checked.")
+        return []
+    wanted = set(rels)
+    return [{"file": row["file"], "line": row.get("line"), "rule": "mandate-call-site",
+             "message": f"{row.get('call')} in {row.get('function')} runs outside the mandate runner (NEW_BYPASS)"}
+            for row in rows if isinstance(row, dict) and row.get("status") == "NEW_BYPASS" and row.get("file") in wanted]
+
+
 def lint(repo, rels):
     by = {}
     for rel in rels:
@@ -309,7 +354,8 @@ def lint(repo, rels):
             continue
         for kind in linters_for(repo, rel):
             by.setdefault(kind, []).append(rel)
-    runners = {"eslint": run_eslint, "ruff": run_ruff, "settings": run_settings, "lockfile": run_lockfile}
+    runners = {"eslint": run_eslint, "ruff": run_ruff, "settings": run_settings, "lockfile": run_lockfile,
+               "mandate-sites": run_mandate_sites}
     jobs = []
     with ThreadPoolExecutor(max_workers=max(1, len(by))) as pool:
         for kind, files in by.items():
@@ -363,6 +409,17 @@ def touched_lines(repo, rels):
     for r in rels:
         if r in untracked:
             out[r] = None  # new file: every line is this change's
+    return out
+
+
+def dirty_among(repo, rels):
+    """The subset of rels with uncommitted changes (tracked diff vs HEAD, or untracked) — pathspec-limited, so it
+    costs nothing like a whole-repo `git diff HEAD` on matrx-frontend."""
+    out = set()
+    for i in range(0, len(rels), 200):
+        chunk = rels[i:i + 200]
+        out |= {f for f in git(repo, "diff", "-z", "--name-only", "-M", "--diff-filter=ACMR", "HEAD", "--", *chunk).split("\0") if f}
+        out |= {f for f in git(repo, "ls-files", "-z", "--others", "--exclude-standard", "--", *chunk).split("\0") if f}
     return out
 
 
@@ -586,23 +643,112 @@ DEV_NULL = re.compile(r"\d?>>?\s*/dev/null|\d?>&\d|&>\s*/dev/null")
 PATH_TOKEN = re.compile(r"""[A-Za-z0-9_@~./+\-]*[A-Za-z0-9_@~+\-]/[A-Za-z0-9_@~./+\-]*|[A-Za-z0-9_@+\-][A-Za-z0-9_@.+\-]*\.[A-Za-z0-9]{1,6}""")
 
 
-def bash_named_paths(command, cwd):
-    """Absolute paths a Bash command names (existing files only), resolved against the session cwd and
-    every directory the command itself `cd`s into or passes as `git -C` / `--repo`."""
+def _bases(command, cwd):
     bases = [cwd]
     for m in re.finditer(r"(?:\bcd|\bgit\s+-C|--repo|--cwd|-C)\s+(['\"]?)([^'\"\s;&|)]+)\1", command):
         d = os.path.expanduser(m.group(2))
         bases.append(d if os.path.isabs(d) else os.path.join(cwd, d))
+    return bases
+
+
+def _resolve(tok, bases):
+    tok = os.path.expanduser(tok.strip(".,:"))
+    if not tok or tok in (".", ".."):
+        return None
+    for base in ([""] if os.path.isabs(tok) else bases):
+        full = os.path.normpath(os.path.join(base, tok)) if base else os.path.normpath(tok)
+        if os.path.isfile(full):
+            return full
+    return None
+
+
+def bash_named_paths(command, cwd, text=None):
+    """Absolute paths a Bash command (or just `text` of it) names (existing files only), resolved against the
+    session cwd and every directory the command itself `cd`s into or passes as `git -C` / `--repo`."""
+    bases = _bases(command, cwd)
     out = set()
-    for tok in PATH_TOKEN.findall(command):
-        tok = os.path.expanduser(tok.strip(".,:"))
-        if not tok or tok in (".", ".."):
-            continue
-        for base in ([""] if os.path.isabs(tok) else bases):
-            full = os.path.normpath(os.path.join(base, tok)) if base else os.path.normpath(tok)
-            if os.path.isfile(full):
+    for tok in PATH_TOKEN.findall(command if text is None else text):
+        full = _resolve(tok, bases)
+        if full:
+            out.add(full)
+    return out
+
+
+def _segments(command):
+    """Split a command at ; & | and newlines outside quotes. A heredoc body stays with the line that opens it."""
+    lines, raw = [], command.split("\n")
+    i = 0
+    while i < len(raw):
+        line, i = raw[i], i + 1
+        m = re.search(r"<<-?\s*['\"]?(\w+)['\"]?", line)
+        if m:
+            while i < len(raw):
+                line += "\n" + raw[i]
+                i += 1
+                if raw[i - 1].strip() == m.group(1):
+                    break
+        lines.append(line)
+    segs = []
+    for line in lines:
+        head, _, body = line.partition("\n")
+        cur, quote, k = [], None, 0
+        while k < len(head):
+            c = head[k]
+            if quote:
+                if c == quote:
+                    quote = None
+                cur.append(c)
+            elif c in "'\"":
+                quote = c
+                cur.append(c)
+            elif c in ";|" or (c == "&" and (k == 0 or head[k - 1] != ">") and (k + 1 >= len(head) or head[k + 1] != ">")):
+                segs.append("".join(cur))
+                cur = []
+            else:
+                cur.append(c)
+            k += 1
+        segs.append("".join(cur) + ("\n" + body if body else ""))
+    return [x for x in segs if x.strip()]
+
+
+REDIRECT = re.compile(r"(?<![0-9&>])\d?>>?(?!&)\s*(['\"]?)([^\s'\";&|<>)]+)\1")
+COPY_CMD = re.compile(r"(?:^|\s)(cp|mv|install|rsync|ln)\s")
+TEE_CMD = re.compile(r"\btee\b")
+INPLACE = re.compile(r"\b(sed|perl|ruby)\b[^|;&]*\s-[a-zA-Z]*i")
+WRITES_ALL_NAMED = re.compile(
+    r"\b(patch|truncate|dd)\b|\bgit\s+(?:-C\s+\S+\s+)?(apply|checkout|restore|mv|am|cherry-pick|revert|stash)\b"
+    r"|write_text|write_bytes|writeFileSync|writeFile\(|\.write\(|open\([^)]*['\"][wa]b?\+?['\"]|--write\b|--fix\b|\bblack\b")
+
+
+def bash_written_paths(command, cwd):
+    """Absolute paths a Bash command WRITES (existing files only). A path counts only for the segment that
+    writes it: `rg x a.ts > /tmp/o` writes /tmp/o and never a.ts (attribution review 2026-10-22)."""
+    command = DEV_NULL.sub(" ", command)
+    bases = _bases(command, cwd)
+    out = set()
+    for seg in _segments(command):
+        for m in REDIRECT.finditer(seg):
+            full = _resolve(m.group(2), bases)
+            if full:
                 out.add(full)
-                break
+        if TEE_CMD.search(seg) or INPLACE.search(seg) or WRITES_ALL_NAMED.search(seg):
+            out |= bash_named_paths(command, cwd, REDIRECT.sub(" ", seg))
+        cm = COPY_CMD.search(seg)
+        if cm:
+            try:
+                args = [a for a in shlex.split(seg[cm.end(1):], posix=True) if a and not a.startswith("-")]
+            except ValueError:
+                args = seg[cm.end(1):].split()
+                args = [a for a in args if not a.startswith("-")]
+            if len(args) >= 2:
+                dest = os.path.expanduser(args[-1])
+                cands = [dest if os.path.isabs(dest) else os.path.join(b, dest) for b in bases]
+                folder = next((c for c in cands if os.path.isdir(c)), None)
+                for c in ([os.path.join(folder, os.path.basename(x)) for x in args[:-1]] if folder else cands):
+                    if os.path.isfile(c):
+                        out.add(os.path.normpath(c))
+                        if not folder:
+                            break
     return out
 
 
@@ -615,41 +761,121 @@ def _utc_seconds(raw_ts):
         return None
 
 
+MAX_WRITTEN_TEXT = 2_000_000
+SCAN_STATS = {"bytes_parsed": 0}  # the test reads this to prove a second pass parses only what was appended
+
+
+def scan_transcript(transcript, cwd, files, bash, offset=0):
+    """Parse transcript bytes from `offset` (complete lines only), folding this session's edits into files/bash.
+    -> new offset."""
+    try:
+        fh = open(transcript, "rb")
+    except OSError:
+        return offset
+    with fh:
+        fh.seek(offset)
+        data = fh.read()
+    end = data.rfind(b"\n") + 1
+    SCAN_STATS["bytes_parsed"] += end
+    for raw in data[:end].split(b"\n"):
+        if b'"tool_use"' not in raw:
+            continue
+        try:
+            row = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        msg = row.get("message") or {}
+        if not isinstance(msg, dict):
+            continue
+        for part in msg.get("content") or []:
+            if not isinstance(part, dict) or part.get("type") != "tool_use":
+                continue
+            name, inp = part.get("name", ""), part.get("input") or {}
+            if name == "Bash":
+                command = inp.get("command") or ""
+                if not BASH_WRITES.search(DEV_NULL.sub(" ", command)):
+                    continue
+                started = _utc_seconds(row.get("timestamp")) or 0
+                for full in bash_written_paths(command, cwd):
+                    bash[full] = min(bash.get(full, started), started)
+                continue
+            path = inp.get("file_path") if name in EDIT_TOOLS else inp.get("relative_path") if SERENA_EDIT.match(name) else None
+            if not path:
+                continue
+            pieces = [inp.get(k) for k in ("new_string", "content", "body", "new_source", "repl")]
+            pieces += [e.get("new_string") for e in inp.get("edits") or [] if isinstance(e, dict)]
+            files[path] = (files.get(path, "") + "\n" + "\n".join(p for p in pieces if isinstance(p, str)))[-MAX_WRITTEN_TEXT:]
+    return offset + end
+
+
 def session_edits(transcript, cwd):
     """-> ({path: text this session's edit tools wrote into it}, {abs path: earliest start of a writing
-    Bash command of this session that names it})."""
+    Bash command of this session that writes it})."""
     files, bash = {}, {}
+    scan_transcript(transcript, cwd, files, bash)
+    return files, bash
+
+
+def _fingerprint(transcript):
     try:
-        fh = open(transcript)
+        with open(transcript, "rb") as fh:
+            return hashlib.sha1(fh.read(4096)).hexdigest()
     except OSError:
-        return files, bash
-    with fh:
-        for raw in fh:
-            if '"tool_use"' not in raw:
-                continue
-            try:
-                row = json.loads(raw)
-            except json.JSONDecodeError:
-                continue
-            msg = row.get("message") or {}
-            for part in msg.get("content") or []:
-                if not isinstance(part, dict) or part.get("type") != "tool_use":
-                    continue
-                name, inp = part.get("name", ""), part.get("input") or {}
-                if name == "Bash":
-                    command = inp.get("command") or ""
-                    if not BASH_WRITES.search(DEV_NULL.sub(" ", command)):
-                        continue
-                    started = _utc_seconds(row.get("timestamp")) or 0
-                    for full in bash_named_paths(command, cwd):
-                        bash[full] = min(bash.get(full, started), started)
-                    continue
-                path = inp.get("file_path") if name in EDIT_TOOLS else inp.get("relative_path") if SERENA_EDIT.match(name) else None
-                if not path:
-                    continue
-                pieces = [inp.get(k) for k in ("new_string", "content", "body", "new_source", "repl")]
-                pieces += [e.get("new_string") for e in inp.get("edits") or [] if isinstance(e, dict)]
-                files[path] = files.get(path, "") + "\n" + "\n".join(p for p in pieces if isinstance(p, str))
+        return ""
+
+
+def _state_path(kind, session, transcript):
+    tag = hashlib.sha1(transcript.encode()).hexdigest()[:10]
+    return os.path.join(STATE_DIR, f"{kind}-{re.sub(r'[^A-Za-z0-9_.-]', '_', session)}-{tag}.json")
+
+
+def _load_json(path):
+    try:
+        with open(path) as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_json(path, data):
+    try:
+        os.makedirs(STATE_DIR, exist_ok=True)
+        tmp = f"{path}.{os.getpid()}.tmp"
+        with open(tmp, "w") as fh:
+            json.dump(data, fh)
+        os.replace(tmp, path)
+    except OSError:
+        pass
+
+
+def prune_state(days=14):
+    cutoff = time.time() - days * 86400
+    try:
+        for n in os.listdir(STATE_DIR):
+            if n.startswith(("scan-", "lintcache-")):
+                fp = os.path.join(STATE_DIR, n)
+                if os.path.getmtime(fp) < cutoff:
+                    os.remove(fp)
+    except OSError:
+        pass
+
+
+def cached_session_edits(transcript, cwd, session):
+    """session_edits, but parsing only the bytes appended since the last Stop of this session: the byte offset
+    and the carried-forward edit sets live in STATE_DIR. A shrunk or rewritten transcript restarts from 0."""
+    path = _state_path("scan", session, transcript)
+    st = _load_json(path)
+    try:
+        size = os.path.getsize(transcript)
+    except OSError:
+        return {}, {}
+    fp = _fingerprint(transcript)
+    if st.get("fp") != fp or st.get("offset", 0) > size or st.get("cwd") != cwd:
+        st = {}
+    files, bash, offset = st.get("files", {}), st.get("bash", {}), st.get("offset", 0)
+    if offset < size:
+        new = scan_transcript(transcript, cwd, files, bash, offset)
+        _save_json(path, {"fp": fp, "cwd": cwd, "offset": new, "files": files, "bash": bash})
     return files, bash
 
 
@@ -663,7 +889,44 @@ def visible(lines):
     return json.dumps({"systemMessage": "\n".join(lines)})
 
 
-def cmd_stop_hook():
+LINT_STATS = {"files_linted": 0}  # the test reads this to prove an unchanged file is never relinted
+
+
+def lint_cached(repo, rels, session, transcript, written):
+    """check() for the Stop hook, relinting only files whose (mtime, size) changed since this session's last pass
+    (or whose HEAD, or edit text, moved: either changes what counts as this session's lines). Unchanged files
+    reuse their cached findings. A pass that raised a scanner warning is never cached."""
+    path = _state_path("lintcache", session, transcript)
+    cache = _load_json(path)
+    head = git(repo, "rev-parse", "HEAD").strip()
+    keys, todo, found = {}, [], []
+    for r in rels:
+        try:
+            stt = os.stat(os.path.join(repo, r))
+        except OSError:
+            continue
+        keys[r] = [stt.st_mtime_ns, stt.st_size, head, len(written.get(r, ""))]
+        hit = cache.get(os.path.join(repo, r))
+        if hit and hit.get("key") == keys[r]:
+            found += hit["mine"]
+        else:
+            todo.append(r)
+    if todo:
+        # Only files still carrying uncommitted changes: committed work already passed pre-commit.
+        dirty = dirty_among(repo, todo)
+        todo_dirty = [r for r in todo if r in dirty]
+        LINT_STATS["files_linted"] += len(todo_dirty)
+        before = len(WARNINGS)
+        mine = check(repo, todo_dirty, False, session, written)[0] if todo_dirty else []
+        found += mine
+        if len(WARNINGS) == before:
+            for r in todo:
+                cache[os.path.join(repo, r)] = {"key": keys[r], "mine": [f for f in mine if f["file"] == r]}
+            _save_json(path, cache)
+    return found
+
+
+def _stop_hook():
     try:
         hook = json.load(sys.stdin)
     except json.JSONDecodeError:
@@ -673,7 +936,8 @@ def cmd_stop_hook():
     cwd = hook.get("cwd") or os.getcwd()
     counter = os.path.join(STATE_DIR, f"blocks-{session}")
     by_repo = {}
-    written_by_path, bash_by_path = session_edits(transcript, cwd)
+    prune_state()
+    written_by_path, bash_by_path = cached_session_edits(transcript, cwd, session)
     written = {}
     for p, text in written_by_path.items():
         full = p if os.path.isabs(p) else os.path.join(cwd, p)
@@ -699,11 +963,8 @@ def cmd_stop_hook():
     mine = []
     for repo, rels in by_repo.items():
         # Only files still carrying uncommitted changes: committed work already passed pre-commit.
-        dirty = set(changed_files(repo, False))
-        rels = [r for r in rels if r in dirty]
-        if rels:
-            found, _ = check(repo, rels, False, session, written.get(repo, {}))
-            mine += [dict(f, file=os.path.join(os.path.basename(repo), f["file"])) for f in found]
+        found = lint_cached(repo, rels, session, transcript, written.get(repo, {}))
+        mine += [dict(f, file=os.path.join(os.path.basename(repo), f["file"])) for f in found]
     if not mine:
         try:
             os.remove(counter)
@@ -734,6 +995,15 @@ def cmd_stop_hook():
         out["systemMessage"] = "\n".join(WARNINGS)
     print(json.dumps(out))
     return 0
+
+
+def cmd_stop_hook():
+    try:
+        return _stop_hook()
+    finally:
+        stats = os.environ.get("LINT_GUARD_STATS")  # test hook: proves what a pass re-parsed and relinted
+        if stats:
+            _save_json(stats, dict(SCAN_STATS, **LINT_STATS))
 
 
 def law_self_test():
@@ -790,7 +1060,12 @@ def law_self_test():
             got = lint(repo, ["desktop/src/a.tsx"])  # the dispatcher wakes the guard
             assert [(f["file"], f["line"], f["rule"]) for f in got] == [("desktop/src/a.tsx", 7, "archived-items-law")], got
             os.environ["LG_CRASH"] = "1"
-            assert run_law(repo, 0, ["desktop/src/a.tsx"]) == []
+            import contextlib, io
+            seen = io.StringIO()
+            with contextlib.redirect_stderr(seen):  # this crash is planted: it must not read as a real scanner failure
+                assert run_law(repo, 0, ["desktop/src/a.tsx"]) == []
+            assert "scanner archived-items-law crashed" in seen.getvalue(), "a crashed guard must be SEEN"
+            del WARNINGS[:]
         finally:
             os.environ.pop("LG_CRASH", None)
             globals()["LAW_GUARDS"] = saved
