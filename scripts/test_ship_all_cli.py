@@ -259,6 +259,37 @@ release_outcome_serving() { echo main-id; }
         self.assertGreater(events.index(("ship", "matrx-extend")), wait)
         self.assertEqual(len(events), 5)
 
+    def test_failed_release_holds_every_ship_and_github_landing(self):
+        def info(name):
+            return {"repo": name, "path": "/x/" + name, "branch": "main", "has_ship": True,
+                    "fetch_ok": True, "dirty": 1, "ahead": 0, "behind": 0,
+                    "stale_packages": [], "local_branches": [], "extra_worktrees": [],
+                    "remote_branches": [], "open_prs": []}
+        infos = {name: info(name) for name in ("aidream", "matrx-frontend", "common-docs")}
+        with tempfile.TemporaryDirectory() as code, tempfile.TemporaryDirectory() as out_root:
+            for name in infos:
+                Path(code, name, ".git").mkdir(parents=True)
+            with patch.object(ship_all, "CODE", code), patch.object(ship_all, "OUT_ROOT", out_root), \
+                 patch.object(ship_all, "inspect", side_effect=lambda p: infos[Path(p).name]), \
+                 patch.object(ship_all, "ship") as ship, \
+                 patch.object(ship_all, "land_github_work") as land, \
+                 patch.object(ship_all, "release_liveness", side_effect=lambda i: ["v3447 ERROR"] if i["repo"] == "matrx-frontend" else []), \
+                 patch.object(ship_all, "failed_release_workflows", return_value=[]), \
+                 patch.object(ship_all, "test_run_verdict", return_value=([], [])), \
+                 patch.object(ship_all, "npm_publish_lag", return_value=[]), \
+                 patch.object(ship_all, "stale_release_alarm", return_value=None), \
+                 patch.object(ship_all, "open_items", return_value=[]), \
+                 patch.object(ship_all, "held_files", return_value=[]), \
+                 patch.object(ship_all, "say"):
+                result = ship_all.main([])
+            self.assertEqual(result, 1)
+            ship.assert_not_called()
+            land.assert_not_called()
+            summary = json.loads(Path(out_root, "latest.json").read_text())
+            frontend = next(r for r in summary["repos"] if r["repo"] == "matrx-frontend")
+            self.assertEqual(frontend["not_live"], ["v3447 ERROR"])
+            self.assertTrue(all(r["status"] == "held: failed build" for r in summary["repos"]))
+
     def test_publish_wait_ignores_runs_started_by_later_pushes(self):
         t = [1_000_000.0]
         def fake_run(cmd, cwd, timeout=120):
