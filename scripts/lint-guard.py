@@ -88,6 +88,15 @@ LAW_HINT = {
 }
 LAW_TIMEOUT = 75
 
+# THE HARD-CODED SETTINGS RATCHET AT WRITE TIME (Arman 2026-10-21: "scream at them at the time they write
+# the code, not block the pathways that get the code out"). The same scan aidream's pre-commit and
+# pre-push run (scripts/check_hardcoded_settings.py --changed-from/--target, changed files only) now
+# runs on the files this session edited, and its findings go through the same changed-line split. On
+# the release push it only reports (.githooks/pre-push, MATRX_RELEASE_PATH=1).
+SETTINGS_SCANS = r"^(aidream|packages)/.+\.py$"
+SETTINGS_FINDING = re.compile(r"^NEW\s+(\S+?\.py)::(\w+)::(\S+)\s+—\s+(.*)$")
+LAW_HINT["hardcoded-settings"] = "behavioral settings live in platform.feature_knob rows, never in code or the environment (aidream scripts/check_hardcoded_settings.py)"
+
 
 def linters_for(repo, rel):
     """Every checker that covers this repo-relative file: 'eslint', 'ruff', or 'law:<index>'."""
@@ -97,6 +106,8 @@ def linters_for(repo, rel):
         out.append("eslint")
     if name == "aidream" and rel.endswith(".py"):
         out.append("ruff")
+    if name == "aidream" and re.match(SETTINGS_SCANS, rel) and os.path.exists(os.path.join(repo, "scripts", "check_hardcoded_settings.py")):
+        out.append("settings")
     for i, (gname, _pkg, _check, _script, scans, _files) in enumerate(LAW_GUARDS):
         if gname == name and re.match(scans, rel) and not re.search(r"\.(test|spec)\.[a-z]+$", rel):
             out.append(f"law:{i}")
@@ -208,6 +219,50 @@ def run_law(repo, idx, rels):
     return [f for f in found if f["file"] in wanted]
 
 
+def run_settings(repo, rels):
+    """aidream's settings ratchet over HEAD + these files as they are on disk (a scratch index, never
+    the shared one). A name the finding cites is located on its first line in the file."""
+    py = os.path.join(repo, ".venv", "bin", "python")
+    py = py if os.path.exists(py) else sys.executable
+    idx = os.path.join(os.environ.get("TMPDIR", "/tmp"), "lint-guard-settings-%d.idx" % os.getpid())
+    env = dict(os.environ, GIT_INDEX_FILE=idx)
+    try:
+        if subprocess.run(["git", "read-tree", "HEAD"], cwd=repo, env=env, capture_output=True).returncode != 0:
+            return []
+        if subprocess.run(["git", "update-index", "--add", "--", *rels], cwd=repo, env=env, capture_output=True).returncode != 0:
+            return []
+        tree = subprocess.run(["git", "write-tree"], cwd=repo, env=env, capture_output=True, text=True).stdout.strip()
+    finally:
+        try:
+            os.remove(idx)
+        except OSError:
+            pass
+    target = subprocess.run(["git", "commit-tree", tree, "-p", "HEAD", "-m", "lint-guard settings scan"], cwd=repo,
+                            capture_output=True, text=True).stdout.strip()
+    if not target:
+        return []
+    r = run_tool([py, "scripts/check_hardcoded_settings.py", "--changed-from", "HEAD", "--target", target], repo, LAW_TIMEOUT)
+    if r is None or r.returncode not in (0, 1) or "hard-coded settings (changed" not in (r.stdout or ""):
+        if r is not None:
+            print(f"lint-guard: hardcoded-settings failed (exit {r.returncode}); nothing was checked.", file=sys.stderr)
+        return []
+    wanted, found = set(rels), []
+    for row in (r.stdout or "").splitlines():
+        m = SETTINGS_FINDING.match(row.strip())
+        if not m or m.group(1) not in wanted:
+            continue
+        needle = m.group(3).split(".")[-1]
+        line = None
+        try:
+            with open(os.path.join(repo, m.group(1)), encoding="utf-8", errors="replace") as fh:
+                line = next((i for i, t in enumerate(fh, 1) if needle in t), None)
+        except OSError:
+            pass
+        found.append({"file": m.group(1), "line": line, "rule": "hardcoded-settings",
+                      "message": f"{m.group(2)} {m.group(3)}: {m.group(4)}"})
+    return found
+
+
 def lint(repo, rels):
     by = {}
     for rel in rels:
@@ -224,6 +279,8 @@ def lint(repo, rels):
                 jobs.append(pool.submit(run_ruff, repo, files))
             elif kind.startswith("law:"):
                 jobs.append(pool.submit(run_law, repo, int(kind[4:]), files))
+            elif kind == "settings":
+                jobs.append(pool.submit(run_settings, repo, files))
         found = []
         for j in jobs:
             found += j.result()
@@ -564,6 +621,8 @@ def law_self_test():
     assert linters_for(fe, "scripts/x.ts") == ["eslint"] and linters_for(fe, "features/a/x.test.tsx") == ["eslint"]
     assert linters_for("/x/aidream", "apps/dashboard/src/T.tsx") == [idx["aidream/apps/dashboard", "archived-items-law"]]
     assert linters_for("/x/aidream", "apps/workflow-studio/src/W.tsx") == [idx["aidream/apps/workflow-studio", "archived-items-law"], idx["aidream/apps/workflow-studio", "canonical-pickers"]]
+    m = SETTINGS_FINDING.match("NEW  aidream/services/x.py::constant::RETRY_SECONDS  — added by this change; move it")
+    assert m and m.group(1) == "aidream/services/x.py" and m.group(3) == "RETRY_SECONDS", "settings finding parse"
     assert linters_for("/x/aidream", "x/y.py") == ["ruff"] and linters_for("/x/matrx-local", "app/r.py") == [idx["matrx-local/desktop", "archived-items-law"]]
     for repo in ("matrx-extend", "matrx-vscode"):
         assert len(linters_for(f"/x/{repo}", "src/a.tsx")) == 2, repo
