@@ -133,6 +133,14 @@ SETTINGS_FINDING = re.compile(r"^NEW\s+(\S+?\.py)::(\w+)::(\S+)\s+—\s+(.*)$")
 # carry the dependency's line so the changed-line split applies. Never on the release path.
 LOCKFILE_FINDING = re.compile(r"^(\S+package\.json):(\d+)\s+lockfile-drift\s+(.*)$")
 LAW_HINT["lockfile-drift"] = "pnpm install --lockfile-only, then stage pnpm-lock.yaml with the package.json (aidream scripts/check_lockfile_specifiers.py)"
+# THE MANDATE CALL-SITE GUARD AT WRITE TIME (runner plan 25 §6 G1, D23): aidream's
+# scripts/check_mandate_call_sites.py grades every AI call / runner-boundary symbol; one the baseline and the
+# allowlist do not know is a NEW_BYPASS. It stops an AGENT's turn only for a bypass on a line that agent wrote
+# (the changed-line split below); every other NEW_BYPASS is mailed to its author like any inherited finding.
+# Report-only for releases: nothing on the release path runs this, and a slow or crashed census is SEEN, never fatal.
+MANDATE_SITES_SCANS = r"^(aidream|packages)/.+\.py$"
+MANDATE_SITES_TIMEOUT = 100
+LAW_HINT["mandate-call-site"] = "an AI call names its Mandate through the mandate runner (aidream/services/mandate_runner), or is allowlisted with a reason in boundary_allowlist.toml — scripts/check_mandate_call_sites.py, runner plan 25 §6"
 LAW_HINT["hardcoded-settings"] = "behavioral settings live in platform.feature_knob rows, never in code or the environment (aidream scripts/check_hardcoded_settings.py)"
 
 
@@ -146,6 +154,8 @@ def linters_for(repo, rel):
         out.append("ruff")
     if name == "aidream" and re.match(SETTINGS_SCANS, rel) and os.path.exists(os.path.join(repo, "scripts", "check_hardcoded_settings.py")):
         out.append("settings")
+    if name == "aidream" and re.match(MANDATE_SITES_SCANS, rel) and not re.search(r"(^|/)tests?/|(^|/)test_[^/]*\.py$", rel) and os.path.exists(os.path.join(repo, "scripts", "check_mandate_call_sites.py")):
+        out.append("mandate-sites")
     if name == "aidream" and os.path.basename(rel) == "package.json" and os.path.exists(os.path.join(repo, "scripts", "check_lockfile_specifiers.py")):
         out.append("lockfile")
     for i, (gname, _pkg, _check, _script, scans, _files) in enumerate(LAW_GUARDS):
@@ -313,6 +323,28 @@ def run_lockfile(repo, rels):
     return found
 
 
+def run_mandate_sites(repo, rels):
+    """aidream's mandate call-site census, keeping only the NEW_BYPASS rows in these files."""
+    py = os.path.join(repo, ".venv", "bin", "python")
+    py = py if os.path.exists(py) else sys.executable
+    r = run_tool([py, "scripts/check_mandate_call_sites.py", "--json"], repo, MANDATE_SITES_TIMEOUT)
+    if r is None:
+        return []
+    out = r.stdout or ""
+    start = out.find("\n[") + 1 if "\n[" in out else (0 if out.startswith("[") else -1)
+    try:
+        rows = json.JSONDecoder().raw_decode(out[start:])[0] if start >= 0 else None
+    except ValueError:
+        rows = None
+    if not isinstance(rows, list):
+        warn(f"lint-guard scanner mandate-call-sites gave no JSON (exit {r.returncode}): {(r.stderr or out).strip()[-200:]}; nothing was checked.")
+        return []
+    wanted = set(rels)
+    return [{"file": row["file"], "line": row.get("line"), "rule": "mandate-call-site",
+             "message": f"{row.get('call')} in {row.get('function')} runs outside the mandate runner (NEW_BYPASS)"}
+            for row in rows if isinstance(row, dict) and row.get("status") == "NEW_BYPASS" and row.get("file") in wanted]
+
+
 def lint(repo, rels):
     by = {}
     for rel in rels:
@@ -320,7 +352,8 @@ def lint(repo, rels):
             continue
         for kind in linters_for(repo, rel):
             by.setdefault(kind, []).append(rel)
-    runners = {"eslint": run_eslint, "ruff": run_ruff, "settings": run_settings, "lockfile": run_lockfile}
+    runners = {"eslint": run_eslint, "ruff": run_ruff, "settings": run_settings, "lockfile": run_lockfile,
+               "mandate-sites": run_mandate_sites}
     jobs = []
     with ThreadPoolExecutor(max_workers=max(1, len(by))) as pool:
         for kind, files in by.items():
