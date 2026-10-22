@@ -1025,7 +1025,12 @@ def law_self_test():
             got = lint(repo, ["desktop/src/a.tsx"])  # the dispatcher wakes the guard
             assert [(f["file"], f["line"], f["rule"]) for f in got] == [("desktop/src/a.tsx", 7, "archived-items-law")], got
             os.environ["LG_CRASH"] = "1"
-            assert run_law(repo, 0, ["desktop/src/a.tsx"]) == []
+            import contextlib, io
+            seen = io.StringIO()
+            with contextlib.redirect_stderr(seen):  # this crash is planted: it must not read as a real scanner failure
+                assert run_law(repo, 0, ["desktop/src/a.tsx"]) == []
+            assert "scanner archived-items-law crashed" in seen.getvalue(), "a crashed guard must be SEEN"
+            del WARNINGS[:]
         finally:
             os.environ.pop("LG_CRASH", None)
             globals()["LAW_GUARDS"] = saved
