@@ -589,6 +589,100 @@ def notify_inherited(repo, inherited, me):
     return told
 
 
+
+# ---------------------------------------------------------------- data-loss guard (write time)
+# Arman 2026-10-22: no quality check may hold a file in the release sweep; guards live in the edit hook and the
+# agent's own pre-commit. Origin: an edit script ran `open(p, "w").write(f(open(p).read()))` — Python truncates the
+# file BEFORE the read, the script raised, and the 0-byte file was swept (agents.py, twice). The tool-event view
+# cannot see a Bash-written file, so this compares GIT STATE: working tree (or index) vs HEAD.
+#   - a tracked file that is now 0 bytes;
+#   - a tracked file that shrank >= 90% while losing >= 20 lines;
+#   - a tracked .py that no longer parses (it parsed at HEAD).
+# LOUD, names the file with size before/after. Stops an AGENT's turn / a commit — never a release: under
+# MATRX_RELEASE_PATH=1 it only prints. LINT_GUARD_ALLOW_SHRINK=1 is the deliberate-rewrite escape.
+SHRINK_RATIO = 0.10
+SHRINK_MIN_LINES = 20
+
+
+def _head_sizes(repo, rels):
+    """{rel: size in bytes at HEAD} for rels that exist at HEAD."""
+    if not rels:
+        return {}
+    r = subprocess.run(["git", "-C", repo, "cat-file", "--batch-check"], input="".join(f"HEAD:{x}\n" for x in rels),
+                       capture_output=True, text=True)
+    out = {}
+    for rel, row in zip(rels, r.stdout.splitlines()):
+        parts = row.split()
+        if len(parts) == 3 and parts[1] == "blob":
+            out[rel] = int(parts[2])
+    return out
+
+
+def _read_current(repo, rel, staged):
+    if staged:
+        r = subprocess.run(["git", "-C", repo, "show", f":{rel}"], capture_output=True)
+        return r.stdout if r.returncode == 0 else None
+    try:
+        with open(os.path.join(repo, rel), "rb") as fh:
+            return fh.read()
+    except OSError:
+        return None
+
+
+def _parses(data):
+    import ast
+    try:
+        ast.parse(data.decode("utf-8", errors="replace"))
+        return True
+    except (SyntaxError, ValueError, RecursionError):
+        return False
+
+
+def data_loss(repo, rels=None, staged=False):
+    """Findings (same shape as lint findings, rule 'data-loss', line None) for files whose state vs HEAD looks
+    like destruction. rels=None -> every tracked file that differs from HEAD."""
+    if os.environ.get("LINT_GUARD_ALLOW_SHRINK") == "1":
+        return []
+    if rels is None:
+        args = ["diff", "--cached", "--name-only", "--diff-filter=M"] if staged else ["diff", "HEAD", "--name-only", "--diff-filter=M"]
+        rels = [x for x in git(repo, *args).splitlines() if x]
+    old = _head_sizes(repo, rels)
+    found = []
+    for rel in rels:
+        if rel not in old:
+            continue
+        data = _read_current(repo, rel, staged)
+        if data is None:
+            continue  # deleted: a deliberate deletion shows as a deletion, not as an empty file
+        before, after = old[rel], len(data)
+        if before == 0 or after >= before:
+            continue
+        why = None
+        if after == 0:
+            why = "is now 0 BYTES"
+        elif after <= before * SHRINK_RATIO and b"\0" not in data[:4096]:
+            old_lines = subprocess.run(["git", "-C", repo, "show", f"HEAD:{rel}"], capture_output=True).stdout.count(b"\n")
+            lost = old_lines - data.count(b"\n")
+            if lost >= SHRINK_MIN_LINES:
+                why = f"SHRANK {100 - 100 * after // before}% and lost {lost} lines"
+        if why:
+            found.append({"file": rel, "line": None, "rule": "data-loss",
+                          "message": f"{why} ({before} -> {after} bytes vs HEAD). Restore it (git show HEAD:{rel}) unless you meant this."})
+    for rel in rels:
+        if rel.endswith(".py") and rel in old and old[rel] > 0 and not any(f["file"] == rel for f in found):
+            data = _read_current(repo, rel, staged)
+            if data is not None and not _parses(data):
+                head = subprocess.run(["git", "-C", repo, "show", f"HEAD:{rel}"], capture_output=True).stdout
+                if _parses(head):
+                    found.append({"file": rel, "line": None, "rule": "data-loss",
+                                  "message": f"no longer PARSES as Python ({old[rel]} -> {len(data)} bytes vs HEAD); it parsed at HEAD."})
+    return found
+
+
+LAW_HINT["data-loss"] = ("an edit script must READ first, then write via a temp file + rename; never `open(p, \"w\")` before the read "
+                         "(matrx-ship/scripts/lint-guard.py data_loss; set LINT_GUARD_ALLOW_SHRINK=1 only for a deliberate rewrite)")
+
+
 # ---------------------------------------------------------------- commands
 
 def describe(mine):
@@ -632,6 +726,12 @@ def cmd_check(argv):
     repo = repo or repo_root(os.getcwd())
     me = os.environ.get("CLAUDE_CODE_SESSION_ID") or os.environ.get("CODEX_THREAD_ID") or ""
     mine, told = check(repo, files, staged, me)
+    loss = data_loss(repo, files or None, staged)
+    if loss:
+        if os.environ.get("MATRX_RELEASE_PATH") == "1":  # the release path never holds: scream, go on
+            print(f"DATA-LOSS WARNING (release path, nothing held) — {len(loss)} file(s) look destroyed:\n{describe(loss)}", file=sys.stderr)
+        else:
+            mine = mine + loss
     for tool, session, n in told:
         print(f"lint-guard: {n} inherited lint error(s) mailed to {tool} {session[:8]} (they wrote them).", file=sys.stderr)
     if mine:
@@ -977,7 +1077,30 @@ def _stop_hook():
         rel = os.path.relpath(full, repo)
         if linters_for(repo, rel) and rel not in by_repo.get(repo, []):
             by_repo.setdefault(repo, []).append(rel)
-    mine = []
+    # DATA LOSS (git state, any file type): files this session touched stop THIS turn; any other file in the
+    # same repos that now looks destroyed vs HEAD is shouted in the visible message (another lane's, never ours to block on).
+    touched = {}
+    for full in list(written_by_path) + list(bash_by_path):
+        full = full if os.path.isabs(full) else os.path.join(cwd, full)
+        if not os.path.exists(full) or not full.startswith(CODE):
+            continue
+        repo = repo_root(full)
+        if repo:
+            touched.setdefault(repo, set()).add(os.path.relpath(full, repo))
+    loss_mine = []
+    for repo, rels in touched.items():
+        try:
+            allf = data_loss(repo, None)
+        except Exception as e:  # a broken scan is SEEN, never fatal
+            warn(f"lint-guard scanner data-loss crashed: {type(e).__name__}: {e}; nothing was checked.")
+            continue
+        for f in allf:
+            if f["file"] in rels:
+                loss_mine.append(dict(f, file=os.path.join(os.path.basename(repo), f["file"])))
+            else:
+                warn(f"lint-guard DATA-LOSS WARNING (not touched by this session; whoever wrote it should look): "
+                     f"{os.path.basename(repo)}/{f['file']} {f['message']}")
+    mine = list(loss_mine)
     for repo, rels in by_repo.items():
         # Only files still carrying uncommitted changes: committed work already passed pre-commit.
         found = lint_cached(repo, rels, session, transcript, written.get(repo, {}))
@@ -1110,6 +1233,9 @@ def cmd_self_test():
     r = subprocess.run([sys.executable, os.path.join(SCRIPTS, "test_lint_guard_stop_hook.py")],
                        env=dict(os.environ, LINT_GUARD_PATH=os.path.realpath(__file__)), capture_output=True, text=True)
     assert r.returncode == 0, "stop-hook proof:\n" + r.stdout[-1500:] + r.stderr[-500:]
+    r = subprocess.run([sys.executable, os.path.join(SCRIPTS, "test_lint_guard_data_loss.py")],
+                       env=dict(os.environ, LINT_GUARD_PATH=os.path.realpath(__file__)), capture_output=True, text=True)
+    assert r.returncode == 0, "data-loss proof:\n" + r.stdout[-1500:] + r.stderr[-500:]
     print("lint-guard self-test: ok")
     return 0
 
