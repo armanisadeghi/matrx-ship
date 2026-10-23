@@ -229,7 +229,7 @@ def stale_packages(repo):
 PACKAGE_SOURCE = "aidream"                       # the one repo that publishes @ai-matrx packages
 PUBLISH_REPO = "AI-Matrix-Engine/aidream"
 PUBLISH_WORKFLOW_FILE = "publish-npm-package.yml"
-PUBLISH_WAIT_MAX_SECONDS = 12 * 60   # agent-chosen 2026-10-16: one publish run took 1-10 min. Review 2026-11-16.
+PUBLISH_WAIT_MAX_SECONDS = 3 * 60    # Arman 2026-10-22: "NOTHING EVER STOPS MY releASeS". A 12 min wait held the web release; consumers ship on what npm serves and the next round adopts the rest.
 PUBLISH_APPEAR_SECONDS = 30          # a push-triggered run shows in `gh run list` within seconds
 
 
