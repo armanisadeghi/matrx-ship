@@ -24,7 +24,12 @@ esac
 writes=0; [[ "$mode" == "install" || "$mode" == "sync" ]] && writes=1
 
 profile_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-code_root="${CODE_ROOT:-$(cd "$profile_dir/../../.." && pwd)}"
+# The code folder: $CODE_ROOT, else $MATRX_CODE_DIR, else ~/code, else three above this profile. Never
+# ship's own location first: ship moves into aidream/infra/matrx-ship (monorepo, 2026-10-22).
+code_root="${CODE_ROOT:-${MATRX_CODE_DIR:-}}"
+if [[ -z "$code_root" ]]; then
+  if [[ -d "$HOME/code" ]]; then code_root="$HOME/code"; else code_root="$(cd "$profile_dir/../../.." && pwd)"; fi
+fi
 portable_root="${PORTABLE_ROOT:-$HOME/Code}"
 claude_root="$HOME/.claude"
 codex_root="$HOME/.codex"

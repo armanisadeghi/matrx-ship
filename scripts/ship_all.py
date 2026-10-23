@@ -3,7 +3,7 @@
 
 Run:  code/scripts/ship-all.sh [--dry-run] [--only a,b] [--skip a,b] [--days N] [--jobs N]
 
-For every git repository directly under the code folder (the parent of matrx-ship):
+For every git repository directly under the code folder (CODE: $MATRX_CODE_DIR, else ~/code):
   1. inspect it: branch, uncommitted files, commits ahead of / behind GitHub, local branches,
      extra worktrees, remote branches, open pull requests.
   2. SKIP it when there is nothing to sync: no uncommitted files, not ahead of or behind GitHub,
@@ -50,7 +50,21 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
 HERE = os.path.dirname(os.path.realpath(__file__))   # real location, even when run through code/scripts/
-CODE = os.path.dirname(os.path.dirname(HERE))          # .../code
+
+
+def workspace_root():
+    """The code folder every repository sits in: $MATRX_CODE_DIR, else ~/code, else (a machine without
+    ~/code) the folder two above this script. Never derived from where ship lives first: ship moves into
+    aidream/infra/matrx-ship (monorepo, 2026-10-22) and HERE is its REAL path, so the old
+    dirname(dirname(HERE)) would scan aidream/infra instead of the code folder."""
+    env = os.environ.get("MATRX_CODE_DIR")
+    if env:
+        return os.path.abspath(os.path.expanduser(env))
+    home = os.path.expanduser("~/code")
+    return home if os.path.isdir(home) else os.path.dirname(os.path.dirname(HERE))
+
+
+CODE = workspace_root()                                  # .../code
 OUT_ROOT = os.path.expanduser("~/.matrx/ship-all")
 FIND_SESSIONS = os.path.join(HERE, "find-file-sessions.py")
 # Never part of ship-all (Arman, 2026-09-24). matrx-local: updated only when Arman asks by hand,
@@ -326,6 +340,35 @@ NESTED_TRAIN = {"aidream": ("apps/matrx-frontend",)}
 SYNC_ONLY_SCRIPT = ('python3 scripts/sync-main.py "$@"; rc=$?; echo ""; '
                     'echo "ship-all: not on the 30-minute release train: synced, not released."; '
                     'echo "ship.sh: sync exit $rc, release exit 0 (sync only)"; exit $rc')
+
+
+# PARTS OF A HOST (monorepo, 2026-10-22): folders imported into a host repository that ride the HOST's
+# sync (its sweep commits them, its push ships them) and never run a ship.sh of their own. Their old
+# top-level path is kept as a symlink into the host; a symlink like that is never a second repository,
+# even if a stray .git is left inside the target (see parts_of_hosts). Listed so a round names them.
+NESTED_PARTS = {"aidream": ("common-docs", "infra/matrx-sandbox", "infra/matrx-ship")}
+
+
+def parts_of_hosts(repos):
+    """Drop every top-level path that resolves INSIDE another repository found this round (the old
+    path of an imported repo kept as a symlink: ~/code/common-docs -> aidream/common-docs), and name
+    each NESTED_PARTS folder present, so it reads as part of its host instead of vanishing silently.
+    A nested app on NESTED_TRAIN keeps its place: it is matched by its own path, not dropped."""
+    tops = {os.path.realpath(r): r for r in repos if os.path.isdir(os.path.join(r, ".git"))}
+    kept = []
+    for r in repos:
+        real = os.path.realpath(r)
+        host = next((t for t in tops if t != real and real.startswith(t + os.sep)), None)
+        if host and os.path.isdir(os.path.join(r, ".git")):
+            say("  %s: inside %s (%s) — part of that repository, not shipped on its own"
+                % (os.path.basename(r), os.path.basename(tops[host]), os.path.relpath(real, host)))
+            continue
+        kept.append(r)
+    for host, rels in sorted(NESTED_PARTS.items()):
+        for rel in rels:
+            if os.path.isdir(os.path.join(CODE, host, ".git")) and os.path.isdir(os.path.join(CODE, host, rel)):
+                say("  %s: part of %s (%s/) — shipped with it" % (os.path.basename(rel), host, rel))
+    return kept
 
 
 def ship_cmd(info, note):
@@ -1003,6 +1046,7 @@ def main(args=None):
     say("ship-all %s  (%s)%s" % (stamp, CODE, "  DRY RUN: nothing is shipped" if dry else ""))
 
     # ── 1. check every repo at once (fetch + read-only git) ──────────────────────────────
+    repos = parts_of_hosts(repos)
     t0 = time.time()
     say("▶ checking %d repos in parallel…" % len(repos))
     with ThreadPoolExecutor(max_workers=8) as pool:
