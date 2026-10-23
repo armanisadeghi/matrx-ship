@@ -37,6 +37,13 @@ AFTER_PUSH=""                 # a command run after the push; a failure is an ER
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT" || exit 1
+# NESTED in the aidream monorepo (infra/matrx-ship, 2026-10-23): a release from here would bump and tag on
+# aidream's main. Ship deploys through the Ship CI/CD workflow there; its version tags are ship/v* (TAG_PREFIX
+# above, set at the import). Nothing to release.
+if [[ -n "$(git -C "$ROOT" rev-parse --show-prefix 2>/dev/null)" ]]; then
+    echo "release.sh: matrx-ship is a folder of $(git -C "$ROOT" rev-parse --show-toplevel): no release of its own (Ship CI/CD ships it)."
+    exit 0
+fi
 REMOTE="origin"
 BRANCH="main"
 START=$SECONDS

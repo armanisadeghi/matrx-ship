@@ -57,7 +57,7 @@ import http from "node:http";
 import { attachTerminalWs } from "./terminal_ws.js";
 import { oauthEnabled, authenticateOAuthAdmin } from "./oauth_auth.js";
 import { waitForOrchestratorReady } from "./orchestrator_readiness.js";
-import { SHIP_SOURCE_DEFAULT, shipSourceDir, shipRepo, shipCiWorkflow } from "./ship_source.js";
+import { SHIP_SOURCE_DEFAULT, shipSourceDir, shipRepo, shipCiWorkflow, sandboxRepo, sandboxSubdir, sandboxDeployWorkflow, sandboxHostedRef, sandboxApprovalTagPrefix } from "./ship_source.js";
 import { assessAidreamPipeline, fetchAidreamReleaseCandidateSha, fetchAidreamWorkflowRunJobs, fetchAidreamWorkflowRuns, latestRuntimeDeployRun } from "./aidream_pipeline.js";
 
 const PORT = process.env.PORT || 3000;
@@ -2448,7 +2448,8 @@ async function orchFetchForSandbox(sandboxId, path, init = {}) {
 // Paths are the manager-container view of the host (/host-srv == host /srv);
 // `docker build` reads the context from inside this container and ships it to
 // the host daemon over the mounted socket, so these /host-srv paths are correct.
-const SANDBOX_PROJECT = join(HOST_SRV, "projects", "matrx-sandbox");
+const SANDBOX_PROJECT = join(HOST_SRV, "projects", "matrx-sandbox");   // the git checkout (aidream, sparse, since 2026-10-23)
+const SANDBOX_SOURCE = join(SANDBOX_PROJECT, sandboxSubdir());          // the sandbox's own folder inside it
 const ORCH_COMPOSE_DIR = join(HOST_SRV, "apps", "sandbox-orchestrator");
 const ORCH_HOST_COMPOSE_DIR = "/srv/apps/sandbox-orchestrator";
 
@@ -2482,10 +2483,10 @@ function orchestratorBuildCommand(context, sourceSha) {
 // BUILD dependency of aidream; local is the deprecated static pool — both are
 // surfaced but their absence is not an alarm.
 const SANDBOX_IMAGE_VARIANTS = {
-  core: { tag: "matrx-sandbox:core", context: join(SANDBOX_PROJECT, "sandbox-image"), required: false },
-  slim: { tag: "matrx-sandbox:slim", context: join(SANDBOX_PROJECT, "sandbox-image"), dockerfile: "Dockerfile.slim", required: true },
-  local: { tag: "matrx-sandbox:local", context: join(SANDBOX_PROJECT, "sandbox-local"), required: false },
-  aidream: { tag: "matrx-sandbox:aidream", script: join(SANDBOX_PROJECT, "sandbox-image", "build-aidream.sh"), required: true },
+  core: { tag: "matrx-sandbox:core", context: join(SANDBOX_SOURCE, "sandbox-image"), required: false },
+  slim: { tag: "matrx-sandbox:slim", context: join(SANDBOX_SOURCE, "sandbox-image"), dockerfile: "Dockerfile.slim", required: true },
+  local: { tag: "matrx-sandbox:local", context: join(SANDBOX_SOURCE, "sandbox-local"), required: false },
+  aidream: { tag: "matrx-sandbox:aidream", script: join(SANDBOX_SOURCE, "sandbox-image", "build-aidream.sh"), required: true },
 };
 const ORCH_IMAGE_TAG = "matrx-orchestrator:latest";
 
@@ -2716,13 +2717,18 @@ app.post("/api/orchestrator-sandboxes-migrate-all", authMiddleware, requireRole(
 // string (which has been reset across commits, e.g. 0.3.0 -> 0.1.2, so version
 // numbers are NOT monotonic and must never be used to judge "newer"). Compares:
 //   • origin/main HEAD + the tested deploy/hosted approval ref (GitHub API)
-//   • the latest SUCCESSFUL "Deploy" run's commit (a record for comparison)
+//   • the latest SUCCESSFUL Sandbox Deploy run's commit (a record for comparison)
 // Running truth comes separately from each orchestrator's / source_sha.
 // Cached 60s (this is hit by Versions + the 30s-refresh Fleet Health).
 let _sbxRepoCache = { ts: 0, data: null };
 async function getSandboxRepoState() {
   if (_sbxRepoCache.data && Date.now() - _sbxRepoCache.ts < 60000) return _sbxRepoCache.data;
-  const repo = "armanisadeghi/matrx-sandbox";
+  // The sandbox is infra/matrx-sandbox of aidream (2026-10-23): "main" is the newest main commit that touches
+  // that folder, and the hosted checkout / last deploy are judged by whether they CONTAIN it (aidream main moves
+  // on with unrelated commits, so equality would always read "behind").
+  const repo = sandboxRepo();
+  const subdir = sandboxSubdir();
+  const pathQ = subdir ? `&path=${encodeURIComponent(subdir)}` : "";
   const pat = process.env.GITHUB_PAT || process.env.GH_TOKEN || "";
   const s = {
     mainSha: null, mainShort: null, hostedHead: null, hostedShort: null, hostedBehind: null,
@@ -2740,10 +2746,17 @@ async function getSandboxRepoState() {
         if (!r.ok) throw new Error(`GitHub API ${r.status}`);
         return r.json();
       };
-      const main = await gh("/commits/main");
-      s.mainSha = main.sha; s.mainShort = (main.sha || "").slice(0, 7);
+      const main = (await gh(`/commits?sha=main&per_page=1${pathQ}`))[0] || {};
+      s.mainSha = main.sha || null; s.mainShort = (main.sha || "").slice(0, 7);
+      // contains(sha): does `sha` include the newest sandbox commit on main? (null when unknown)
+      const contains = async (sha) => {
+        if (!s.mainSha || !sha) return null;
+        if (sha === s.mainSha) return true;
+        try { const c = await gh(`/compare/${s.mainSha}...${sha}`); return c.status === "identical" || c.status === "ahead"; } catch { return null; }
+      };
+      s._contains = contains;
       try {
-        const approved = await gh("/git/ref/heads/deploy%2Fhosted");
+        const approved = await gh(`/git/ref/heads/${encodeURIComponent(sandboxHostedRef())}`);
         s.approvedSha = approved.object?.sha || null;
         s.approvedSource = s.approvedSha ? "deploy/hosted ref" : null;
         s.approvedShort = s.approvedSha ? s.approvedSha.slice(0, 7) : null;
@@ -2754,8 +2767,8 @@ async function getSandboxRepoState() {
           // approval tags remained. Find the newest approved commit on main,
           // rather than declaring that no approved release exists.
           const [approvalRefs, mainCommits] = await Promise.all([
-            gh("/git/matching-refs/tags/deploy-approved"),
-            gh("/commits?sha=main&per_page=100"),
+            gh(`/git/matching-refs/tags/${sandboxApprovalTagPrefix()}`),
+            gh(`/commits?sha=main&per_page=100${pathQ}`),
           ]);
           const approvedShas = new Set((approvalRefs || []).map((x) => x.object?.sha).filter(Boolean));
           s.approvedSha = (mainCommits || []).find((x) => approvedShas.has(x.sha))?.sha || null;
@@ -2764,17 +2777,20 @@ async function getSandboxRepoState() {
           if (!s.approvedSha) s.approvedError = `${refError.message}; no approved tag found on the latest 100 main commits`;
         } catch (tagError) { s.approvedError = `${refError.message}; approval-tag fallback: ${tagError.message}`; }
       }
-      const runs = await gh("/actions/runs?per_page=20");
-      const deploys = (runs.workflow_runs || []).filter((r) => r.name === "Deploy");
+      const runs = await gh(`/actions/workflows/${sandboxDeployWorkflow()}/runs?per_page=20`);
+      const deploys = (runs.workflow_runs || []).filter((r) => r.status === "completed");
       const lastOk = deploys.find((r) => r.conclusion === "success");
       if (lastOk) { s.deploySha = lastOk.head_sha; s.deployShort = (lastOk.head_sha || "").slice(0, 7); s.deployWhen = lastOk.created_at; s.deployUrl = lastOk.html_url; }
       // A later successful deployment supersedes older failed attempts. Keep
       // history for display, but only the latest completed run affects health.
       s.deployFailures = deploys[0]?.conclusion === "failure" ? 1 : 0;
-      s.deployBehindMain = s.mainSha && s.deploySha ? s.deploySha !== s.mainSha : null;
+      const deployHas = await contains(s.deploySha);
+      s.deployBehindMain = deployHas === null ? null : !deployHas;
+      const hostedHas = await contains(s.hostedHead);
+      s.hostedBehind = hostedHas === null ? null : !hostedHas;
     } catch (e) { s.ghError = e.message; }
   }
-  s.hostedBehind = s.mainSha && s.hostedHead ? s.hostedHead !== s.mainSha : null;
+  delete s._contains;
   _sbxRepoCache = { ts: Date.now(), data: s };
   return s;
 }
@@ -2926,7 +2942,7 @@ async function buildVersionsReport() {
       update: behind
         ? {
           action: "ec2-trigger-deploy", label: "Trigger GitHub deploy", data_safe: true,
-          note: "Dispatches the matrx-sandbox 'Deploy' workflow on main, which rebuilds + redeploys the EC2 orchestrator via SSM."
+          note: "Dispatches the Sandbox Deploy workflow (aidream) on main, which rebuilds + redeploys the EC2 orchestrator via SSM."
         }
         : null,
     });
@@ -3181,17 +3197,17 @@ async function checkOrchestratorDrift() {
   // desired release and cannot prove what is running.
   if (eErr) {
     warnings.push(`EC2 orchestrator unreachable (${eErr}).`);
-    actions.push({ label: "Trigger GitHub Deploy (EC2)", action: "ec2-trigger-deploy", data_safe: true, note: "Dispatches the matrx-sandbox 'Deploy' workflow on main; redeploys EC2 in ~3-5 min via SSM." });
+    actions.push({ label: "Trigger GitHub Deploy (EC2)", action: "ec2-trigger-deploy", data_safe: true, note: "Dispatches the Sandbox Deploy workflow (aidream) on main; redeploys EC2 in ~3-5 min via SSM." });
   } else if (!ec2?.source_sha) {
     warnings.push("EC2 orchestrator did not report its running source SHA, so freshness cannot be verified.");
   } else if (!repo.approvedSha && hosted?.source_sha && ec2.source_sha !== hosted.source_sha) {
     warnings.push(`Cross-tier runtime drift: hosted is actually running ${hosted.source_sha.slice(0, 7)}, while EC2 is actually running ${ec2.source_sha.slice(0, 7)} (observed via ${ec2.source_sha_via}). The approval ref is unavailable (${repo.approvedError || "unknown reason"}).`);
-    actions.push({ label: "Trigger GitHub Deploy (EC2)", action: "ec2-trigger-deploy", data_safe: true, note: "Dispatches the matrx-sandbox 'Deploy' workflow on main; redeploys EC2 in ~3-5 min via SSM." });
+    actions.push({ label: "Trigger GitHub Deploy (EC2)", action: "ec2-trigger-deploy", data_safe: true, note: "Dispatches the Sandbox Deploy workflow (aidream) on main; redeploys EC2 in ~3-5 min via SSM." });
   } else if (!repo.approvedSha) {
     warnings.push(`Both running tiers report ${ec2.source_sha.slice(0, 7)}, but the tested approval ref could not be read (${repo.approvedError || "unknown reason"}), so intended-release freshness is unverified.`);
   } else if (ec2.source_sha !== repo.approvedSha) {
     warnings.push(`EC2 orchestrator is actually running ${ec2.source_sha.slice(0, 7)}, not approved release ${repo.approvedShort}. The latest successful Deploy record is ${repo.deployShort || "missing"}.`);
-    actions.push({ label: "Trigger GitHub Deploy (EC2)", action: "ec2-trigger-deploy", data_safe: true, note: "Dispatches the matrx-sandbox 'Deploy' workflow on main; redeploys EC2 in ~3-5 min via SSM." });
+    actions.push({ label: "Trigger GitHub Deploy (EC2)", action: "ec2-trigger-deploy", data_safe: true, note: "Dispatches the Sandbox Deploy workflow (aidream) on main; redeploys EC2 in ~3-5 min via SSM." });
   }
   if (repo.deployFailures) {
     warnings.push(`${repo.deployFailures} of the last 5 matrx-sandbox deploys failed.`);
@@ -3287,7 +3303,7 @@ async function checkRecentDeploys() {
   const token = process.env.GITHUB_PAT || process.env.GH_TOKEN || "";
   if (!token) return { id: "deploys", label: "Recent deploys (matrx-sandbox)", status: "unknown", detail: "GITHUB_PAT not set in the Manager env — deploy-status check disabled.", actions: [] };
   try {
-    const r = await fetch("https://api.github.com/repos/armanisadeghi/matrx-sandbox/actions/workflows/deploy.yml/runs?per_page=5", {
+    const r = await fetch(`https://api.github.com/repos/${sandboxRepo()}/actions/workflows/${sandboxDeployWorkflow()}/runs?per_page=5`, {
       headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", "User-Agent": "matrx-manager" },
       signal: AbortSignal.timeout(8000),
     });
@@ -3300,7 +3316,7 @@ async function checkRecentDeploys() {
     if (latest.conclusion === "failure") {
       status = "critical";
       detail = `Latest deploy FAILED (${(latest.head_sha || "").slice(0, 7)}, ${latest.created_at?.slice(0, 16)}) — EC2 may be running older code.`;
-      actions.push({ label: "Trigger new GitHub Deploy", action: "ec2-trigger-deploy", data_safe: true, note: "Dispatches the matrx-sandbox 'Deploy' workflow on main; redeploys EC2 in ~3-5 min via SSM." });
+      actions.push({ label: "Trigger new GitHub Deploy", action: "ec2-trigger-deploy", data_safe: true, note: "Dispatches the Sandbox Deploy workflow (aidream) on main; redeploys EC2 in ~3-5 min via SSM." });
       if (latest.html_url) actions.push({ label: "View failed run on GitHub", action: "open-url", url: latest.html_url });
     }
     return { id: "deploys", label: "Recent deploys (matrx-sandbox)", status, detail, runs: runs.map((x) => ({ conclusion: x.conclusion, sha: (x.head_sha || "").slice(0, 7), at: x.created_at, url: x.html_url })), actions };
@@ -3438,7 +3454,7 @@ async function checkAidreamPipeline() {
     }
     return { id, label, status: "ok", detail: `Aidream deploy candidate ${candidateSha.slice(0, 7)} matches ECS; tests ${assessment.tests.conclusion}.`, actions: [] };
   } catch (e) {
-    // Most likely: the PAT is scoped to armanisadeghi/matrx-sandbox only and
+    // Most likely: the PAT is scoped to one standalone repository only and
     // can't see the AI-Matrix-Engine org. Say so — this is fixable in Secrets.
     return { id, label, status: "unknown", detail: `aidream repo not readable with the current GITHUB_PAT (${e.message}). Grant the PAT read access to AI-Matrix-Engine/aidream (Secrets page -> GITHUB_PAT) to enable this check.`, actions: [] };
   }
@@ -3544,7 +3560,7 @@ async function checkHostedDeployFreshness() {
     // inherit the old deployed-state file's age onto a brand-new release.
     let approvedAt = null;
     try {
-      const cr = await fetch(`https://api.github.com/repos/armanisadeghi/matrx-sandbox/commits/${encodeURIComponent(approved)}`, {
+      const cr = await fetch(`https://api.github.com/repos/${sandboxRepo()}/commits/${encodeURIComponent(approved)}`, {
         headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", "User-Agent": "matrx-manager" },
         signal: AbortSignal.timeout(8000),
       });
@@ -4077,7 +4093,7 @@ async function checkMicroservice(svc) {
 // instead of looping). Attempted ids persist across Manager restarts.
 const GHA_RETRY_STATE_FILE = "/host-srv/apps/deploy-state/gha-auto-retries.json";
 const GHA_RETRY_TARGETS = [
-  { repo: "armanisadeghi/matrx-sandbox", workflow: "deploy.yml", label: "matrx-sandbox Deploy" },
+  { repo: sandboxRepo(), workflow: sandboxDeployWorkflow(), label: "Sandbox Deploy" },
   { repo: shipRepo(), workflow: shipCiWorkflow(), label: "matrx-ship CI/CD" },
 ];
 
@@ -4221,7 +4237,7 @@ app.post("/api/orchestrator/restart", authMiddleware, requireRole("admin", "depl
 // orchestrator, so this is safe. ────────────────────────────────────────────
 app.post("/api/orchestrator/redeploy", authMiddleware, requireSuperadmin, async (_req, res) => {
   noteExpectedRestart("orchestrator-drift", "Hosted orchestrator (redeploy)", 300000);
-  const context = join(SANDBOX_PROJECT, "orchestrator");
+  const context = join(SANDBOX_SOURCE, "orchestrator");
   const sourceSha = orchestratorSourceSha();
   if (!sourceSha) return res.status(500).json({ success: false, step: "source-sha", error: "Hosted source SHA is unavailable" });
   const build = exec(orchestratorBuildCommand(context, sourceSha), { cwd: context, timeout: 300000 });
@@ -4238,7 +4254,7 @@ app.post("/api/orchestrator/pull-redeploy", authMiddleware, requireSuperadmin, a
   const pull = exec(`git -C ${SANDBOX_PROJECT} fetch origin main && git -C ${SANDBOX_PROJECT} reset --hard origin/main`, { timeout: 120000 });
   if (!pull.success) return res.status(500).json({ success: false, step: "git-pull", error: pull.error || pull.output });
   _sbxRepoCache = { ts: 0, data: null };
-  const context = join(SANDBOX_PROJECT, "orchestrator");
+  const context = join(SANDBOX_SOURCE, "orchestrator");
   const sourceSha = orchestratorSourceSha();
   if (!sourceSha) return res.status(500).json({ success: false, step: "source-sha", error: "Hosted source SHA is unavailable" });
   const build = exec(orchestratorBuildCommand(context, sourceSha), { cwd: context, timeout: 300000 });
@@ -4250,16 +4266,16 @@ app.post("/api/orchestrator/pull-redeploy", authMiddleware, requireSuperadmin, a
   res.status(recreate.success ? 200 : 500).json({ success: recreate.success, step: recreate.success ? "done" : "recreate", pulled: pull.output, output: recreate.output || recreate.error, ready });
 });
 
-// Trigger the matrx-sandbox 'Deploy' GitHub Actions workflow on main (redeploys
+// Trigger the Sandbox Deploy GitHub Actions workflow (aidream) on main (redeploys
 // the EC2 orchestrator via SSM). superadmin.
 app.post("/api/ec2/trigger-deploy", authMiddleware, requireSuperadmin, async (req, res) => {
   const pat = process.env.GITHUB_PAT || "";
   if (!pat) return res.status(503).json({ error: "GITHUB_PAT not configured on the Manager" });
   try {
-    const r = await fetch("https://api.github.com/repos/armanisadeghi/matrx-sandbox/actions/workflows/deploy.yml/dispatches", {
+    const r = await fetch(`https://api.github.com/repos/${sandboxRepo()}/actions/workflows/${sandboxDeployWorkflow()}/dispatches`, {
       method: "POST",
       headers: { Authorization: `Bearer ${pat}`, Accept: "application/vnd.github+json", "Content-Type": "application/json" },
-      body: JSON.stringify({ ref: "main" }),
+      body: JSON.stringify({ ref: "main", inputs: { requested_by: "matrx-manager" } }),
     });
     if (r.status !== 204) { const t = await r.text(); return res.status(502).json({ error: `GitHub dispatch failed: ${r.status} ${t.slice(0, 200)}` }); }
     _sbxRepoCache = { ts: 0, data: null };
@@ -4298,7 +4314,7 @@ function streamSpawn(res, { cmd, args, cwd, onDoneLog }) {
 
 // ── Rebuild the orchestrator image + recreate (SSE) ─────────────────────────
 app.post("/api/orchestrator/build/stream", authMiddleware, requireRole("admin"), async (_req, res) => {
-  const context = join(SANDBOX_PROJECT, "orchestrator");
+  const context = join(SANDBOX_SOURCE, "orchestrator");
   const sourceSha = orchestratorSourceSha();
   if (!sourceSha) return res.status(500).json({ success: false, step: "source-sha", error: "Hosted source SHA is unavailable" });
   res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive", "X-Accel-Buffering": "no" });

@@ -6,18 +6,32 @@
 # release-path file (ship.sh, scripts/release.sh, scripts/sync-main.py, a hook here) goes through the
 # guard's static part, read from the index (~0.1 s). A staged change to the guard itself or to
 # release-scream.py (which every hook calls on the release path) runs their proofs.
-root=$(git rev-parse --show-toplevel) || exit 0
-LOCAL_HOOK="$(git rev-parse --git-common-dir)/hooks/pre-commit"
-if [ -x "$LOCAL_HOOK" ]; then
-    "$LOCAL_HOOK" "$@" || exit $?
+#
+# NESTED in the aidream monorepo (infra/matrx-ship, 2026-10-23): aidream's pre-commit runs this hook
+# (scripts/githooks/dispatch-app-hooks.sh, MATRX_HOOK_DISPATCHED=1) when a commit stages a path under
+# infra/matrx-ship/. `root` is ship's own folder either way, and staged paths are relative to it.
+root=$(cd "$(dirname "$0")/.." && pwd) || exit 0
+top=$(git -C "$root" rev-parse --show-toplevel) || exit 0
+if [ "${MATRX_HOOK_DISPATCHED:-0}" != "1" ]; then
+    LOCAL_HOOK="$(git rev-parse --git-common-dir)/hooks/pre-commit"
+    if [ -x "$LOCAL_HOOK" ]; then
+        "$LOCAL_HOOK" "$@" || exit $?
+    fi
 fi
 [ "${MATRX_RELEASE_PATH:-0}" = "1" ] && exit 0
 command -v python3 >/dev/null 2>&1 || exit 0
-staged=$(git diff --cached --name-only --diff-filter=AMR)
+staged=$(git -C "$root" diff --cached --name-only --diff-filter=AMR --relative)
 refuse() {
     echo "COMMIT REFUSED: $1" >&2
     exit 1
 }
+
+# No junk (Arman 2026-10-23): no screenshots, media, archives, logs, binaries or files over 1 MB. The guard is
+# common-docs' no_junk.py (nested only: standalone there is no common-docs/ in this checkout). A real asset
+# goes in .junk-allowlist.txt with a `# reason`.
+if [ -f "$top/common-docs/meta/scripts/no_junk.py" ]; then
+    python3 "$top/common-docs/meta/scripts/no_junk.py" --staged --root "$root" || exit 1
+fi
 
 rp_files=$(printf '%s\n' "$staged" | grep -E '^(\.githooks/[^/]+|ship\.sh|scripts/release\.sh|scripts/sync-main\.py)$')
 if [ -n "$rp_files" ]; then

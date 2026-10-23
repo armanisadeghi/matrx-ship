@@ -24,3 +24,27 @@ export function shipRepo(env = process.env) {
 export function shipCiWorkflow(env = process.env) {
   return env.SHIP_CI_WORKFLOW || "ci-cd.yml";
 }
+
+// The sandbox's source (matrx-sandbox moved into aidream at infra/matrx-sandbox, 2026-10-23). The /srv clone stays
+// at /srv/projects/matrx-sandbox, now a sparse checkout of aidream with the sandbox in SANDBOX_SUBDIR; the
+// hosted poller deploys refs/heads/deploy/sandbox-hosted; approvals are sandbox/deploy-approved/<sha> tags.
+// Same knob pattern as ship's: every value an env override, the default today's truth.
+export function sandboxRepo(env = process.env) {
+  return env.SANDBOX_REPO || "AI-Matrix-Engine/aidream";
+}
+
+export function sandboxSubdir(env = process.env) {
+  return env.SANDBOX_SUBDIR ?? "infra/matrx-sandbox";
+}
+
+export function sandboxDeployWorkflow(env = process.env) {
+  return env.SANDBOX_DEPLOY_WORKFLOW || "sandbox-deploy.yml";
+}
+
+export function sandboxHostedRef(env = process.env) {
+  return env.SANDBOX_HOSTED_REF || "deploy/sandbox-hosted";
+}
+
+export function sandboxApprovalTagPrefix(env = process.env) {
+  return env.SANDBOX_APPROVAL_TAG_PREFIX || "sandbox/deploy-approved";
+}

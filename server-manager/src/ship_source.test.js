@@ -20,3 +20,14 @@ test("after the move the env names the monorepo folder and wins over the old wri
   assert.equal(shipRepo(env), "AI-Matrix-Engine/aidream");
   assert.equal(shipCiWorkflow(env), "ship-ci-cd.yml");
 });
+
+test("the sandbox's source is infra/matrx-sandbox of aidream, deployed by Sandbox Deploy (2026-10-23)", async () => {
+  const m = await import("./ship_source.js");
+  assert.equal(m.sandboxRepo({}), "AI-Matrix-Engine/aidream");
+  assert.equal(m.sandboxSubdir({}), "infra/matrx-sandbox");
+  assert.equal(m.sandboxDeployWorkflow({}), "sandbox-deploy.yml");
+  assert.equal(m.sandboxHostedRef({}), "deploy/sandbox-hosted");
+  assert.equal(m.sandboxApprovalTagPrefix({}), "sandbox/deploy-approved");
+  assert.equal(m.sandboxSubdir({ SANDBOX_SUBDIR: "" }), "", "an explicit empty subdir means a standalone checkout");
+  assert.equal(m.sandboxRepo({ SANDBOX_REPO: "x/y" }), "x/y");
+});

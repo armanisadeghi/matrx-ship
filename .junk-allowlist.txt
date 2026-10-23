@@ -1,0 +1,12 @@
+# Real assets kept in matrx-ship (no_junk.py --root infra/matrx-ship reads this; one path per line, `# reason`).
+# App icons and favicons the Next apps serve through their metadata (app/layout.tsx icons, manifest).
+public/favicon.ico  # Ship app favicon
+public/icon-32.png  # Ship app icon (metadata icons)
+public/icon-192.png  # Ship app icon (manifest)
+public/icon-512.png  # Ship app icon (manifest)
+public/apple-touch-icon.png  # Ship app apple-touch-icon
+server-manager/public/favicon.ico  # Manager admin favicon
+server-manager/public/icon-32.png  # Manager admin icon
+server-manager/public/icon-192.png  # Manager admin icon
+server-manager/public/icon-512.png  # Manager admin icon
+server-manager/public/apple-touch-icon.png  # Manager admin apple-touch-icon

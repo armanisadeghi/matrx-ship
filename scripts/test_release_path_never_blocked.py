@@ -73,7 +73,7 @@ def sh(args, cwd, env=None, check=True):
 
 def hook_text(repo, path):
     if REV:
-        return sh(["git", "show", "%s:%s" % (REV, path)], os.path.join(CODE, repo)).stdout
+        return sh(["git", "show", "%s:./%s" % (REV, path)], os.path.join(CODE, repo)).stdout
     with open(os.path.join(CODE, repo, path)) as f:
         return f.read()
 
@@ -127,7 +127,7 @@ def check_hook(repo):
 def read(repo, rel):
     try:
         if REV:
-            return sh(["git", "show", "%s:%s" % (REV, rel)], os.path.join(CODE, repo)).stdout
+            return sh(["git", "show", "%s:./%s" % (REV, rel)], os.path.join(CODE, repo)).stdout
         with open(os.path.join(CODE, repo, rel)) as f:
             return f.read()
     except (OSError, AssertionError):
@@ -266,12 +266,14 @@ def staged_static(repo_dir, files):
     """Commit-time: the checks that name these files, read from the index. -> list of findings."""
     repo = os.path.basename(os.path.realpath(repo_dir))
     if not files:
-        r = subprocess.run(["git", "diff", "--cached", "--name-only", "--diff-filter=AMR"], cwd=repo_dir, capture_output=True, text=True)
+        # --relative: nested (infra/matrx-ship in aidream, 2026-10-23) the names are ship-relative, like `rel` below
+        r = subprocess.run(["git", "diff", "--cached", "--name-only", "--diff-filter=AMR", "--relative"], cwd=repo_dir, capture_output=True, text=True)
         files = [f for f in r.stdout.splitlines() if COMMIT_TIME_FILE.match(f)]
     bad = []
 
     def blob(rel):
-        r = subprocess.run(["git", "show", ":%s" % rel], cwd=repo_dir, capture_output=True, text=True)
+        # ":./" = relative to repo_dir; plain ":" is the toplevel, which nested is aidream, not ship
+        r = subprocess.run(["git", "show", ":./%s" % rel], cwd=repo_dir, capture_output=True, text=True)
         return r.stdout if r.returncode == 0 else None
 
     for rel in files:

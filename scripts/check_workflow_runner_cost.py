@@ -522,14 +522,43 @@ def check_manifest(root: Path, shapes: dict[str, dict]) -> list[str]:
 def sibling_manifests(root: Path) -> dict[str, dict]:
     """Every OTHER repo's manifest beside this one (locally /Users/armanisadeghi/code/*; none in CI)."""
     found: dict[str, dict] = {}
+    me = root.resolve()
     for path in sorted(root.resolve().parent.glob(f"*/{MANIFEST}")):
         repo = path.parent.parent
-        if repo.resolve() != root.resolve():
-            try:
-                found[repo.name] = json.loads(path.read_text(encoding="utf-8"))
-            except json.JSONDecodeError as exc:
-                found[repo.name] = {"_error": str(exc)}
+        real = repo.resolve()
+        # A folder of a monorepo reached through a symlink (code/matrx-sandbox -> aidream/infra/matrx-sandbox,
+        # 2026-10-23) is part of that repo: its workflows run from, and are counted in, the host's manifest.
+        if real == me or me in real.parents or any(real != r and r in real.parents for r in _code_repos(root)):
+            continue
+        try:
+            found[repo.name] = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            found[repo.name] = {"_error": str(exc)}
     return found
+
+
+def nested_self_test() -> int:
+    """A monorepo folder reached through a code/<name> symlink is counted once, under its host (2026-10-23)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        code = Path(tmp)
+        for rel in ("host", "host/infra/part", "other"):
+            (code / rel / ".github").mkdir(parents=True, exist_ok=True)
+            (code / rel / MANIFEST).write_text("{}", encoding="utf-8")
+        (code / "host" / ".git").mkdir()
+        (code / "other" / ".git").mkdir()
+        (code / "part").symlink_to(code / "host" / "infra" / "part")
+        from_host, from_other = sorted(sibling_manifests(code / "host")), sorted(sibling_manifests(code / "other"))
+    if from_host != ["other"] or from_other != ["host"]:
+        print(f"nested self-test FAILED: host sees {from_host}, other sees {from_other} (expected ['other'] and ['host']: "
+              "code/part is a folder of host, counted in host's manifest)")
+        return 1
+    print("nested self-test ok: a monorepo folder behind a code/<name> symlink is not a second repo")
+    return 0
+
+
+def _code_repos(root: Path) -> list[Path]:
+    """The real locations of the repositories beside this one (each a folder with .git, not a symlink)."""
+    return [p.resolve() for p in root.resolve().parent.iterdir() if (p / ".git").exists() and not p.is_symlink()]
 
 
 def check_ceiling(root: Path) -> list[str]:
@@ -1422,7 +1451,8 @@ def main() -> int:
     parser.add_argument("--hours", type=float, default=24.0)
     args = parser.parse_args()
     if args.self_test:
-        return self_test() or schedule_self_test() or manifest_self_test() or money_self_test() or severity_self_test() or measured_self_test()
+        return (self_test() or schedule_self_test() or manifest_self_test() or money_self_test() or severity_self_test()
+                or measured_self_test() or nested_self_test())
     if args.measure:
         manifest = _load_manifest(args.root)
         if manifest is None:

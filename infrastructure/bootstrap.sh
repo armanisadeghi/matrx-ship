@@ -188,12 +188,28 @@ fi
 [ -f "${SHIP_SRC}/Dockerfile" ] || { err "ship source not found at ${SHIP_SRC} (SHIP_CLONE_DIR/SHIP_SUBDIR)"; exit 1; }
 
 # Clone other repos if URLs provided
+# The sandbox (2026-10-23) is infra/matrx-sandbox of AI-Matrix-Engine/aidream (private): SANDBOX_REPO_URL is that
+# repo (GITHUB_TOKEN reads it, as for ship above), cloned sparse into /srv/projects/matrx-sandbox at the tested
+# hosted ref; the hosted-deploy poller reads /etc/matrx/sandbox-release.env (aidream
+# scripts/monorepo/kit/40-sandbox/host_repoint.sh writes the same three lines on an existing host).
+SANDBOX_SUBDIR="${SANDBOX_SUBDIR:-infra/matrx-sandbox}"
+SANDBOX_DEPLOY_REF="${SANDBOX_DEPLOY_REF:-refs/heads/deploy/sandbox-hosted}"
 if [ -n "${SANDBOX_REPO_URL:-}" ]; then
-  if [ -d /srv/projects/matrx-sandbox ]; then
-    cd /srv/projects/matrx-sandbox && git pull origin main
+  if [ -d /srv/projects/matrx-sandbox/.git ]; then
+    git_auth -C /srv/projects/matrx-sandbox fetch --quiet origin "${SANDBOX_DEPLOY_REF}" \
+      && git -C /srv/projects/matrx-sandbox checkout --quiet --detach FETCH_HEAD
   else
-    git clone "${SANDBOX_REPO_URL}" /srv/projects/matrx-sandbox
+    git_auth clone --quiet --filter=blob:none --no-checkout "${SANDBOX_REPO_URL}" /srv/projects/matrx-sandbox
+    git -C /srv/projects/matrx-sandbox sparse-checkout set --cone "${SANDBOX_SUBDIR}"
+    if git_auth -C /srv/projects/matrx-sandbox fetch --quiet origin "${SANDBOX_DEPLOY_REF}"; then
+      git -C /srv/projects/matrx-sandbox checkout --quiet --detach FETCH_HEAD
+    else
+      git -C /srv/projects/matrx-sandbox checkout --quiet --detach origin/main
+    fi
   fi
+  mkdir -p /etc/matrx
+  printf '%s\n' "MATRX_SANDBOX_CHECKOUT=/srv/projects/matrx-sandbox" "MATRX_SANDBOX_SUBDIR=${SANDBOX_SUBDIR}" \
+    "MATRX_SANDBOX_DEPLOY_REF=${SANDBOX_DEPLOY_REF}" > /etc/matrx/sandbox-release.env
 fi
 
 if [ -n "${MCP_TEMPLATE_REPO_URL:-}" ]; then
