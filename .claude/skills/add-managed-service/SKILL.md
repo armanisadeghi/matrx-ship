@@ -9,6 +9,7 @@ description: "Onboarding recipe for a PyPI-published aidream package as a manage
 <!-- rules:stamp -->
 > Rules from `common-docs/systems/architecture/deploy-control-plane/STATE.md` — edit there, never here (`python3 common-docs/meta/scripts/one_home.py --write`).
 
+- **Quality guards run at write and commit time, never on the release path** (Arman, 2026-10-22): the agents' edit hook, `pre-commit` on the agent's own commit, and the sweep (`sync-main.py` leaves a conflict-marked or unparseable file uncommitted) catch it; nothing in a build, publish or release fails on it, not even a "fast-fail" of a doomed build.
 - **A release script never refuses.** It bumps, pushes fast, and reports only WARNING/ERROR rows, each category in its own opened-and-closed section, printed only when non-empty. Checks that complain run after the push. The lock covers only the bump and push (30 s takeover).
 - aidream and matrx-frontend await migrations after the push and name every held migration with its reason. **One bad migration holds only itself and the files that build on it.** Outside 01:00–04:00 PT a table-building file runs under a 60 s cap (`_start_time_cap_watchdog`, `PROVISIONING_TIME_CAP_SECONDS`) instead of being refused; autocommit lock-taking files are still refused outside the window (cannot be rolled back).
 - 14 smaller repos run one shared script, `matrx-ship/scripts/release-template.sh` plus a five-line settings block, guarded by `test-release-template.sh` (run with `/bin/bash`). matrx-extend ships first and builds store zips after.
