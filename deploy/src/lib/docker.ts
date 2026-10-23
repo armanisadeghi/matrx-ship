@@ -9,6 +9,11 @@ import { recordBuildInSupabase, auditLog } from "./supabase";
 
 // Host paths — the deploy container mounts /srv and Docker socket
 const HOST_SRV = process.env.HOST_SRV_PATH || "/host-srv";
+// Where ship's own source lives on the host (monorepo move, 2026-10-22; server-manager/src/ship_source.js has
+// the same knob). Default = today's own-repo checkout; after the move SHIP_SOURCE_DIR names
+// /srv/projects/aidream/infra/matrx-ship. Git reads below are path-limited to it (`-- .`).
+export const SHIP_SOURCE_DIR = process.env.SHIP_SOURCE_DIR || "/srv/projects/matrx-ship";
+export const SHIP_SOURCE_HOST = SHIP_SOURCE_DIR.replace(/^\/srv(?=\/|$)/, HOST_SRV);
 const APPS_DIR = join(HOST_SRV, "apps");
 const DEPLOYMENTS_FILE = join(APPS_DIR, "deployments.json");
 const BUILD_HISTORY_FILE = join(APPS_DIR, "build-history.json");
@@ -143,7 +148,7 @@ function loadDeployments(): DeploymentConfig {
   try {
     return JSON.parse(readFileSync(DEPLOYMENTS_FILE, "utf-8"));
   } catch {
-    return { defaults: { image: "matrx-ship:latest", source: "/srv/projects/matrx-ship", domain_suffix: "dev.codematrx.com", postgres_image: "postgres:17-alpine" }, instances: {} };
+    return { defaults: { image: "matrx-ship:latest", source: SHIP_SOURCE_DIR, domain_suffix: "dev.codematrx.com", postgres_image: "postgres:17-alpine" }, instances: {} };
   }
 }
 
@@ -194,7 +199,7 @@ function generateBuildTag() {
 
 export function getBuildInfo() {
   const config = loadDeployments();
-  const src = join(HOST_SRV, "projects/matrx-ship");
+  const src = SHIP_SOURCE_HOST;
 
   const imgInspect = exec("docker inspect matrx-ship:latest --format '{{.Id}} {{.Created}}' 2>/dev/null");
   let currentImage = { id: null as string | null, created: null as string | null, age: null as string | null };
@@ -215,12 +220,12 @@ export function getBuildInfo() {
   let pendingCommits: string[] = [];
   let diffStats: string | null = null;
   if (lastBuildCommit && gitCommit.output && lastBuildCommit !== gitCommit.output) {
-    const logResult = exec(`git -C ${src} log --oneline ${lastBuildCommit}..HEAD 2>/dev/null`);
+    const logResult = exec(`git -C ${src} log --oneline ${lastBuildCommit}..HEAD -- . 2>/dev/null`);
     if (logResult.success && logResult.output) pendingCommits = logResult.output.split("\n").filter(Boolean);
-    const statResult = exec(`git -C ${src} diff --stat ${lastBuildCommit}..HEAD 2>/dev/null`);
+    const statResult = exec(`git -C ${src} diff --stat ${lastBuildCommit}..HEAD -- . 2>/dev/null`);
     if (statResult.success) diffStats = statResult.output;
   } else if (!lastBuildCommit) {
-    const logResult = exec(`git -C ${src} log --oneline -10 2>/dev/null`);
+    const logResult = exec(`git -C ${src} log --oneline -10 -- . 2>/dev/null`);
     if (logResult.success && logResult.output) pendingCommits = logResult.output.split("\n").filter(Boolean);
   }
 
@@ -242,7 +247,7 @@ export function getBuildInfo() {
   return {
     current_image: currentImage,
     source: {
-      path: "/srv/projects/matrx-ship",
+      path: SHIP_SOURCE_DIR,
       branch: gitBranch.output || "unknown",
       head_commit: gitCommit.output || "unknown",
       last_build_commit: lastBuildCommit,
@@ -269,10 +274,10 @@ export function rebuildInstances(opts: { name?: string; skip_build?: boolean; tr
   const results: Record<string, unknown> = {};
   const started_at = new Date().toISOString();
   const buildTag = generateBuildTag();
-  const src = join(HOST_SRV, "projects/matrx-ship");
+  const src = SHIP_SOURCE_HOST;
 
   const gitCommit = exec(`git -C ${src} rev-parse --short HEAD`);
-  const gitLog = exec(`git -C ${src} log -1 --pretty=format:"%s"`);
+  const gitLog = exec(`git -C ${src} log -1 --pretty=format:"%s" -- .`);
 
   let imageId: string | null = null;
   if (!opts.skip_build) {
@@ -411,12 +416,12 @@ export function streamingRebuild(
 ): Promise<void> {
   return new Promise((resolve) => {
     const config = loadDeployments();
-    const src = join(HOST_SRV, "projects/matrx-ship");
+    const src = SHIP_SOURCE_HOST;
     const buildTag = generateBuildTag();
     const started_at = new Date().toISOString();
 
     const gitCommit = exec(`git -C ${src} rev-parse --short HEAD`);
-    const gitLog = exec(`git -C ${src} log -1 --pretty=format:"%s"`);
+    const gitLog = exec(`git -C ${src} log -1 --pretty=format:"%s" -- .`);
 
     send("log", { message: `Build started at ${started_at}` });
     send("log", { message: `Source: ${src}` });

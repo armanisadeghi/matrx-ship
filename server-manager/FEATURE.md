@@ -142,6 +142,14 @@ available on 2026-08-11, when the aidream image build failed every 2 minutes
 for 20 h (the build deleted tracked files from the source tree it then
 certified) and the dashboard could not name it.
 
+## Where ship's own source lives
+
+[src/ship_source.js](src/ship_source.js) is the one place that names it: `SHIP_SOURCE_DIR` (host folder,
+default `/srv/projects/matrx-ship`; wins over `deployments.json` `defaults.source` when set), `SHIP_REPO`
+(default `armanisadeghi/matrx-ship`) and `SHIP_CI_WORKFLOW` (default `ci-cd.yml`). The Deploy server reads the
+same `SHIP_SOURCE_DIR` (`deploy/src/lib/docker.ts`). Git reads are path-limited (`-- .`) so they still show
+ship's commits only once the folder is `infra/matrx-ship` inside the aidream monorepo. Never hard-code the path.
+
 ## Destructive-op and repair guardrails
 
 - `shell_exec` refuses `docker rmi` / `docker ... prune -a` targeting

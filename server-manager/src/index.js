@@ -57,6 +57,7 @@ import http from "node:http";
 import { attachTerminalWs } from "./terminal_ws.js";
 import { oauthEnabled, authenticateOAuthAdmin } from "./oauth_auth.js";
 import { waitForOrchestratorReady } from "./orchestrator_readiness.js";
+import { SHIP_SOURCE_DEFAULT, shipSourceDir, shipRepo, shipCiWorkflow } from "./ship_source.js";
 import { assessAidreamPipeline, fetchAidreamReleaseCandidateSha, fetchAidreamWorkflowRunJobs, fetchAidreamWorkflowRuns, latestRuntimeDeployRun } from "./aidream_pipeline.js";
 
 const PORT = process.env.PORT || 3000;
@@ -480,7 +481,7 @@ function loadDeployments() {
   try {
     return JSON.parse(readFileSync(DEPLOYMENTS_FILE, "utf-8"));
   } catch {
-    return { defaults: { image: "matrx-ship:latest", source: "/srv/projects/matrx-ship", domain_suffix: DOMAIN_SUFFIX, postgres_image: "postgres:17-alpine" }, instances: {} };
+    return { defaults: { image: "matrx-ship:latest", source: SHIP_SOURCE_DEFAULT, domain_suffix: DOMAIN_SUFFIX, postgres_image: "postgres:17-alpine" }, instances: {} };
   }
 }
 
@@ -785,11 +786,11 @@ function rebuildInstances({ name, skip_build, triggered_by } = {}) {
   const results = {};
   const started_at = new Date().toISOString();
   const buildTag = generateBuildTag();
-  const src = resolveHostPath(config.defaults?.source || "/srv/projects/matrx-ship");
+  const src = resolveHostPath(shipSourceDir(config));
 
   // Capture git info from source
   const gitCommit = exec(`git -C ${src} rev-parse --short HEAD`);
-  const gitLog = exec(`git -C ${src} log -1 --pretty=format:"%s"`);
+  const gitLog = exec(`git -C ${src} log -1 --pretty=format:"%s" -- .`);
 
   // Step 1: Build the Docker image (unless skipped)
   let imageId = null;
@@ -898,7 +899,7 @@ function selfRebuild() {
 
 function getBuildInfo() {
   const config = loadDeployments();
-  const src = resolveHostPath(config.defaults?.source || "/srv/projects/matrx-ship");
+  const src = resolveHostPath(shipSourceDir(config));
 
   // Current image info
   const imgInspect = exec("docker inspect matrx-ship:latest --format '{{.Id}} {{.Created}}' 2>/dev/null");
@@ -924,7 +925,7 @@ function getBuildInfo() {
   let pendingCommits = [];
   let diffStats = null;
   if (lastBuildCommit && gitCommit.output && lastBuildCommit !== gitCommit.output) {
-    const logResult = exec(`git -C ${src} log --oneline ${lastBuildCommit}..HEAD 2>/dev/null`);
+    const logResult = exec(`git -C ${src} log --oneline ${lastBuildCommit}..HEAD -- . 2>/dev/null`);
     if (logResult.success && logResult.output) {
       pendingCommits = logResult.output.split("\n").filter(Boolean);
     }
@@ -932,7 +933,7 @@ function getBuildInfo() {
     if (statResult.success) diffStats = statResult.output;
   } else if (!lastBuildCommit) {
     // No previous build — show recent commits
-    const logResult = exec(`git -C ${src} log --oneline -10 2>/dev/null`);
+    const logResult = exec(`git -C ${src} log --oneline -10 -- . 2>/dev/null`);
     if (logResult.success && logResult.output) {
       pendingCommits = logResult.output.split("\n").filter(Boolean);
     }
@@ -958,7 +959,7 @@ function getBuildInfo() {
   return {
     current_image: currentImage,
     source: {
-      path: config.defaults?.source || "/srv/projects/matrx-ship",
+      path: shipSourceDir(config),
       branch: gitBranch.output || "unknown",
       head_commit: gitCommit.output || "unknown",
       last_build_commit: lastBuildCommit,
@@ -1866,12 +1867,12 @@ app.post("/api/rebuild/stream", authMiddleware, requireRole("admin", "deployer")
   };
 
   const config = loadDeployments();
-  const src = resolveHostPath(config.defaults?.source || "/srv/projects/matrx-ship");
+  const src = resolveHostPath(shipSourceDir(config));
   const buildTag = generateBuildTag();
   const started_at = new Date().toISOString();
 
   const gitCommit = exec(`git -C ${src} rev-parse --short HEAD`);
-  const gitLog = exec(`git -C ${src} log -1 --pretty=format:"%s"`);
+  const gitLog = exec(`git -C ${src} log -1 --pretty=format:"%s" -- .`);
 
   send("log", { message: `Build started at ${started_at}` });
   send("log", { message: `Source: ${src}` });
@@ -2325,7 +2326,7 @@ app.get("/api/instances/outdated", authMiddleware, async (_req, res) => {
 // ── Documentation ───────────────────────────────────────────────────────────
 
 app.get("/api/docs", authMiddleware, async (req, res) => {
-  const docsDir = join(HOST_SRV, "projects/matrx-ship/docs/ops");
+  const docsDir = join(resolveHostPath(shipSourceDir(loadDeployments())), "docs/ops");
   const slug = req.query.slug;
 
   if (slug) {
@@ -4077,7 +4078,7 @@ async function checkMicroservice(svc) {
 const GHA_RETRY_STATE_FILE = "/host-srv/apps/deploy-state/gha-auto-retries.json";
 const GHA_RETRY_TARGETS = [
   { repo: "armanisadeghi/matrx-sandbox", workflow: "deploy.yml", label: "matrx-sandbox Deploy" },
-  { repo: "armanisadeghi/matrx-ship", workflow: "ci-cd.yml", label: "matrx-ship CI/CD" },
+  { repo: shipRepo(), workflow: shipCiWorkflow(), label: "matrx-ship CI/CD" },
 ];
 
 function loadRetryState() {

@@ -1,8 +1,9 @@
 import { NextResponse } from "next/server";
 import { readdirSync, readFileSync, existsSync, statSync } from "node:fs";
 import { join, basename } from "node:path";
+import { SHIP_SOURCE_HOST } from "@/lib/docker";
 
-const DOCS_DIR = "/host-srv/projects/matrx-ship/docs/ops";
+const DOCS_DIR = `${SHIP_SOURCE_HOST}/docs/ops`;
 
 function getDocsTree(dir: string, prefix = ""): { slug: string; title: string; path: string }[] {
   if (!existsSync(dir)) return [];
