@@ -30,7 +30,8 @@ Exit 0 when every shipped repo finished and nothing is open; 1 otherwise.
 After every ship (step 3b), GitHub-side work is LANDED, not just reported (Arman, 2026-10-03:
 "Why do we have any remote branches period?"): every open, non-draft pull request is merged
 (merge commit, branch deleted); every remote branch with zero commits missing from origin/main is
-deleted; a branch under deploy/ is a deploy pointer CI moves and is never touched. What could not
+deleted; a branch under deploy/ is a deploy pointer CI moves and is never touched, and a branch whose
+name contains "theory" (and its PR) is left open on purpose (Arman, 2026-10-22). What could not
 be landed (a PR GitHub cannot merge cleanly, a branch holding unmerged commits, a draft) is listed
 under NEEDS LANDING for the running agent to merge by hand. @ai-matrx packages are measured again
 after shipping; a folder still behind npm is a PROBLEM, not a footnote.
@@ -341,6 +342,13 @@ def ship_cmd(info, note):
     return ["bash", "-c", SYNC_ONLY_SCRIPT, "bash"] + flags
 
 PROTECTED_BRANCH_PREFIXES = ("deploy/",)   # pointers CI moves (matrx-sandbox deploy/hosted)
+# Branches left unmerged on purpose (Arman, 2026-10-22): any branch whose name contains "theory" is
+# never merged, deleted or listed under NEEDS LANDING, and neither is a PR whose head is one.
+LEFT_OPEN_BRANCH_WORDS = ("theory",)
+
+
+def left_open(name):
+    return any(w in (name or "").lower() for w in LEFT_OPEN_BRANCH_WORDS)
 
 
 def land_github_work(info):
@@ -354,7 +362,7 @@ def land_github_work(info):
             view = json.loads(out) if rc == 0 else {}
         except ValueError:
             view = {}
-        if view.get("state") != "OPEN":
+        if view.get("state") != "OPEN" or left_open(pr.get("headRefName")):
             continue
         if view.get("isDraft"):
             info["needs_landing"].append("PR #%s is a draft: %s" % (pr["number"], pr["url"]))
@@ -371,7 +379,7 @@ def land_github_work(info):
         if ref in ("origin/HEAD", "origin/main", "origin"):
             continue
         name = ref[len("origin/"):]
-        if name.startswith(PROTECTED_BRANCH_PREFIXES):
+        if name.startswith(PROTECTED_BRANCH_PREFIXES) or left_open(name):
             continue
         rc, cnt, _ = git(repo, "rev-list", "--count", "origin/main..%s" % ref)
         missing = int(cnt.strip() or 0) if rc == 0 else -1
@@ -384,7 +392,8 @@ def land_github_work(info):
         else:
             info["needs_landing"].append("branch %s holds %s commit(s) not on main" % (name, missing))
     _, rbs, _ = git(repo, "for-each-ref", "refs/remotes/origin", "--format=%(refname:short)")
-    info["remote_branches_after"] = [r for r in lines(rbs) if r not in ("origin/HEAD", "origin/main", "origin")]
+    info["remote_branches_after"] = [r for r in lines(rbs) if r not in ("origin/HEAD", "origin/main", "origin")
+                                     and not left_open(r[len("origin/"):])]
 
 
 def open_prs(repo):
