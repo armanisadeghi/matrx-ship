@@ -159,11 +159,16 @@ def inspect(repo):
     _, br, _ = git(repo, "symbolic-ref", "-q", "--short", "HEAD")
     info["branch"] = br.strip()
     info["has_ship"] = os.path.isfile(os.path.join(repo, "ship.sh"))
+    _, pfx, _ = git(repo, "rev-parse", "--show-prefix")
+    info["nested_prefix"] = pfx.strip()   # "" for a repository root; "apps/x/" for a nested app
+    _, top, _ = git(repo, "rev-parse", "--show-toplevel")
+    # One lock per CHECKOUT: a nested app and its host share one working tree and one index.
+    info["lock_name"] = os.path.basename(top.strip()) or info["repo"]
     rc, _, err = git(repo, "fetch", "-q", "--prune", "origin", timeout=90)
     info["fetch_ok"] = rc == 0
     if rc != 0:
         info["fetch_error"] = err.strip()[:300]
-    _, st, _ = git(repo, "status", "--porcelain")
+    _, st, _ = git(repo, "status", "--porcelain", *(["--", "."] if info["nested_prefix"] else []))
     info["dirty"] = len(lines(st))
     rc, ab, _ = git(repo, "rev-list", "--left-right", "--count", "HEAD...origin/%s" % (info["branch"] or "main"))
     a, b = (ab.split() + ["0", "0"])[:2] if rc == 0 else ("0", "0")
@@ -176,7 +181,9 @@ def inspect(repo):
     info["extra_worktrees"] = [l.split(" ", 1)[1] for l in lines(wts) if l.startswith("worktree ")][1:]
     _, rbs, _ = git(repo, "for-each-ref", "refs/remotes/origin", "--format=%(refname:short)")
     info["remote_branches"] = [r for r in lines(rbs) if r not in ("origin/HEAD", "origin/main", "origin")]
-    info["open_prs"] = open_prs(repo)
+    if info["nested_prefix"]:   # branches, worktrees and PRs belong to the host; reported there once
+        info["local_branches"], info["extra_worktrees"], info["remote_branches"] = [], [], []
+    info["open_prs"] = [] if info["nested_prefix"] else open_prs(repo)
     info["stale_packages"] = stale_packages(repo)
     return info
 
@@ -309,6 +316,12 @@ SHIP_CMD = ["bash", "-c", 'source ./ship.sh "$@"', "bash"]
 # meaningful to ship: ship-all syncs it (commit, merge GitHub's main, push) and never releases it.
 # (2026-10: ship-all released matrx-local ~20 times a day, each a macOS/Windows/Linux build.)
 RELEASE_TRAIN = {"aidream", "matrx-frontend"}
+# NESTED APPS (monorepo cutover kit 30): an app that moved INTO another repository keeps its own
+# ./ship.sh and its place on the train, but has no .git of its own, so the `<code>/<name>/.git` scan
+# cannot see it. Listed per host repository; shipped only when <host>/<path>/ship.sh exists; named
+# by its folder (matrx-frontend), so every name-keyed rule below still applies. The old top-level
+# path, if kept as a symlink to it, has no .git and is never shipped a second time.
+NESTED_TRAIN = {"aidream": ("apps/matrx-frontend",)}
 SYNC_ONLY_SCRIPT = ('python3 scripts/sync-main.py "$@"; rc=$?; echo ""; '
                     'echo "ship-all: not on the 30-minute release train: synced, not released."; '
                     'echo "ship.sh: sync exit $rc, release exit 0 (sync only)"; exit $rc')
@@ -435,7 +448,8 @@ def active_release_slot(info):
                     if not isinstance(message, str):
                         return "%s release status had an unexpected shape" % project
                     if (deployment.get("state") in ("BUILDING", "QUEUED", "INITIALIZING")
-                            and message.startswith(("release:", "release-all:", "release-admin:", "release-demos:"))):
+                            and message.startswith(("web-release:", "web-release-all:", "web-release-admin:",
+                                            "web-release-demos:", "web-release-lab:"))):
                         return "%s has an active or queued release build" % project
                 pagination = listing.get("pagination")
                 if not isinstance(pagination, dict):
@@ -457,7 +471,7 @@ LIVE_CHECK_SH = r'''
 set -u
 source scripts/release-outcome.sh >/dev/null 2>&1 || exit 0
 sha="$1"; msg="$2"
-case "$msg" in release-all:*) t=all;; release-admin:*) t=admin;; release-demos:*) t=demos;; release-lab:*) t=lab;; *) t=main;; esac
+case "$msg" in web-release-all:*) t=all;; web-release-admin:*) t=admin;; web-release-demos:*) t=demos;; web-release-lab:*) t=lab;; *) t=main;; esac
 for bt in $(release_outcome_targets "$t"); do
   release_outcome_would_build "$msg" "$bt" || continue
   pid=$(release_outcome_project_id "$bt"); IFS=$'\t' read -r st uid url < <(release_outcome_fetch "$pid" "$sha")
@@ -475,8 +489,10 @@ def release_liveness(info):
     repo = info["path"]
     if not os.path.isfile(os.path.join(repo, "scripts", "release-outcome.sh")):
         return []
-    rc, out, _err = git(repo, "log", "origin/main", "-200", "--format=%H%x09%ct%x09%s")
-    rels = [l.split("\t", 2) for l in lines(out) if re.match(r"^release(-[a-z]+)?: ", l.split("\t", 2)[-1])][:3]
+    # `-- .` scopes the log to this folder: nested at apps/matrx-frontend it must not read the host repo's
+    # (server) history. The subject family is `web-release*:` (the server's own releases are `release: vX`).
+    rc, out, _err = git(repo, "log", "origin/main", "-200", "--format=%H%x09%ct%x09%s", "--", ".")
+    rels = [l.split("\t", 2) for l in lines(out) if re.match(r"^web-release(-[a-z]+)?: ", l.split("\t", 2)[-1])][:3]
     if not rels:
         return []
     states = []
@@ -563,10 +579,10 @@ def stale_release_alarm(info, served=None, mail=None, now=time.time, state_path=
     commit = served if served is not None else served_commit()
     if not commit:
         return None
-    rc, out, _ = git(repo, "rev-list", "--count", "%s..origin/main" % commit)
+    rc, out, _ = git(repo, "rev-list", "--count", "%s..origin/main" % commit, "--", ".")
     behind = int(out.strip()) if rc == 0 and out.strip().isdigit() else None
     if behind is None:      # the served commit is not in this checkout: main has moved past it
-        rc, out, _ = git(repo, "rev-list", "--count", "origin/main")
+        rc, out, _ = git(repo, "rev-list", "--count", "origin/main", "--", ".")
         behind = 1 if rc == 0 else 0
     try:
         with open(state_path) as f:
@@ -841,7 +857,7 @@ def ship(info, out_dir, stamp):
     """Serialize check-and-dispatch across concurrent ship-all processes per repo."""
     lock_dir = os.path.join(OUT_ROOT, "locks")
     os.makedirs(lock_dir, exist_ok=True)
-    with open(os.path.join(lock_dir, info["repo"] + ".lock"), "a+") as lock:
+    with open(os.path.join(lock_dir, info.get("lock_name", info["repo"]) + ".lock"), "a+") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         return _ship_locked(info, out_dir, stamp)
 
@@ -968,6 +984,13 @@ def main(args=None):
     repos = [os.path.join(CODE, d) for d in sorted(os.listdir(CODE))
              if os.path.isdir(os.path.join(CODE, d, ".git")) and d not in EXCLUDED
              and not ((only and d not in only) or d in skip)]
+    for host, rels in sorted(NESTED_TRAIN.items()):
+        for rel in rels:
+            app, name = os.path.join(CODE, host, rel), os.path.basename(rel)
+            if (os.path.isdir(os.path.join(CODE, host, ".git")) and os.path.isfile(os.path.join(app, "ship.sh"))
+                    and name not in EXCLUDED and not ((only and name not in only) or name in skip)
+                    and all(os.path.realpath(r) != os.path.realpath(app) for r in repos)):
+                repos.append(app)
     say("ship-all %s  (%s)%s" % (stamp, CODE, "  DRY RUN: nothing is shipped" if dry else ""))
 
     # ── 1. check every repo at once (fetch + read-only git) ──────────────────────────────
@@ -1055,7 +1078,7 @@ def main(args=None):
         t0 = time.time()
         say("▶ landing open PRs / merged branches and re-checking packages…")
         def after(info):
-            if info["fetch_ok"] and info["branch"] == "main":
+            if info["fetch_ok"] and info["branch"] == "main" and not info.get("nested_prefix"):
                 land_github_work(info)
             info["stale_packages_after"] = stale_packages(info["path"]) if info["stale_packages"] else []
         with ThreadPoolExecutor(max_workers=8) as pool:

@@ -22,7 +22,7 @@ ship_all.CUTOVER_STOP = str(Path(tempfile.gettempdir(), "ship-all-test-no-stop-%
 class ShipAllCliTests(unittest.TestCase):
     def test_release_liveness_accepts_verified_satellite_skips(self):
         sha = "a" * 40
-        commits = "%s\t%d\trelease-all: v1 - sweep\n" % (sha, int(time.time()))
+        commits = "%s\t%d\tweb-release-all: v1 - sweep\n" % (sha, int(time.time()))
         rows = ("ai-matrx\tREADY\tmain-id\turl\tmain-id\n"
                 "ai-matrx-manage\tSKIPPED_BY_DESIGN\tadmin-id\turl\t\n"
                 "ai-matrx-demos\tSKIPPED_BY_DESIGN\tdemos-id\turl\t\n"
@@ -54,7 +54,7 @@ class ShipAllCliTests(unittest.TestCase):
             self.assertIn("UNVERIFIED", " ".join(
                 ship_all.release_liveness({"path": "/unused/frontend"})))
 
-        older = "%s\t%d\trelease-all: v0 - earlier\n" % ("b" * 40, int(time.time()) - 1800)
+        older = "%s\t%d\tweb-release-all: v0 - earlier\n" % ("b" * 40, int(time.time()) - 1800)
         with patch.object(ship_all.os.path, "isfile", return_value=True), \
              patch.object(ship_all, "git", return_value=(0, commits + older, "")), \
              patch.object(ship_all.subprocess, "run", side_effect=[
@@ -83,7 +83,7 @@ release_outcome_serving() { echo main-id; }
             def rows(main_state, marker):
                 env = dict(ship_all.os.environ, MAIN_STATE=main_state, SKIP_MARKER=marker)
                 result = subprocess.run(["bash", "-c", ship_all.LIVE_CHECK_SH,
-                                         "x", "a" * 40, "release-all: v1 - sweep"],
+                                         "x", "a" * 40, "web-release-all: v1 - sweep"],
                                         cwd=d, env=env, capture_output=True, text=True, check=True)
                 return result.stdout
 
@@ -170,7 +170,7 @@ release_outcome_serving() { echo main-id; }
     def test_frontend_active_release_blocks_but_ordinary_build_does_not(self):
         info = {"repo": "matrx-frontend", "path": "/unused/matrx-frontend"}
         ordinary = {"state": "BUILDING", "meta": {"githubCommitMessage": "feat: ordinary edit"}}
-        release = {"state": "BUILDING", "meta": {"githubCommitMessage": "release-all: v1"}}
+        release = {"state": "BUILDING", "meta": {"githubCommitMessage": "web-release-all: v1"}}
         with patch.object(ship_all, "run", side_effect=[
                 (0, json.dumps({"deployments": [ordinary], "pagination": {}}), ""),
                 (0, json.dumps({"deployments": [release], "pagination": {}}), "")]) as run:
@@ -186,7 +186,7 @@ release_outcome_serving() { echo main-id; }
         info = {"repo": "matrx-frontend", "path": "/unused/matrx-frontend"}
         first = {"deployments": [{"state": "BUILDING", "meta": {"githubCommitMessage": "feat: edit"}}],
                  "pagination": {"next": 123}}
-        second = {"deployments": [{"state": "BUILDING", "meta": {"githubCommitMessage": "release-all: v2"}}],
+        second = {"deployments": [{"state": "BUILDING", "meta": {"githubCommitMessage": "web-release-all: v2"}}],
                   "pagination": {}}
         with patch.object(ship_all, "run", side_effect=[
                 (0, json.dumps(first), ""), (0, json.dumps(second), "")]) as run:

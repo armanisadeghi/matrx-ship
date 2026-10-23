@@ -144,9 +144,22 @@ LAW_HINT["mandate-call-site"] = "an AI call names its Mandate through the mandat
 LAW_HINT["hardcoded-settings"] = "behavioral settings live in platform.feature_knob rows, never in code or the environment (aidream scripts/check_hardcoded_settings.py)"
 
 
+# A repository can hold another repo's app nested at a fixed folder (the frontend inside the aidream
+# monorepo, kit 10). Linters key on the APP's identity and APP-relative paths, never on the toplevel.
+NESTED_APPS = (("matrx-frontend", "apps/matrx-frontend"),)
+
+
+def unit_of(repo, rel):
+    """(unit name, unit root, unit-relative path) for a repo-relative file."""
+    for name, prefix in NESTED_APPS:
+        if rel.startswith(prefix + "/"):
+            return name, os.path.join(repo, prefix), rel[len(prefix) + 1:]
+    return os.path.basename(repo), repo, rel
+
+
 def linters_for(repo, rel):
     """Every checker that covers this repo-relative file: 'eslint', 'ruff', or 'law:<index>'."""
-    name = os.path.basename(repo)
+    name, repo, rel = unit_of(repo, rel)
     out = []
     if name == "matrx-frontend" and rel.endswith(JS_EXT):
         out.append("eslint")
@@ -352,21 +365,25 @@ def lint(repo, rels):
     for rel in rels:
         if not os.path.exists(os.path.join(repo, rel)):
             continue
+        _name, uroot, urel = unit_of(repo, rel)
         for kind in linters_for(repo, rel):
-            by.setdefault(kind, []).append(rel)
+            by.setdefault((kind, uroot), []).append(urel)
     runners = {"eslint": run_eslint, "ruff": run_ruff, "settings": run_settings, "lockfile": run_lockfile,
                "mandate-sites": run_mandate_sites}
     jobs = []
     with ThreadPoolExecutor(max_workers=max(1, len(by))) as pool:
-        for kind, files in by.items():
+        for (kind, uroot), files in by.items():
+            # each runner works in its unit's root with unit-relative paths (a nested app is its own unit)
+            pfx = os.path.relpath(uroot, repo)
+            pfx = "" if pfx == "." else pfx + "/"
             if kind.startswith("law:"):
-                jobs.append((kind, pool.submit(run_law, repo, int(kind[4:]), files)))
+                jobs.append((kind, pfx, pool.submit(run_law, uroot, int(kind[4:]), files)))
             elif kind in runners:
-                jobs.append((kind, pool.submit(runners[kind], repo, files)))
+                jobs.append((kind, pfx, pool.submit(runners[kind], uroot, files)))
         found = []
-        for kind, j in jobs:
+        for kind, pfx, j in jobs:
             try:
-                found += j.result()
+                found += [{**f, "file": pfx + f["file"]} if f.get("file") else f for f in j.result()]
             except Exception as e:  # one broken scanner never hides the others' findings; it is SEEN
                 name = LAW_GUARDS[int(kind[4:])][2] if kind.startswith("law:") else kind
                 warn(f"lint-guard scanner {name} crashed: {type(e).__name__}: {e}; nothing was checked by it.")
@@ -1015,6 +1032,9 @@ def law_self_test():
     assert linters_for(fe, "features/a/List.tsx") == ["eslint", idx["matrx-frontend", "archived-items-law"], idx["matrx-frontend", "canonical-pickers"], idx["matrx-frontend", "content-copy"]], linters_for(fe, "features/a/List.tsx")
     assert linters_for(fe, "providers/P.tsx") == ["eslint", idx["matrx-frontend", "archived-items-law"], idx["matrx-frontend", "content-copy"]], linters_for(fe, "providers/P.tsx")
     assert linters_for(fe, "scripts/x.ts") == ["eslint"] and linters_for(fe, "features/a/x.test.tsx") == ["eslint"]
+    # nested (kit 10): the frontend inside the aidream monorepo keeps eslint + its law guards; no ruff on its .py
+    assert linters_for("/x/aidream", "apps/matrx-frontend/features/a/List.tsx") == linters_for(fe, "features/a/List.tsx")
+    assert linters_for("/x/aidream", "apps/matrx-frontend/scripts/x.py") == [] and linters_for("/x/aidream", "x/y.py") == ["ruff"]
     assert idx["matrx-frontend", "content-copy"] in linters_for(fe, "features/a/List.tsx") and idx["matrx-frontend", "content-copy"] in linters_for(fe, "constants/k.ts")
     assert idx["matrx-frontend", "content-copy"] not in linters_for(fe, "features/a/x.test.tsx") and idx["matrx-frontend", "content-copy"] not in linters_for(fe, "scripts/x.ts")
     assert linters_for("/x/aidream", "apps/shared/kit/src/a/B.tsx") == [idx["aidream/apps/shared", "content-copy"]], linters_for("/x/aidream", "apps/shared/kit/src/a/B.tsx")

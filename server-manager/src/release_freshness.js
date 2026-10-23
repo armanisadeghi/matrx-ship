@@ -21,9 +21,10 @@ import { STALE_CRITICAL_HOURS, hoursSince } from "./deploy_attempts.js";
 
 const STATE_FILE = "/host-srv/apps/deploy-state/release-freshness.json";
 
-// A release commit that builds www (ai-matrx scripts/vercel-ignore-build.sh):
-// `release:` and `release-all:`. `release-admin:`/`-demos:`/`-lab:` build other projects.
-export const WEBSITE_RELEASE_SUBJECT = /^release(-all)?:/;
+// A release commit that builds www (apps/matrx-frontend/scripts/vercel-ignore-build.sh):
+// `web-release:` and `web-release-all:`. `web-release-admin:`/`-demos:`/`-lab:` build other projects.
+// aidream's own SERVER releases are `release: vX.Y.Z` and never count as a website release.
+export const WEBSITE_RELEASE_SUBJECT = /^web-release(-all)?:/;
 
 // A check that cannot be read for this long is itself an alarm — an unreadable
 // check that quietly reads "unknown" is the same silence this file exists to end.
@@ -46,7 +47,7 @@ export const RELEASED_SERVICES = [
     impact: "People are using an older build of the app than the one released.",
     runningUrl: "https://www.aimatrx.com/api/version",
     runningField: "commit",
-    latest: { kind: "github-release-commit", repo: "armanisadeghi/ai-matrx", subject: WEBSITE_RELEASE_SUBJECT },
+    latest: { kind: "github-release-commit", repo: "AI-Matrix-Engine/aidream", subject: WEBSITE_RELEASE_SUBJECT },
     graceMinutes: 60,
     howItShips: "Vercel builds each release commit; a failed or cancelled build leaves the site behind.",
   },

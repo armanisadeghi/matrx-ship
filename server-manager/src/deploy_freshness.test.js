@@ -87,6 +87,7 @@ test("a failing read is the same alarm", () => {
 });
 
 test("only release commits that build www count", () => {
-  for (const s of ["release: v1", "release-all: v1"]) assert.ok(WEBSITE_RELEASE_SUBJECT.test(s), s);
-  for (const s of ["release-admin: v1", "release-demos: x", "release-lab: x", "fix: release notes"]) assert.ok(!WEBSITE_RELEASE_SUBJECT.test(s), s);
+  for (const s of ["web-release: v1", "web-release-all: v1"]) assert.ok(WEBSITE_RELEASE_SUBJECT.test(s), s);
+  // aidream's SERVER releases and the retired frontend family are not website releases
+  for (const s of ["release: v0.2.1544", "release-all: v1", "release(matrx-agents): x", "web-release-admin: v1", "web-release-demos: x", "web-release-lab: x", "fix: release notes"]) assert.ok(!WEBSITE_RELEASE_SUBJECT.test(s), s);
 });
