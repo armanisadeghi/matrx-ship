@@ -162,7 +162,18 @@ def run(cmd, cwd, timeout=120):
 
 
 def git(repo, *args, timeout=120):
-    return run(["git", *args], repo, timeout)
+    # A nested app and its monorepo can fetch concurrently. Git correctly
+    # refuses a stale compare-and-swap on origin/main; fetching again obtains
+    # the new ref. Never delete locks or retry writes/authentication failures.
+    for attempt in range(3):
+        result = run(["git", *args], repo, timeout)
+        rc, _, err = result
+        ref_race = (args and args[0] == "fetch" and rc != 0
+                    and "cannot lock ref" in err and " is at " in err
+                    and " but expected " in err)
+        if not ref_race or attempt == 2:
+            return result
+        time.sleep(0.2 * (attempt + 1))
 
 
 def lines(text):

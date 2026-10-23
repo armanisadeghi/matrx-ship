@@ -20,6 +20,27 @@ ship_all.CUTOVER_STOP = str(Path(tempfile.gettempdir(), "ship-all-test-no-stop-%
 
 
 class ShipAllCliTests(unittest.TestCase):
+    def test_fetch_retries_a_concurrent_remote_ref_update(self):
+        race = (1, "", "error: cannot lock ref 'refs/remotes/origin/main': is at new but expected old")
+        with patch.object(ship_all, "run", side_effect=[race, (0, "fresh", "")]) as run:
+            self.assertEqual(ship_all.git("/repo", "fetch", "origin", timeout=90), (0, "fresh", ""))
+        self.assertEqual(run.call_count, 2)
+        self.assertEqual(run.call_args_list[0], run.call_args_list[1])
+
+    def test_fetch_ref_race_retries_are_bounded(self):
+        race = (1, "", "cannot lock ref 'refs/remotes/origin/main': is at new but expected old")
+        with patch.object(ship_all, "run", return_value=race) as run:
+            self.assertEqual(ship_all.git("/repo", "fetch", "origin"), race)
+        self.assertEqual(run.call_count, 3)
+
+    def test_other_git_failures_are_not_retried(self):
+        for args, error in [(('fetch', 'origin'), 'authentication failed'),
+                            (('fetch', 'origin'), "cannot lock ref 'x': Unable to create x.lock: File exists"),
+                            (('push', 'origin'), "cannot lock ref 'x': is at new but expected old")]:
+            with self.subTest(args=args, error=error), patch.object(ship_all, "run", return_value=(1, "", error)) as run:
+                self.assertEqual(ship_all.git("/repo", *args), (1, "", error))
+                self.assertEqual(run.call_count, 1)
+
     def test_release_liveness_accepts_verified_satellite_skips(self):
         sha = "a" * 40
         commits = "%s\t%d\tweb-release-all: v1 - sweep\n" % (sha, int(time.time()))
