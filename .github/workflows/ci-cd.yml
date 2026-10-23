@@ -12,7 +12,11 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  # LITERAL image names (monorepo, 2026-10-22): ship's workflows move into AI-Matrix-Engine/aidream, where
+  # github.repository / repository_owner would rename every image. These are today's real GHCR names;
+  # every /srv host pulls them anonymously (scripts/pull-deploy.sh), so they must never change.
+  IMAGE_OWNER: armanisadeghi
+  IMAGE_NAME: armanisadeghi/matrx-ship
 
 jobs:
   # Cost guard (ci-spend, 2026-10-11) in its own job: a red guard must never hold the production deploy.
@@ -112,8 +116,10 @@ jobs:
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          # GHCR_PUSH_TOKEN (optional, write:packages for armanisadeghi): needed only when this workflow runs
+          # from a repository the packages do not grant Actions access to (aidream after the move).
+          username: ${{ secrets.GHCR_PUSH_TOKEN != '' && 'armanisadeghi' || github.actor }}
+          password: ${{ secrets.GHCR_PUSH_TOKEN || secrets.GITHUB_TOKEN }}
 
       - name: Extract metadata
         id: meta
@@ -157,14 +163,16 @@ jobs:
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          # GHCR_PUSH_TOKEN (optional, write:packages for armanisadeghi): needed only when this workflow runs
+          # from a repository the packages do not grant Actions access to (aidream after the move).
+          username: ${{ secrets.GHCR_PUSH_TOKEN != '' && 'armanisadeghi' || github.actor }}
+          password: ${{ secrets.GHCR_PUSH_TOKEN || secrets.GITHUB_TOKEN }}
 
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/matrx-ship-deploy
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/matrx-ship-deploy
           tags: |
             type=ref,event=branch
             type=sha,prefix={{branch}}-
@@ -202,14 +210,16 @@ jobs:
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          # GHCR_PUSH_TOKEN (optional, write:packages for armanisadeghi): needed only when this workflow runs
+          # from a repository the packages do not grant Actions access to (aidream after the move).
+          username: ${{ secrets.GHCR_PUSH_TOKEN != '' && 'armanisadeghi' || github.actor }}
+          password: ${{ secrets.GHCR_PUSH_TOKEN || secrets.GITHUB_TOKEN }}
 
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/matrx-ship-manager
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/matrx-ship-manager
           tags: |
             type=ref,event=branch
             type=sha,prefix={{branch}}-
@@ -277,13 +287,13 @@ jobs:
             
             # --- 2. Deploy Service ---
             echo "📦 Pulling Deploy Service..."
-            docker pull ${{ env.REGISTRY }}/${{ github.repository_owner }}/matrx-ship-deploy:latest
-            docker tag ${{ env.REGISTRY }}/${{ github.repository_owner }}/matrx-ship-deploy:latest matrx-ship-deploy:latest
+            docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/matrx-ship-deploy:latest
+            docker tag ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/matrx-ship-deploy:latest matrx-ship-deploy:latest
 
             # --- 3. Manager Service ---
             echo "📦 Pulling Manager Service..."
-            docker pull ${{ env.REGISTRY }}/${{ github.repository_owner }}/matrx-ship-manager:latest
-            docker tag ${{ env.REGISTRY }}/${{ github.repository_owner }}/matrx-ship-manager:latest matrx-ship-manager:latest
+            docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/matrx-ship-manager:latest
+            docker tag ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/matrx-ship-manager:latest matrx-ship-manager:latest
             
             # --- Restart Instances ---
             echo "🔄 Restarting instances..."
@@ -384,13 +394,13 @@ jobs:
             
             # --- 2. Deploy Service ---
             echo "📦 Pulling Deploy Service (develop)..."
-            docker pull ${{ env.REGISTRY }}/${{ github.repository_owner }}/matrx-ship-deploy:develop
-            docker tag ${{ env.REGISTRY }}/${{ github.repository_owner }}/matrx-ship-deploy:develop matrx-ship-deploy:staging
+            docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/matrx-ship-deploy:develop
+            docker tag ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/matrx-ship-deploy:develop matrx-ship-deploy:staging
 
             # --- 3. Manager Service ---
             echo "📦 Pulling Manager Service (develop)..."
-            docker pull ${{ env.REGISTRY }}/${{ github.repository_owner }}/matrx-ship-manager:develop
-            docker tag ${{ env.REGISTRY }}/${{ github.repository_owner }}/matrx-ship-manager:develop matrx-ship-manager:staging
+            docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/matrx-ship-manager:develop
+            docker tag ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/matrx-ship-manager:develop matrx-ship-manager:staging
             
             # --- Restart Instances ---
             echo "🔄 Restarting staging instances..."

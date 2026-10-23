@@ -493,5 +493,68 @@ class CutoverStopTests(unittest.TestCase):
             popen.assert_called_once()
 
 
+class WorkspaceRootTests(unittest.TestCase):
+    """THE CODE FOLDER is never derived from where ship lives (ship moves into aidream/infra/matrx-ship)."""
+
+    def test_env_wins(self):
+        with patch.dict(ship_all.os.environ, {"MATRX_CODE_DIR": "/some/code"}):
+            self.assertEqual(ship_all.workspace_root(), "/some/code")
+
+    def test_home_code_wins_over_ships_own_location(self):
+        with tempfile.TemporaryDirectory() as home:
+            code = Path(home, "code")
+            nested = Path(code, "aidream", "infra", "matrx-ship", "scripts")
+            nested.mkdir(parents=True)
+            env = {k: v for k, v in ship_all.os.environ.items() if k != "MATRX_CODE_DIR"}
+            with patch.dict(ship_all.os.environ, env, clear=True), patch.object(ship_all, "HERE", str(nested)), \
+                 patch.object(ship_all.os.path, "expanduser",
+                              side_effect=lambda p: p.replace("~", home, 1) if p.startswith("~") else p):
+                self.assertEqual(ship_all.workspace_root(), str(code))   # never .../aidream/infra
+
+    def test_a_symlink_into_a_host_is_part_of_it_never_a_second_repo(self):
+        said = []
+        with tempfile.TemporaryDirectory() as code:
+            Path(code, "aidream", ".git").mkdir(parents=True)
+            Path(code, "aidream", "common-docs", ".git").mkdir(parents=True)   # a stray .git left behind
+            Path(code, "aidream", "infra", "matrx-ship").mkdir(parents=True)
+            Path(code, "aidream", "apps", "matrx-frontend").mkdir(parents=True)
+            Path(code, "matrx-extend", ".git").mkdir(parents=True)
+            Path(code, "common-docs").symlink_to(Path(code, "aidream", "common-docs"))
+            Path(code, "matrx-ship").symlink_to(Path(code, "aidream", "infra", "matrx-ship"))
+            repos = [str(Path(code, d)) for d in ("aidream", "common-docs", "matrx-extend")]
+            repos.append(str(Path(code, "aidream", "apps", "matrx-frontend")))   # a NESTED_TRAIN app
+            with patch.object(ship_all, "CODE", code), patch.object(ship_all, "say", side_effect=said.append):
+                kept = ship_all.parts_of_hosts(repos)
+        self.assertEqual([Path(r).name for r in kept], ["aidream", "matrx-extend", "matrx-frontend"])
+        text = "\n".join(said)
+        self.assertIn("common-docs: inside aidream (common-docs)", text)
+        self.assertIn("matrx-ship: part of aidream (infra/matrx-ship/)", text)
+
+    def test_round_never_inspects_a_symlinked_part(self):
+        inspected = []
+        with tempfile.TemporaryDirectory() as code, tempfile.TemporaryDirectory() as out_root:
+            Path(code, "aidream", ".git").mkdir(parents=True)
+            Path(code, "aidream", "common-docs", ".git").mkdir(parents=True)
+            Path(code, "common-docs").symlink_to(Path(code, "aidream", "common-docs"))
+            def fake_inspect(p):
+                inspected.append(Path(p).name)
+                return {"repo": Path(p).name, "path": p, "branch": "main", "has_ship": True, "fetch_ok": True,
+                        "dirty": 0, "ahead": 0, "behind": 0, "stale_packages": [], "local_branches": [],
+                        "extra_worktrees": [], "remote_branches": [], "open_prs": []}
+            with patch.object(ship_all, "CODE", code), patch.object(ship_all, "OUT_ROOT", out_root), \
+                 patch.object(ship_all, "inspect", side_effect=fake_inspect), \
+                 patch.object(ship_all, "ship"), patch.object(ship_all, "land_github_work"), \
+                 patch.object(ship_all, "release_liveness", return_value=[]), \
+                 patch.object(ship_all, "failed_release_workflows", return_value=[]), \
+                 patch.object(ship_all, "test_run_verdict", return_value=([], [])), \
+                 patch.object(ship_all, "npm_publish_lag", return_value=[]), \
+                 patch.object(ship_all, "stale_release_alarm", return_value=None), \
+                 patch.object(ship_all, "open_items", return_value=[]), \
+                 patch.object(ship_all, "held_files", return_value=[]), \
+                 patch.object(ship_all, "say"):
+                ship_all.main(["--dry-run"])
+        self.assertEqual(inspected, ["aidream"])
+
+
 if __name__ == "__main__":
     unittest.main()

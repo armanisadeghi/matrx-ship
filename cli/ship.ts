@@ -29,7 +29,7 @@ import { homedir } from "os";
 // ── Constants ─────────────────────────────────────────────────────────
 
 const DEFAULT_MCP_SERVER = "https://manager.dev.codematrx.com";
-const REPO_RAW = "https://raw.githubusercontent.com/armanisadeghi/matrx-ship/main";
+const REPO_RAW = "https://cdn.matrxserver.com/releases/matrx-ship";
 const GLOBAL_CONFIG_DIR = path.join(homedir(), ".config", "matrx-ship");
 const GLOBAL_CONFIG_FILE = path.join(GLOBAL_CONFIG_DIR, "server.json");
 

@@ -3,7 +3,7 @@
 # Matrx CLI Installer — Unified Ship + Env-Sync setup
 #
 # Usage:
-#   curl -sL https://raw.githubusercontent.com/armanisadeghi/matrx-ship/main/cli/install.sh | bash
+#   curl -sL https://cdn.matrxserver.com/releases/matrx-ship/cli/install.sh | bash
 #
 # This script:
 #   1. Downloads CLI files (ship.ts, env-sync.sh, ship.sh, lib/) into scripts/matrx/
@@ -27,7 +27,7 @@
 # We do NOT use set -e globally — we handle errors explicitly per step.
 set -uo pipefail
 
-REPO_RAW="https://raw.githubusercontent.com/armanisadeghi/matrx-ship/main"
+REPO_RAW="https://cdn.matrxserver.com/releases/matrx-ship"
 INSTALL_DIR="scripts/matrx"
 DEFAULT_SERVER="https://manager.dev.codematrx.com"
 SERVER_CONFIG_FILE="$HOME/.config/matrx-ship/server.json"
@@ -476,8 +476,8 @@ const envScripts = setupEnv ? {
 } : {};
 
 const toolsScripts = {
-    "tools:update": "curl -sL https://raw.githubusercontent.com/armanisadeghi/matrx-ship/main/cli/install.sh | bash",
-    "tools:migrate": "curl -sL https://raw.githubusercontent.com/armanisadeghi/matrx-ship/main/cli/migrate.sh | bash",
+    "tools:update": "curl -sL https://cdn.matrxserver.com/releases/matrx-ship/cli/install.sh | bash",
+    "tools:migrate": "curl -sL https://cdn.matrxserver.com/releases/matrx-ship/cli/migrate.sh | bash",
 };
 
 const all = { ...shipScripts, ...envScripts, ...toolsScripts };
@@ -584,10 +584,10 @@ ENV_MAKE
         # Tools targets (always included)
         cat << 'TOOLS_MAKE'
 tools-update:
-	@curl -sL https://raw.githubusercontent.com/armanisadeghi/matrx-ship/main/cli/install.sh | bash
+	@curl -sL https://cdn.matrxserver.com/releases/matrx-ship/cli/install.sh | bash
 
 tools-migrate:
-	@curl -sL https://raw.githubusercontent.com/armanisadeghi/matrx-ship/main/cli/migrate.sh | bash
+	@curl -sL https://cdn.matrxserver.com/releases/matrx-ship/cli/migrate.sh | bash
 
 TOOLS_MAKE
 

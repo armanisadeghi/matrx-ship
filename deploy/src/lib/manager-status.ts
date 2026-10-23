@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { execSync } from "node:child_process";
-import { verifyToken } from "@/lib/docker";
+import { verifyToken, SHIP_SOURCE_DIR, SHIP_SOURCE_HOST } from "@/lib/docker";
 import { classifyManagerHealth } from "@/lib/manager-health";
 
 export type CommandRunner = (cmd: string, opts?: { timeout?: number; cwd?: string }) => { success: boolean; output: string; error?: string };
@@ -32,10 +32,10 @@ export function managerStatusPayload(run: CommandRunner = exec) {
   const managerHealth = classifyManagerHealth(containerInfo ? { running: containerInfo.running } : null, probe);
   let healthCheck: unknown = null;
   if (probe.success) { try { healthCheck = JSON.parse(probe.output); } catch { /* classifier reports unknown */ } }
-  const srcDir = "/host-srv/projects/matrx-ship/server-manager";
+  const srcDir = `${SHIP_SOURCE_HOST}/server-manager`;
   const gitCommit = run(`git -C ${srcDir} rev-parse --short HEAD 2>/dev/null`);
   const gitBranch = run(`git -C ${srcDir} rev-parse --abbrev-ref HEAD 2>/dev/null`);
-  return { container_name: containerName, container: containerInfo, stats: statsData, health_check: healthCheck, health_status: managerHealth.status, health_response_status: managerHealth.response_status, source: { path: "/srv/projects/matrx-ship/server-manager", git_commit: gitCommit.output || "unknown", git_branch: gitBranch.output || "unknown" }, url: "https://manager.dev.codematrx.com", admin_url: "https://manager.dev.codematrx.com/admin", mcp_url: "https://manager.dev.codematrx.com/mcp" };
+  return { container_name: containerName, container: containerInfo, stats: statsData, health_check: healthCheck, health_status: managerHealth.status, health_response_status: managerHealth.response_status, source: { path: `${SHIP_SOURCE_DIR}/server-manager`, git_commit: gitCommit.output || "unknown", git_branch: gitBranch.output || "unknown" }, url: "https://manager.dev.codematrx.com", admin_url: "https://manager.dev.codematrx.com/admin", mcp_url: "https://manager.dev.codematrx.com/mcp" };
 }
 
 export function managerStatusResponse(req: NextRequest, run: CommandRunner = exec) {

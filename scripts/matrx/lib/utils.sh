@@ -63,7 +63,7 @@ load_config() {
         echo ""
         echo -e "${CYAN}To fix: delete ${MATRX_TOOLS_CONF} and re-run the installer:${NC}"
         echo -e "  ${DIM}rm ${conf_path}${NC}"
-        echo -e "  ${DIM}curl -sL https://raw.githubusercontent.com/armanisadeghi/matrx-ship/main/cli/install.sh | bash${NC}"
+        echo -e "  ${DIM}curl -sL https://cdn.matrxserver.com/releases/matrx-ship/cli/install.sh | bash${NC}"
         exit 1
     fi
 

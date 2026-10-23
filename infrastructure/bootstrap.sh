@@ -72,6 +72,21 @@ done
 
 log "All required environment variables present"
 
+# Ship's source (monorepo move, 2026-10-22). Defaults = today: its own repo, checked out at
+# /srv/projects/matrx-ship. After the move: GITHUB_REPO_URL=https://github.com/AI-Matrix-Engine/aidream.git,
+# SHIP_CLONE_DIR=/srv/projects/aidream, SHIP_SUBDIR=infra/matrx-ship, and GITHUB_TOKEN (read access to the
+# private repo). The token is sent as a one-off header, never written into the clone's remote URL or config.
+SHIP_CLONE_DIR="${SHIP_CLONE_DIR:-/srv/projects/matrx-ship}"
+SHIP_SUBDIR="${SHIP_SUBDIR:-}"
+SHIP_SRC="${SHIP_CLONE_DIR}${SHIP_SUBDIR:+/${SHIP_SUBDIR}}"
+git_auth() {
+  if [ -n "${GITHUB_TOKEN:-}" ]; then
+    git -c "http.https://github.com/.extraheader=Authorization: Basic $(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 -w0)" "$@"
+  else
+    git "$@"
+  fi
+}
+
 # =============================================================================
 # Step 1: System packages
 # =============================================================================
@@ -164,12 +179,13 @@ mkdir -p /srv/{traefik/acme,traefik/dynamic,apps/backups,projects}
 # =============================================================================
 step 8 "Cloning source repositories"
 
-if [ -d /srv/projects/matrx-ship ]; then
-  log "matrx-ship already cloned, pulling latest..."
-  cd /srv/projects/matrx-ship && git pull origin main
+if [ -d "${SHIP_CLONE_DIR}/.git" ]; then
+  log "ship source already cloned at ${SHIP_CLONE_DIR}, pulling latest..."
+  cd "${SHIP_CLONE_DIR}" && git_auth pull origin main
 else
-  git clone "${GITHUB_REPO_URL}" /srv/projects/matrx-ship
+  git_auth clone "${GITHUB_REPO_URL}" "${SHIP_CLONE_DIR}"
 fi
+[ -f "${SHIP_SRC}/Dockerfile" ] || { err "ship source not found at ${SHIP_SRC} (SHIP_CLONE_DIR/SHIP_SUBDIR)"; exit 1; }
 
 # Clone other repos if URLs provided
 if [ -n "${SANDBOX_REPO_URL:-}" ]; then
@@ -226,7 +242,7 @@ fi
 # =============================================================================
 step 12 "Building matrx-ship:latest Docker image"
 
-cd /srv/projects/matrx-ship
+cd "${SHIP_SRC}"
 docker build -t matrx-ship:latest .
 log "matrx-ship:latest image built"
 
@@ -271,6 +287,7 @@ COMPOSE
 
 # Replace domain placeholder
 sed -i "s/DOMAIN_SUFFIX/${DOMAIN}/g" /srv/apps/server-manager/docker-compose.yml
+sed -i "s|/srv/projects/matrx-ship/|${SHIP_SRC}/|g" /srv/apps/server-manager/docker-compose.yml
 
 cat > /srv/apps/server-manager/.env << EOF
 MANAGER_BEARER_TOKEN=${MANAGER_BEARER_TOKEN}
@@ -280,6 +297,9 @@ AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
 AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
 AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION}
 S3_BACKUP_BUCKET=${S3_BACKUP_BUCKET}
+
+# Ship's source on this host (server-manager/src/ship_source.js)
+SHIP_SOURCE_DIR=${SHIP_SRC}
 EOF
 chmod 600 /srv/apps/server-manager/.env
 
@@ -329,6 +349,7 @@ networks:
 COMPOSE
 
 sed -i "s/DOMAIN_SUFFIX/${DOMAIN}/g" /srv/apps/deploy/docker-compose.yml
+sed -i "s|/srv/projects/matrx-ship/|${SHIP_SRC}/|g" /srv/apps/deploy/docker-compose.yml
 
 cat > /srv/apps/deploy/.env << EOF
 # AWS S3 — server backups & image archival
@@ -336,6 +357,9 @@ AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
 AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
 AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION}
 S3_BACKUP_BUCKET=${S3_BACKUP_BUCKET}
+
+# Ship's source on this host (server-manager/src/ship_source.js)
+SHIP_SOURCE_DIR=${SHIP_SRC}
 EOF
 chmod 600 /srv/apps/deploy/.env
 

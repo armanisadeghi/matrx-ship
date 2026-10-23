@@ -15,7 +15,7 @@ This repo contains:
 ### Install
 
 ```bash
-curl -sL https://raw.githubusercontent.com/armanisadeghi/matrx-ship/main/cli/install.sh | bash
+curl -sL https://cdn.matrxserver.com/releases/matrx-ship/cli/install.sh | bash
 ```
 
 The installer will:
@@ -30,7 +30,7 @@ The installer will:
 If a project was set up with the old `matrx-dev-tools` repo or an earlier version:
 
 ```bash
-curl -sL https://raw.githubusercontent.com/armanisadeghi/matrx-ship/main/cli/migrate.sh | bash
+curl -sL https://cdn.matrxserver.com/releases/matrx-ship/cli/migrate.sh | bash
 ```
 
 This re-downloads all scripts, migrates legacy configs (`.matrx-ship.json`, `.matrx-tools.conf`) into unified `.matrx.json`, fixes stale URLs, and registers any missing commands. Safe to run multiple times.

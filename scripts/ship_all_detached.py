@@ -41,6 +41,16 @@ SILENT_ALARM_SECONDS = int(os.environ.get("MATRX_SHIP_ALL_SILENT_ALARM", str(40 
 POLL = float(os.environ.get("MATRX_SHIP_ALL_POLL", "1"))
 
 
+def code_dir():
+    """The code folder (ship_all.workspace_root): $MATRX_CODE_DIR, else ~/code, else two above this
+    script. Never ship's own location first: ship moves into aidream/infra/matrx-ship."""
+    env = os.environ.get("MATRX_CODE_DIR")
+    if env:
+        return os.path.abspath(os.path.expanduser(env))
+    home = os.path.expanduser("~/code")
+    return home if os.path.isdir(home) else os.path.dirname(os.path.dirname(HERE))
+
+
 def say(msg):
     sys.stdout.write(msg + "\n")
     sys.stdout.flush()
@@ -135,7 +145,7 @@ def supervise(fd, rec, w, args):
         signal.signal(signal.SIGTERM, stopped)
         signal.signal(signal.SIGINT, stopped)
         signal.signal(signal.SIGHUP, signal.SIG_IGN)
-        rc = subprocess.call(cmd, cwd=os.path.dirname(os.path.dirname(HERE)), env=env)
+        rc = subprocess.call(cmd, cwd=code_dir(), env=env)
         with open(rec["rc"], "w") as f:
             f.write(str(rc))
     finally:

@@ -18,7 +18,7 @@
 #   7. Shows a clear summary of what changed
 #
 # Usage:
-#   curl -sL https://raw.githubusercontent.com/armanisadeghi/matrx-ship/main/cli/migrate.sh | bash
+#   curl -sL https://cdn.matrxserver.com/releases/matrx-ship/cli/migrate.sh | bash
 #   # or from a project that already has tools installed:
 #   pnpm tools:migrate
 #   make tools-migrate
@@ -28,7 +28,7 @@
 
 set -uo pipefail
 
-REPO_RAW="https://raw.githubusercontent.com/armanisadeghi/matrx-ship/main"
+REPO_RAW="https://cdn.matrxserver.com/releases/matrx-ship"
 INSTALL_DIR="scripts/matrx"
 
 # ─── Colors ──────────────────────────────────────────────────────────────────
@@ -286,6 +286,10 @@ if [[ "$IS_NODE" == true ]]; then
     if [[ "$current_update" == *"matrx-dev-tools"* ]]; then
         HAS_LEGACY_DEV_TOOLS_URL=true
         info "Found: tools:update still points to matrx-dev-tools"
+    elif [[ "$current_update" == *"raw.githubusercontent.com/armanisadeghi/matrx-ship"* ]]; then
+        # GitHub raw dies when ship's source goes private (monorepo, 2026-10-22): our file host serves it now.
+        HAS_LEGACY_DEV_TOOLS_URL=true
+        info "Found: tools:update still points to GitHub raw (now ${REPO_RAW})"
     fi
 fi
 
@@ -528,7 +532,7 @@ if [[ "$IS_NODE" == true ]] && [[ "$IS_MATRX_SHIP_REPO" == false ]]; then
 
     # Add tools:migrate command
     current_migrate=$(node -e "const p=require('./package.json'); console.log(p.scripts?.['tools:migrate']||'')" 2>/dev/null || echo "")
-    if [[ -z "$current_migrate" ]]; then
+    if [[ -z "$current_migrate" || "$current_migrate" == *"raw.githubusercontent.com/armanisadeghi/matrx-ship"* ]]; then
         json_set "package.json" "scripts.tools:migrate" "\"curl -sL ${REPO_RAW}/cli/migrate.sh | bash\"" && {
             changed "Added tools:migrate script"
             PKG_UPDATED=true
@@ -660,10 +664,10 @@ env-push-force:
 	@bash scripts/matrx/env-sync.sh push --force
 
 tools-update:
-	@curl -sL https://raw.githubusercontent.com/armanisadeghi/matrx-ship/main/cli/install.sh | bash
+	@curl -sL https://cdn.matrxserver.com/releases/matrx-ship/cli/install.sh | bash
 
 tools-migrate:
-	@curl -sL https://raw.githubusercontent.com/armanisadeghi/matrx-ship/main/cli/migrate.sh | bash
+	@curl -sL https://cdn.matrxserver.com/releases/matrx-ship/cli/migrate.sh | bash
 MAKE_EOF
         changed "Added env/tools targets to Makefile"
     else

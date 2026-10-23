@@ -53,7 +53,7 @@ The CLI is the primary developer-facing tool. It is installed into other project
 
 ```bash
 # Install into any project
-curl -sL https://raw.githubusercontent.com/armanisadeghi/matrx-ship/main/cli/install.sh | bash
+curl -sL https://cdn.matrxserver.com/releases/matrx-ship/cli/install.sh | bash
 ```
 
 The installer detects the project type (Node/Python/other), downloads CLI files to `scripts/matrx/`, registers commands in `package.json` or `Makefile`, and walks through configuration to produce `.matrx.json`.
