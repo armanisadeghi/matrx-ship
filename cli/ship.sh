@@ -20,7 +20,7 @@ SHIP_TS="${SCRIPT_DIR}/ship.ts"
 if [ ! -f "$SHIP_TS" ]; then
   echo "❌ ship.ts not found at ${SHIP_TS}"
   echo "   Re-run the installer:"
-  echo "   curl -sL https://raw.githubusercontent.com/armanisadeghi/matrx-ship/main/cli/install.sh | bash"
+  echo "   curl -sL https://cdn.matrxserver.com/releases/matrx-ship/cli/install.sh | bash"
   exit 1
 fi
 

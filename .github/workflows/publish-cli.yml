@@ -1,0 +1,44 @@
+name: Publish CLI
+run-name: "Publish CLI${{ inputs.requested_by && format(' (requested by {0})', inputs.requested_by) || '' }}"
+
+# The Ship CLI installer (curl -sL https://cdn.matrxserver.com/releases/matrx-ship/cli/install.sh | bash) is
+# served from OUR file host, never GitHub raw (ship's source goes private in the aidream monorepo,
+# 2026-10-22). Every push to main that touches cli/ republishes it; scripts/publish-cli.sh fails unless
+# the public URL then serves exactly the committed bytes.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "cli/**"
+      - "scripts/publish-cli.sh"
+      - ".github/workflows/publish-cli.yml"
+  workflow_dispatch:
+    inputs:
+      requested_by:
+        description: The agent session or lane that asked for this run
+        required: false
+        type: string
+
+concurrency:
+  group: publish-cli
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::872515272894:role/matrx-ship-gha-cli-publish
+          aws-region: us-east-1
+      - name: Publish cli/ to cdn.matrxserver.com and prove it serves
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
+        run: bash scripts/publish-cli.sh

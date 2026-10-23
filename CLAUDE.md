@@ -75,8 +75,10 @@ used by both admin UIs) and [packages/ticket-widget/](packages/ticket-widget/)
 ## Ship-specific rules (the mistakes this file exists to prevent)
 
 - **The Platform List is Arman's alone.** Never read it at session start: a hook on Arman's Mac tells the first attended session of the day when a row is due, and only that session tells him (he snoozes by naming a new date). Only Arman adds, kills, or removes a row. Agents suggest in plain English and never write copies, histories, or "deleted" notes anywhere. Skill: `platform-list`.
-- **The CLI is published by URL.** `install.sh` / `migrate.sh` are fetched from GitHub
-  raw, so CLI changes go live the moment they hit `main`. Test before merging. When
+- **The CLI is published by URL.** `install.sh` / `migrate.sh` are fetched from our file
+  host (`https://cdn.matrxserver.com/releases/matrx-ship/cli/`, never GitHub raw), which
+  [publish-cli.yml](.github/workflows/publish-cli.yml) → [scripts/publish-cli.sh](scripts/publish-cli.sh)
+  refreshes on every push to `main` touching `cli/`, so CLI changes go live within minutes of `main`. Test before merging. When
   adding commands, update BOTH [cli/ship.ts](cli/ship.ts) and
   [cli/ship.sh](cli/ship.sh) (not every Matrx project is a Node project), plus the
   target lists in `install.sh`/`migrate.sh`.

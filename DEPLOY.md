@@ -155,7 +155,7 @@ On your development machine, in the project you want to track:
 
 ```bash
 # Install the CLI
-curl -sL https://raw.githubusercontent.com/armanisadeghi/matrx-ship/main/cli/install.sh | bash
+curl -sL https://cdn.matrxserver.com/releases/matrx-ship/cli/install.sh | bash
 
 # Configure with your instance URL and API key
 # Edit .matrx-ship.json with:

@@ -6,7 +6,7 @@ Unified command-line tools for Matrx projects: **Ship** (deployment versioning) 
 
 ```bash
 # Install in any project (Node or Python)
-curl -sL https://raw.githubusercontent.com/armanisadeghi/matrx-ship/main/cli/install.sh | bash
+curl -sL https://cdn.matrxserver.com/releases/matrx-ship/cli/install.sh | bash
 ```
 
 The installer will:
@@ -208,7 +208,7 @@ If your project was set up with the old `matrx-dev-tools` repo or an earlier ver
 pnpm tools:migrate
 
 # Any project (one-liner)
-curl -sL https://raw.githubusercontent.com/armanisadeghi/matrx-ship/main/cli/migrate.sh | bash
+curl -sL https://cdn.matrxserver.com/releases/matrx-ship/cli/migrate.sh | bash
 ```
 
 The migration tool will:
@@ -235,7 +235,7 @@ Safe to run multiple times -- it's idempotent and won't touch configs that are a
 Or re-run the installer directly:
 
 ```bash
-curl -sL https://raw.githubusercontent.com/armanisadeghi/matrx-ship/main/cli/install.sh | bash
+curl -sL https://cdn.matrxserver.com/releases/matrx-ship/cli/install.sh | bash
 ```
 
 ---
@@ -284,7 +284,7 @@ Delete and re-run the installer:
 
 ```bash
 rm .matrx.json
-curl -sL https://raw.githubusercontent.com/armanisadeghi/matrx-ship/main/cli/install.sh | bash
+curl -sL https://cdn.matrxserver.com/releases/matrx-ship/cli/install.sh | bash
 ```
 
 ### "Already exists" during init

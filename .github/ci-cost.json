@@ -9,7 +9,7 @@
     "macos": 0.062
   },
   "prices_source": "GitHub billing API pricePerUnit (Actions Linux / Windows / macOS 3-core), read 2026-10-11",
-  "total_usd_per_week": 15.02,
+  "total_usd_per_week": 15.04,
   "workflows": {
     "ci-cd.yml": {
       "triggers": [
@@ -77,6 +77,27 @@
           "runs_per_week": 1,
           "minutes_per_run": 5,
           "usd_per_week": 0.03
+        }
+      }
+    },
+    "publish-cli.yml": {
+      "triggers": [
+        "push",
+        "workflow_dispatch"
+      ],
+      "crons": [],
+      "benefit": "Publishes the Ship CLI installer to cdn.matrxserver.com so every project's tools:update keeps working once ship's source is private.",
+      "owner_reason": "curl|bash installer must not depend on GitHub raw (monorepo move, 2026-10-22).",
+      "basis": "estimate 2026-10-22: runs only when cli/ changes, ~3/week x 1 min",
+      "usd_per_week": 0.02,
+      "legs": {
+        "linux": {
+          "jobs": [
+            "publish"
+          ],
+          "runs_per_week": 3,
+          "minutes_per_run": 1,
+          "usd_per_week": 0.02
         }
       }
     }
