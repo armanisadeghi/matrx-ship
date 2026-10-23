@@ -261,7 +261,8 @@ release_outcome_serving() { echo main-id; }
         self.assertGreater(events.index(("ship", "matrx-extend")), wait)
         self.assertEqual(len(events), 5)
 
-    def test_failed_release_holds_every_ship_and_github_landing(self):
+    def test_failed_release_is_loud_but_never_holds_a_ship(self):
+        # Arman, 2026-10-23: "NOTHING EVER STOPS MY releASeS" (supersedes the 2026-10-07 hold).
         def info(name):
             return {"repo": name, "path": "/x/" + name, "branch": "main", "has_ship": True,
                     "fetch_ok": True, "dirty": 1, "ahead": 0, "behind": 0,
@@ -282,15 +283,19 @@ release_outcome_serving() { echo main-id; }
                  patch.object(ship_all, "stale_release_alarm", return_value=None), \
                  patch.object(ship_all, "open_items", return_value=[]), \
                  patch.object(ship_all, "held_files", return_value=[]), \
-                 patch.object(ship_all, "say"):
+                 patch.object(ship_all, "is_consumer", return_value=False), \
+                 patch.object(ship_all, "source_pushed", return_value=False), \
+                 patch.object(ship_all, "say") as say:
                 result = ship_all.main([])
-            self.assertEqual(result, 1)
-            ship.assert_not_called()
-            land.assert_not_called()
+            self.assertEqual(result, 1)                      # still reported as a failure
+            self.assertEqual(ship.call_count, len(infos))    # but every repo shipped
+            said = " ".join(str(c.args[0]) for c in say.call_args_list if c.args)
+            self.assertIn("FAILED BUILD", said)
+            self.assertIn("v3447 ERROR", said)
             summary = json.loads(Path(out_root, "latest.json").read_text())
             frontend = next(r for r in summary["repos"] if r["repo"] == "matrx-frontend")
             self.assertEqual(frontend["not_live"], ["v3447 ERROR"])
-            self.assertTrue(all(r["status"] == "held: failed build" for r in summary["repos"]))
+            self.assertFalse(any(r["status"] == "held: failed build" for r in summary["repos"]))
 
     def test_publish_wait_ignores_runs_started_by_later_pushes(self):
         t = [1_000_000.0]
