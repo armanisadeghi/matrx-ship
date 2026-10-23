@@ -1079,12 +1079,14 @@ def main(args=None):
         say("▶ checking release/build verdict before any shipping…")
         with ThreadPoolExecutor(max_workers=8) as pool:
             list(pool.map(build_verdict, infos))
-        blockers = [i for i in infos if i.get("not_live") or i.get("tests_red")]
-        if blockers:
-            for info in to_ship:
-                info["status"] = "held: failed build"
-            say("■ FAILED BUILD HOLD: %d repo(s); skipping all shipping and landing" % len(blockers))
-            for info in blockers:
+        # NOTHING STOPS A RELEASE (Arman, 2026-10-23: "My one and only one rule is that NOTHING EVER
+        # STOPS MY releASeS"; supersedes the 2026-10-07 hold). A failed build is still the loudest
+        # line of the round and is fixed this round, but every repo ships: the next release IS the
+        # fix going out, and holding it froze the whole train on a weekly census run.
+        failed = [i for i in infos if i.get("not_live") or i.get("tests_red")]
+        if failed:
+            say("■ FAILED BUILD: %d repo(s) — fix this round; shipping continues (nothing stops a release)" % len(failed))
+            for info in failed:
                 for line in info.get("not_live", []) + info.get("tests_red", []):
                     say("  %s: %s" % (info["repo"], line))
 
@@ -1095,7 +1097,7 @@ def main(args=None):
     # change. Wave 1 is aidream plus every repo that consumes no @ai-matrx package; wave 2 waits for
     # the publish runs aidream's push started, re-measures the consumers that looked in sync, and
     # ships every consumer once, against what npm now serves.
-    if to_ship and not dry and not blockers:
+    if to_ship and not dry:
         t0 = time.time()
         consumers = {i["repo"] for i in infos if is_consumer(i["path"])}
         wave1 = [i for i in to_ship if i["repo"] == PACKAGE_SOURCE or i["repo"] not in consumers]
