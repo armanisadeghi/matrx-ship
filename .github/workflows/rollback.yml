@@ -27,7 +27,11 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  # LITERAL image names (monorepo, 2026-10-22): ship's workflows move into AI-Matrix-Engine/aidream, where
+  # github.repository / repository_owner would rename every image. These are today's real GHCR names;
+  # every /srv host pulls them anonymously (scripts/pull-deploy.sh), so they must never change.
+  IMAGE_OWNER: armanisadeghi
+  IMAGE_NAME: armanisadeghi/matrx-ship
 
 jobs:
   validate:
@@ -65,8 +69,10 @@ jobs:
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          # GHCR_PUSH_TOKEN (optional, write:packages for armanisadeghi): needed only when this workflow runs
+          # from a repository the packages do not grant Actions access to (aidream after the move).
+          username: ${{ secrets.GHCR_PUSH_TOKEN != '' && 'armanisadeghi' || github.actor }}
+          password: ${{ secrets.GHCR_PUSH_TOKEN || secrets.GITHUB_TOKEN }}
 
       - name: Verify image exists
         run: |
@@ -75,7 +81,7 @@ jobs:
             echo "❌ Image tag '${{ inputs.tag }}' not found in registry"
             echo "Available tags:"
             curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-              "https://api.github.com/users/${{ github.repository_owner }}/packages/container/$(echo ${{ env.IMAGE_NAME }} | cut -d'/' -f2)/versions" \
+              "https://api.github.com/users/${{ env.IMAGE_OWNER }}/packages/container/$(echo ${{ env.IMAGE_NAME }} | cut -d'/' -f2)/versions" \
               | jq -r '.[].metadata.container.tags[]' | head -10
             exit 1
           }
